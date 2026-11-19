@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -36,13 +37,135 @@ class Acceptance:
         self.owned_display = None
         self.owner_instance = None
         self.installed = False
+        self.install_attempted = False
         self.original_activity = None
+        self.initial_displays = set()
         self.report = {
             "schema": 1,
             "label": args.label,
             "binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest(),
             "tests": self.results,
         }
+
+
+    def clean(self, value):
+        """Redact the selected device in every public report branch."""
+        if isinstance(value, str):
+            return value.replace(self.args.serial, "<device>")
+        if isinstance(value, dict):
+            return {self.clean(key): self.clean(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self.clean(item) for item in value]
+        return value
+
+    def verify_apk(self):
+        """Validate the locally built, permission-free fixture before any ADB call."""
+        apk = Path(self.args.apk).resolve()
+        metadata = json.loads(apk.with_name("build.json").read_text(encoding="utf-8"))
+        digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+        if (metadata.get("package") != PACKAGE or metadata.get("component") != COMPONENT
+                or metadata.get("sha256") != digest or metadata.get("permissions") != []):
+            raise RuntimeError("APK does not match the zero-permission fixture build record")
+        expected_sources = {
+            "tests/android-fixture/AndroidManifest.xml",
+            "tests/android-fixture/src/best/lmm/zuse/fixture/MainActivity.java",
+        }
+        sources = metadata.get("sources", {})
+        if set(sources) != expected_sources:
+            raise RuntimeError("fixture build record has unexpected source files")
+        for name, expected in sources.items():
+            if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:
+                raise RuntimeError("fixture sources changed; rebuild the APK before testing")
+        aapt = self.args.aapt2 or shutil.which("aapt2")
+        if not aapt:
+            sdk = Path(os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+                       or "/opt/android-sdk")
+            candidates = sorted((sdk / "build-tools").glob("*/aapt2"), reverse=True)
+            aapt = str(candidates[0]) if candidates else None
+        if not aapt:
+            raise RuntimeError("aapt2 is required to inspect the fixture APK before installation")
+        badging = self.command([aapt, "dump", "badging", str(apk)]).stdout
+        package = re.search(r"(?m)^package: name='([^']+)'", badging)
+        activity = re.search(r"(?m)^launchable-activity: name='([^']+)'", badging)
+        permissions = self.command([aapt, "dump", "permissions", str(apk)]).stdout
+        if (not package or package.group(1) != PACKAGE
+                or not activity or activity.group(1) != PACKAGE + ".MainActivity"
+                or re.search(r"(?m)^uses-permission", permissions)):
+            raise RuntimeError("APK manifest is not the expected zero-permission fixture")
+        return {"package": PACKAGE, "sha256": digest, "permissions": [],
+                "source_hashes_verified": True}
+
+    def primary_fixture_focused(self):
+        raw = self.adb("shell", "dumpsys", "window", "displays").stdout
+        display = None
+        for line in raw.splitlines():
+            match = re.search(r"Display: mDisplayId=(\d+)", line)
+            if match:
+                display = int(match.group(1))
+            if display == 0 and "mCurrentFocus=" in line:
+                return bool(re.search(r"mCurrentFocus=Window\{[^\n]*\bu\d+\s+"
+                                      + re.escape(PACKAGE) + r"/", line))
+        return False
+
+    def cleanup(self):
+        errors = []
+
+        def attempt(name, operation):
+            try:
+                result = operation()
+                if isinstance(result, subprocess.CompletedProcess) and result.returncode:
+                    errors.append({"step": name, "error": (result.stderr or result.stdout)[:500]})
+                return result
+            except BaseException as error:
+                errors.append({"step": name, "error": str(error)[:500]})
+                return None
+
+        before = attempt("observe_activity_before_cleanup", self.top_activity)
+        if before and before.startswith(PACKAGE + "/"):
+            expected = self.original_activity
+            policy = "restore_original"
+        elif before and before == self.original_activity:
+            expected = self.original_activity
+            policy = "original_already_active"
+        elif before:
+            expected = before
+            policy = "preserve_external"
+        else:
+            expected = None
+            policy = "unknown"
+        # Each step runs even when an earlier ADB command times out.
+        attempt("force_stop", lambda: self.adb("shell", "am", "force-stop", PACKAGE, check=False))
+        attempt("uninstall", lambda: self.adb("uninstall", PACKAGE, check=False))
+        packages = attempt("verify_uninstall", lambda: self.adb("shell", "pm", "list", "packages", PACKAGE))
+        displays = attempt("verify_displays", self.displays)
+        after = attempt("verify_activity", self.top_activity)
+        absent = packages is not None and not packages.stdout.strip()
+        removed = displays is not None and (self.owned_display is None or self.owned_display not in displays)
+        retained = displays is not None and bool(self.initial_displays) and self.initial_displays.issubset(displays)
+        activity_ok = bool(expected) and after == expected
+        return {
+            "name": "cleanup",
+            "status": "passed" if absent and removed and retained and activity_ok else "failed",
+            "fixture_uninstalled": absent,
+            "owned_display_removed": removed,
+            "original_display_set_retained": retained,
+            "activity_policy": policy,
+            "activity_selection_preserved": activity_ok,
+            "original_primary_activity_restored": bool(self.original_activity) and after == self.original_activity,
+            "external_activity_preserved": policy == "preserve_external" and activity_ok,
+            "install_command_completed": self.installed,
+            "command_errors": errors,
+        }
+
+    def save_report(self):
+        self.report["fixture_install_attempted"] = self.install_attempted
+        self.report["passed"] = sum(item["status"] == "passed" for item in self.results)
+        self.report["failed"] = sum(item["status"] == "failed" for item in self.results)
+        public = self.clean(self.report)
+        target = self.output / "report.json"
+        target.write_text(json.dumps(public, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.chmod(target, 0o600)
+        print(json.dumps(public, ensure_ascii=False, indent=2))
 
     def command(self, argv, timeout=30, check=True):
         result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
@@ -146,7 +269,7 @@ class Acceptance:
             item.update(status="failed", error=str(error).replace(self.args.serial, "<device>")[:1800])
         item["elapsed_ms"] = round((time.monotonic() - began) * 1000, 2)
         self.results.append(item)
-        print(json.dumps(item, ensure_ascii=False), flush=True)
+        print(json.dumps(self.clean(item), ensure_ascii=False), flush=True)
         return item["status"] == "passed"
 
     def button(self, display=0):
@@ -231,11 +354,15 @@ class Acceptance:
         }
 
     def screenshot(self, display=0):
-        state = self.guard(display, require_primary=(display == 0))
         path = self.output / f"fixture-display-{display}.png"
-        self.zuse(f"android.capture(path={json.dumps(str(path))})", display, guard=False)
         try:
-            self.guard(display, require_primary=(display == 0))
+            state = self.guard(display, require_primary=(display == 0))
+            if display == 0 and (not state.get("windowFocus") or not self.primary_fixture_focused()):
+                raise RuntimeError("primary fixture lacks exclusive focus; refusing screenshot")
+            self.zuse(f"android.capture(path={json.dumps(str(path))})", display, guard=False)
+            after = self.guard(display, require_primary=(display == 0))
+            if display == 0 and (not after.get("windowFocus") or not self.primary_fixture_focused()):
+                raise RuntimeError("primary focus changed during screenshot")
             with Image.open(path) as source:
                 image = source.convert("RGB")
                 if image.size != (state["displayWidth"], state["displayHeight"]):
@@ -328,23 +455,30 @@ class Acceptance:
         for key in ["counter", "text", "keyDowns", "keyUps"]:
             if after[key] != before[key]:
                 raise AssertionError("background action changed primary fixture " + key)
-        event_keys = [key for key in before["gesture"] if key != "suggestedSwipe"]
+        event_keys = ["taps", "swipes", "moves", "cancelled", "lastKind", "durationMs", "recipientDisplayId"]
         changed = {key: {"before": before["gesture"][key], "after": after["gesture"][key]}
                    for key in event_keys if after["gesture"][key] != before["gesture"][key]}
         if changed:
             raise AssertionError("background changed primary gesture events: " + json.dumps(changed))
         return {"counter": counter, "text": text, "gestures": gestures,
                 "primary_input_unchanged": True,
-                "primary_layout_changed": before["gesture"]["suggestedSwipe"] != after["gesture"]["suggestedSwipe"]}
+                "primary_layout_changed": any(before["gesture"].get(key) != after["gesture"].get(key)
+                                              for key in ["suggestedSwipe", "downX", "downY", "upX", "upY"])}
 
     def run(self):
-        if self.adb("shell", "pm", "list", "packages", PACKAGE).stdout.strip():
-            raise RuntimeError("fixture already exists; refusing to replace or remove an existing installation")
-        self.original_activity = self.top_activity()
-        initial_displays = self.displays()
-        self.report["android_api"] = self.adb("shell", "getprop", "ro.build.version.sdk").stdout.strip()
-        self.report["version"] = self.command([str(self.binary), "--version"]).stdout.strip()
         try:
+            self.report["fixture"] = self.verify_apk()
+            if self.adb("shell", "pm", "list", "packages", PACKAGE).stdout.strip():
+                raise RuntimeError("fixture already exists; refusing to replace or remove an existing installation")
+            self.original_activity = self.top_activity()
+            if not self.original_activity:
+                raise RuntimeError("cannot identify the primary activity before testing")
+            self.initial_displays = self.displays()
+            if 0 not in self.initial_displays:
+                raise RuntimeError("cannot identify the primary display before testing")
+            self.report["android_api"] = self.adb("shell", "getprop", "ro.build.version.sdk").stdout.strip()
+            self.report["version"] = self.command([str(self.binary), "--version"]).stdout.strip()
+            self.install_attempted = True
             self.adb("install", str(Path(self.args.apk).resolve()), timeout=90)
             self.installed = True
             self.zuse(f"android.start(component={json.dumps(COMPONENT)})", guard=False)
@@ -373,27 +507,11 @@ class Acceptance:
             self.results.append({"name": "setup", "status": "failed",
                                  "error": str(error).replace(self.args.serial, "<device>")[:1800]})
         finally:
-            if self.installed:
-                self.adb("shell", "am", "force-stop", PACKAGE, check=False)
-                removed = self.adb("uninstall", PACKAGE, check=False)
-                absent = not self.adb("shell", "pm", "list", "packages", PACKAGE).stdout.strip()
-                displays = self.displays()
-                cleanup = {
-                    "name": "cleanup", "status": "passed" if absent and self.owned_display not in displays else "failed",
-                    "fixture_uninstalled": absent,
-                    "owned_display_removed": self.owned_display is None or self.owned_display not in displays,
-                    "original_display_set_retained": initial_displays.issubset(displays),
-                    "original_primary_activity_restored": self.top_activity() == self.original_activity,
-                }
-                if removed.returncode:
-                    cleanup["error"] = removed.stderr.strip()[:500]
-                self.results.append(cleanup)
-        self.report["passed"] = sum(item["status"] == "passed" for item in self.results)
-        self.report["failed"] = sum(item["status"] == "failed" for item in self.results)
-        target = self.output / "report.json"
-        target.write_text(json.dumps(self.report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.chmod(target, 0o600)
-        print(json.dumps(self.report, ensure_ascii=False, indent=2))
+            try:
+                if self.install_attempted:
+                    self.results.append(self.cleanup())
+            finally:
+                self.save_report()
         return 1 if self.report["failed"] else 0
 
 
@@ -402,6 +520,7 @@ def main():
     parser.add_argument("--serial", required=True, help="explicit authorized physical device serial")
     parser.add_argument("--binary", default=str(ROOT / "target/native-validation/debug/zuse"))
     parser.add_argument("--apk", default=str(ROOT / "target/android-fixture/zuse-fixture.apk"))
+    parser.add_argument("--aapt2", help="path to the Android build tools manifest inspector")
     parser.add_argument("--output", default=str(ROOT / "target/native-android"))
     parser.add_argument("--label", default="local")
     parser.add_argument("--background", action="store_true", help="create and test an owned secondary display")
