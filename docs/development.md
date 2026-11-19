@@ -53,3 +53,7 @@ The CI workflow runs for pull requests or manual dispatch. Local verification is
 The core benchmark reports work counts and elapsed time as JSON. Run it with a release profile when making performance comparisons. Measure the executable's RSS separately from a browser or application it controls; those external processes have their own memory use.
 
 Release archives normalize metadata and timestamps. Package validation must include benches, examples, tests, and both README languages so a registry download can reproduce the build.
+
+## Dependency propagation
+
+Library updates include all direct and transitive consumers. Follow the required [maintenance procedure](maintenance.md), coordinate existing owners, and retain consumer test/commit receipts or a concrete blocker and takeover owner.
