@@ -39,7 +39,24 @@ impl Tail {
             .extend(bytes[excess - discard_old..].iter().copied());
     }
     fn take(&mut self) -> String {
-        String::from_utf8_lossy(&self.bytes.drain(..).collect::<Vec<_>>()).into_owned()
+        let bytes = self.bytes.make_contiguous();
+        let mut boundary = bytes.len();
+        if !self.closed && boundary > 0 {
+            let mut start = boundary - 1;
+            while start > 0 && bytes[start] & 0xc0 == 0x80 && boundary - start < 4 {
+                start -= 1;
+            }
+            let expected = match bytes[start] {
+                0xc2..=0xdf => 2,
+                0xe0..=0xef => 3,
+                0xf0..=0xf4 => 4,
+                _ => 1,
+            };
+            if expected > boundary - start {
+                boundary = start;
+            }
+        }
+        String::from_utf8_lossy(&self.bytes.drain(..boundary).collect::<Vec<_>>()).into_owned()
     }
 }
 trait PollPipe: Read + Send + 'static {
@@ -227,10 +244,10 @@ impl Managed {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        if std::env::var_os("OMARCHY_PATH").is_none() {
-            if let Some(root) = omarchy_root() {
-                command.env("OMARCHY_PATH", root);
-            }
+        if std::env::var_os("OMARCHY_PATH").is_none()
+            && let Some(root) = omarchy_root()
+        {
+            command.env("OMARCHY_PATH", root);
         }
         let mut child = command
             .spawn()
@@ -290,10 +307,10 @@ impl Managed {
                                 }
                             }
                         }
-                        if error.is_none() {
-                            if let Err(e) = pipe.flush() {
-                                error = Some(e.to_string());
-                            }
+                        if error.is_none()
+                            && let Err(e) = pipe.flush()
+                        {
+                            error = Some(e.to_string());
                         }
                         let _ = request.result.send((written, error));
                     }
@@ -358,15 +375,15 @@ impl Managed {
         }
         self.stdout.finish();
         self.stderr.finish();
-        if let Some(writer) = self.writer.take() {
-            if writer.is_finished() || terminate {
-                let _ = writer.join();
-            }
+        if let Some(writer) = self.writer.take()
+            && (writer.is_finished() || terminate)
+        {
+            let _ = writer.join();
         }
-        if let Some(mut group) = self.group.take() {
-            if !terminate {
-                group.release();
-            }
+        if let Some(mut group) = self.group.take()
+            && !terminate
+        {
+            group.release();
         }
     }
     fn summary(&self, id: u64) -> String {
@@ -546,6 +563,12 @@ impl ProcessManager {
         format!("[{}]", values.join(","))
     }
 }
+pub(crate) fn validate_start(program: &str, args: &str) -> Result<()> {
+    validate_program(program)?;
+    parse_arguments(args)?;
+    Ok(())
+}
+
 fn validate_program(program: &str) -> Result<()> {
     if program.is_empty() || program.len() > 4096 || program.contains('\0') {
         return Err("program must contain 1..4096 non-NUL bytes".into());
@@ -808,6 +831,15 @@ pub fn ide_diff(left: &str, right: &str) -> Result<String> {
         quote(&right.to_string_lossy())
     ))
 }
+pub(crate) fn ocr(path: &Path) -> Result<String> {
+    let program = executable("tesseract").ok_or("OCR requires tesseract in PATH")?;
+    utility(
+        &program,
+        &[path.as_os_str().to_owned(), "stdout".into(), "quiet".into()],
+        Duration::from_secs(15),
+    )
+}
+
 pub fn ide_extensions() -> Result<String> {
     let editor = editor()?;
     let output = utility(
@@ -1067,6 +1099,17 @@ mod tests {
         assert!(parse_arguments("a\\").is_err());
         assert!(parse_arguments("a\0b").is_err());
         assert!(parse_arguments(&"x ".repeat(129)).is_err());
+    }
+    #[test]
+    fn incremental_output_preserves_split_utf8() {
+        let mut tail = Tail::default();
+        tail.append(&[0xe4]);
+        assert_eq!(tail.take(), "");
+        tail.append(&[0xbd, 0xa0]);
+        assert_eq!(tail.take(), "你");
+        tail.append(&[0xe4]);
+        tail.closed = true;
+        assert_eq!(tail.take(), "�");
     }
     #[test]
     fn tail_is_bounded_and_reports_loss() {

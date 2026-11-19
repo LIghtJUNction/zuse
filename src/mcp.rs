@@ -5,13 +5,14 @@ use crate::{
     runtime::{self, Options, Runtime},
 };
 use std::{
+    collections::BTreeMap,
     io::{self, BufRead, BufReader, BufWriter, Read, Write},
     net::{TcpListener, TcpStream, ToSocketAddrs},
     path::Path,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use zmcpio::{
-    json::{Document, Limits, Token, Value},
+    json::{Document, Kind, Limits, Token, Value},
     mcp::{Action, Era, Server},
     rpc,
     tools::{Content, Tool, ToolResult},
@@ -85,10 +86,165 @@ fn flag(args: Option<Value<'_>>, name: &str) -> Result<bool> {
         None => Ok(false),
     }
 }
+
+fn validate_arguments(definition: &ToolDef, args: Option<Value<'_>>) -> Result<()> {
+    if args.is_some_and(|v| v.kind() != Kind::Object) {
+        return Err("tool arguments must be an object".into());
+    }
+    let mut tokens = [Token::EMPTY; 128];
+    let document = Document::parse(definition.schema.as_bytes(), &mut tokens, Limits::default())
+        .map_err(|e| e.to_string())?;
+    let schema = document.root();
+    if let Some(required) = schema.get("required") {
+        for name in required.elements() {
+            let name = json::text(name)?;
+            if args.and_then(|v| v.get(&name)).is_none() {
+                return Err(format!("{name} is required"));
+            }
+        }
+    }
+    let properties = schema
+        .get("properties")
+        .ok_or("missing tool property schema")?;
+    if let Some(args) = args {
+        for (name, value) in args.members() {
+            let name: String = name.chars().collect();
+            let definition = properties
+                .get(&name)
+                .ok_or_else(|| format!("unknown tool argument {name}"))?;
+            let expected = definition
+                .get("type")
+                .and_then(|v| v.string())
+                .ok_or("missing tool argument type")?;
+            let valid = (expected.matches("string") && value.kind() == Kind::String)
+                || (expected.matches("boolean") && value.kind() == Kind::Bool);
+            if !valid {
+                return Err(format!("{name} has the wrong type"));
+            }
+            if let Some(choices) = definition.get("enum")
+                && !choices.elements().any(|item| {
+                    item.string()
+                        .zip(value.string())
+                        .is_some_and(|(a, b)| a.equals(b))
+                })
+            {
+                return Err(format!("unsupported value for {name}"));
+            }
+        }
+    }
+    Ok(())
+}
+struct Retry {
+    id: String,
+    code: String,
+    dry_run: bool,
+    read_only: bool,
+    rpc_id: String,
+    expires: Instant,
+}
+fn request_id(id: rpc::Id<'_>) -> String {
+    match id {
+        rpc::Id::Number(n) => format!("n:{n}"),
+        rpc::Id::String(s) => format!("s:{}", s.chars().collect::<String>()),
+    }
+}
+fn random_state() -> Result<String> {
+    let mut bytes = [0u8; 32];
+    #[cfg(unix)]
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .map_err(|e| format!("request state randomness: {e}"))?;
+    #[cfg(windows)]
+    {
+        #[link(name = "bcrypt")]
+        unsafe extern "system" {
+            fn BCryptGenRandom(
+                algorithm: *mut core::ffi::c_void,
+                output: *mut u8,
+                length: u32,
+                flags: u32,
+            ) -> i32;
+        }
+        // SAFETY: output points to a writable 32-byte array; the system-preferred
+        // RNG flag permits a null algorithm handle.
+        if unsafe {
+            BCryptGenRandom(
+                core::ptr::null_mut(),
+                bytes.as_mut_ptr(),
+                bytes.len() as u32,
+                2,
+            )
+        } < 0
+        {
+            return Err("Windows request state randomness unavailable".into());
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    return Err("request state randomness requires Unix or Windows".into());
+    let mut out = String::from("zuse-mrtr-");
+    use std::fmt::Write;
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    Ok(out)
+}
+fn form_supported(capabilities: Option<Value<'_>>) -> bool {
+    capabilities
+        .and_then(|v| v.get("elicitation"))
+        .is_some_and(|v| {
+            v.kind() == Kind::Object
+                && (v.members().next().is_none()
+                    || v.get("form").is_some_and(|f| f.kind() == Kind::Object))
+        })
+}
+fn completed(params: Option<Value<'_>>) -> Result<bool> {
+    let responses = params
+        .and_then(|v| v.get("inputResponses"))
+        .ok_or("missing human inputResponses")?;
+    if responses.kind() != Kind::Object {
+        return Err("inputResponses must be an object".into());
+    }
+    let response = responses
+        .get("confirm")
+        .ok_or("missing confirm input response")?;
+    if response.kind() != Kind::Object {
+        return Err("confirm response must be an object".into());
+    }
+    let action = response
+        .get("action")
+        .map(json::text)
+        .transpose()?
+        .ok_or("missing elicitation action")?;
+    match action.as_str() {
+        "decline" | "cancel" => Ok(false),
+        "accept" => {
+            let content = response
+                .get("content")
+                .ok_or("completion response requires content")?;
+            if content.kind() != Kind::Object
+                || content
+                    .members()
+                    .any(|(name, _)| !name.matches("completed"))
+            {
+                return Err(
+                    "completion response accepts only a completed boolean; enter secrets locally"
+                        .into(),
+                );
+            }
+            content
+                .get("completed")
+                .and_then(|v| v.boolean())
+                .ok_or_else(|| "completed must be boolean".into())
+        }
+        _ => Err("elicitation action must be accept, decline or cancel".into()),
+    }
+}
+
 pub struct Engine {
     protocol: Server<'static>,
     pub runtime: Runtime,
     options: Options,
+    retries: BTreeMap<String, Retry>,
 }
 impl Engine {
     pub fn new(options: Options) -> Self {
@@ -96,6 +252,7 @@ impl Engine {
             protocol: Server::new("zuse", crate::VERSION),
             runtime: Runtime::new(),
             options,
+            retries: BTreeMap::new(),
         }
     }
     pub fn handle(&mut self, frame: &[u8]) -> Result<Option<Vec<u8>>> {
@@ -107,7 +264,12 @@ impl Engine {
         let action = match self.protocol.handle(frame, &mut tokens, limits(), &mut out) {
             Ok(a) => a,
             Err(e) => {
-                let n = rpc::failure(None, -32700, &e.to_string(), None, &mut out)
+                let code = match e.kind {
+                    zmcpio::ErrorKind::Json | zmcpio::ErrorKind::Utf8 => -32700,
+                    zmcpio::ErrorKind::Buffer => -32603,
+                    _ => -32600,
+                };
+                let n = rpc::failure(None, code, &e.to_string(), None, &mut out)
                     .map_err(|e| e.to_string())?;
                 out.truncate(n);
                 return Ok(Some(out));
@@ -142,49 +304,82 @@ impl Engine {
             }
             Action::CallTool(call) => {
                 let name: String = call.name.chars().collect();
-                if !TOOLS.iter().any(|d| d.name == name) {
+                let Some(definition) = TOOLS.iter().find(|d| d.name == name) else {
                     return self.error_response(call.context, -32602, "Unknown tool", out);
-                }
+                };
                 let args = call.arguments;
+                if let Err(error) = validate_arguments(definition, args) {
+                    return self.error_response(call.context, -32602, &error, out);
+                }
                 let is_error;
                 let mut picture: Option<String> = None;
-                // Modern MCP retries carry the previous request state and human response.
-                let state = call
-                    .context
-                    .request
-                    .params
-                    .and_then(|p| p.get("requestState"))
-                    .map(json::text)
-                    .transpose()?;
-                let outcome = if let Some(id) = state {
+                // A requestState is an unguessable lookup key bound to the
+                // exact issued call. Queue IDs alone cannot approve requests.
+                let params = call.context.request.params;
+                let state = match params.and_then(|p| p.get("requestState")) {
+                    Some(value) => match json::text(value) {
+                        Ok(state) => Some(state),
+                        Err(error) => {
+                            return self.error_response(call.context, -32602, &error, out);
+                        }
+                    },
+                    None => None,
+                };
+                if state.is_none() && params.and_then(|p| p.get("inputResponses")).is_some() {
+                    return self.error_response(
+                        call.context,
+                        -32602,
+                        "inputResponses require an issued requestState",
+                        out,
+                    );
+                }
+                let outcome = if let Some(state) = state {
                     (|| {
-                        if name != "zuse.execute" {
-                            return Err("requestState is valid only for zuse.execute".into());
+                        if call.context.era != Era::Modern || name != "zuse.execute" {
+                            return Err(
+                                "requestState is valid only for a modern zuse.execute retry".into(),
+                            );
+                        }
+                        let binding = self
+                            .retries
+                            .get(&state)
+                            .ok_or("unknown, expired or consumed requestState")?;
+                        if Instant::now() >= binding.expires {
+                            return Err("requestState has expired".into());
+                        }
+                        if binding.code != arg(args, "code", "")?
+                            || binding.dry_run != flag(args, "dry_run")?
+                            || binding.read_only != flag(args, "read_only")?
+                        {
+                            return Err(
+                                "requestState does not match the original code and options".into(),
+                            );
+                        }
+                        if binding.rpc_id == request_id(call.context.request.id) {
+                            return Err("a retry requires a new JSON-RPC request ID".into());
+                        }
+                        if !form_supported(call.context.client_capabilities) {
+                            return Err("retry requires the elicitation form capability".into());
+                        }
+                        let accepted = completed(params)?;
+                        let id = binding.id.clone();
+                        let mut options = self.options;
+                        options.dry_run |= binding.dry_run;
+                        options.read_only |= binding.read_only;
+                        if options.dry_run {
+                            return Err("dry-run cannot approve or resume a request".into());
                         }
                         let queue = Queue::new()?;
-                        let record = queue.record(&id)?;
-                        if json::field(&record, "kind")? == "password" {
+                        if json::field(&queue.record(&id)?, "kind")? == "password" {
                             return Err("password input must be completed locally".into());
                         }
-                        let response = call
-                            .context
-                            .request
-                            .params
-                            .and_then(|p| p.get("inputResponses"))
-                            .and_then(|p| p.get("confirm"))
-                            .ok_or("missing human input response")?;
-                        let accepted = response
-                            .get("action")
-                            .and_then(|s| s.string())
-                            .is_some_and(|s| s.matches("accept"))
-                            && response
-                                .get("content")
-                                .and_then(|v| v.get("completed"))
-                                .and_then(|v| v.boolean())
-                                == Some(true);
+                        // Consume the state only after complete validation. Both
+                        // accept and decline are one-use; failed executions are
+                        // never replayed automatically.
                         queue.respond(&id, accepted)?;
+                        self.retries.remove(&state);
                         if accepted {
-                            self.runtime.resume(&id, self.options)
+                            self.runtime.resume(&id, options)
                         } else {
                             Ok("{\"status\":\"denied\"}".into())
                         }
@@ -289,11 +484,7 @@ impl Engine {
                 // Native modern elicitation asks for completion only; secrets stay on the host.
                 if call.context.era == Era::Modern
                     && name == "zuse.execute"
-                    && call
-                        .context
-                        .client_capabilities
-                        .and_then(|v| v.get("elicitation"))
-                        .is_some()
+                    && form_supported(call.context.client_capabilities)
                 {
                     let handoff = json::with_value(&result, |v| {
                         if v.get("status")
@@ -313,8 +504,14 @@ impl Engine {
                             Ok(None)
                         }
                     })?;
+                    self.retries
+                        .retain(|_, retry| retry.expires > Instant::now());
+                    let original_code = arg(args, "code", "")?;
+                    let retry_bytes: usize = self.retries.values().map(|r| r.code.len()).sum();
                     if let Some((id, kind, message)) = handoff
                         && kind != "password"
+                        && self.retries.len() < 32
+                        && retry_bytes.saturating_add(original_code.len()) <= 2 * 1024 * 1024
                     {
                         let request = format!(
                             "{{\"confirm\":{{\"method\":\"elicitation/create\",\"params\":{{\"mode\":\"form\",\"message\":{},\"requestedSchema\":{{\"type\":\"object\",\"properties\":{{\"completed\":{{\"type\":\"boolean\",\"title\":\"I completed the requested action\"}}}},\"required\":[\"completed\"]}}}}}}}}",
@@ -327,10 +524,22 @@ impl Engine {
                             Limits::default(),
                         )
                         .map_err(|e| e.to_string())?;
+                        let state = random_state()?;
                         let n = self
                             .protocol
-                            .input_required(call.context, Some(doc.root()), Some(&id), &mut out)
+                            .input_required(call.context, Some(doc.root()), Some(&state), &mut out)
                             .map_err(|e| e.to_string())?;
+                        self.retries.insert(
+                            state,
+                            Retry {
+                                id,
+                                code: original_code,
+                                dry_run: flag(args, "dry_run")?,
+                                read_only: flag(args, "read_only")?,
+                                rpc_id: request_id(call.context.request.id),
+                                expires: Instant::now() + Duration::from_secs(900),
+                            },
+                        );
                         out.truncate(n);
                         return Ok(Some(out));
                     }
@@ -545,16 +754,10 @@ fn http_request(socket: TcpStream, engine: &mut Engine, token: Option<&str>) -> 
         http_io::write_response(
             writer,
             status,
-            &[
-                Header {
-                    name: "Content-Type",
-                    value: "application/json",
-                },
-                Header {
-                    name: "Connection",
-                    value: "close",
-                },
-            ],
+            &[Header {
+                name: "Content-Type",
+                value: "application/json",
+            }],
             body,
         )
         .map_err(|e| e.to_string())
@@ -581,6 +784,13 @@ fn http_request(socket: TcpStream, engine: &mut Engine, token: Option<&str>) -> 
     };
     if head.header("expect").is_some() {
         return reply(&mut writer, 417, b"{\"error\":\"Expect is unsupported\"}");
+    }
+    if head
+        .header("content-length")
+        .and_then(|n| n.parse::<u64>().ok())
+        .is_some_and(|n| n > MAX_FRAME as u64)
+    {
+        return reply(&mut writer, 413, b"{\"error\":\"body exceeds 1 MiB\"}");
     }
     let mut request = vec![0u8; MAX_FRAME];
     let mut body = match BodyReader::new(&mut reader, head, MAX_FRAME) {

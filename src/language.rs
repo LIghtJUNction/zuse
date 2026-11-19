@@ -79,7 +79,7 @@ impl<'a> Value<'a> {
 
     /// Decode text into a caller-owned buffer. Insufficient capacity leaves the
     /// buffer unchanged. The result borrows the buffer, not the source script.
-    pub fn decode_text<'b>(self, output: &'b mut [u8]) -> Result<&'b str, DecodeError> {
+    pub fn decode_text(self, output: &mut [u8]) -> Result<&str, DecodeError> {
         let (raw, escapes) = match self {
             Self::String(s) => (s, true),
             Self::Identifier(s) => (s, false),

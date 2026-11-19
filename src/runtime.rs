@@ -1,6 +1,7 @@
 //! One executor shared by embedded callers, CLI and MCP.
 use crate::{
     accessibility,
+    android::Android,
     browser::Browser,
     human::{Queue, Request},
     integrations::{self, ProcessManager},
@@ -68,6 +69,7 @@ static SPECS: &[Spec] = &[
     spec!("browser.launch",false,["headless":B:false]),
     spec!("browser.connect",false,["endpoint":T:true]),
     spec!("browser.tabs", true, []),
+    spec!("browser.viewport",false,["width":I:true,"height":I:true]),
     spec!("browser.select",false,["id":T:true]),
     spec!("browser.navigate",false,["url":T:true]),
     spec!("browser.snapshot", true, []),
@@ -99,6 +101,19 @@ static SPECS: &[Spec] = &[
     spec!("omarchy.workspace",false,["id":T:true]),
     spec!("omarchy.themes", true, []),
     spec!("omarchy.theme",false,["name":T:true]),
+    spec!("accessibility.action",false,["path":T:true,"index":I:false]),
+    spec!("accessibility.focus",false,["path":T:true]),
+    spec!("accessibility.set_text",false,["path":T:true,"text":T:true]),
+    spec!("android.devices", true, []),
+    spec!("android.connect",true,["serial":T:false,"mode":T:false,"display":I:false]),
+    spec!("android.status", true, []),
+    spec!("android.snapshot", true, []),
+    spec!("android.capture",true,["path":T:true]),
+    spec!("android.tap",false,["x":I:true,"y":I:true]),
+    spec!("android.swipe",false,["x1":I:true,"y1":I:true,"x2":I:true,"y2":I:true,"duration":I:false]),
+    spec!("android.key",false,["key":T:true]),
+    spec!("android.type",false,["text":T:true]),
+    spec!("android.start",false,["component":T:true]),
 ];
 
 pub fn schema() -> String {
@@ -199,6 +214,12 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                     call.name, arg.name
                 ));
             }
+            if matches!(kind, T) {
+                let decoded = text(&call, arg.name, "")?;
+                if decoded.contains('\0') {
+                    return Err(format!("{}: {} contains a NUL byte", call.name, arg.name));
+                }
+            }
         }
         for (name, _, required) in spec.args {
             if *required && call.get(name).is_none() {
@@ -223,7 +244,7 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                 wait_budget = wait_budget.saturating_add(duration as u64);
             }
             "mouse.click" | "mouse.down" | "mouse.up" => {
-                if !["left", "right", "middle", "1", "2", "3"]
+                if !["left", "right", "middle", "back", "forward", "1", "2", "3"]
                     .contains(&text(&call, "button", "left")?.as_str())
                 {
                     return Err("unknown mouse button".into());
@@ -233,8 +254,8 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                 wait_budget = wait_budget.saturating_add(((count - 1) * interval) as u64);
             }
             "mouse.scroll" => {
-                range(&call, "dx", 0, -10000, 10000)?;
-                range(&call, "dy", 0, -10000, 10000)?;
+                range(&call, "dx", 0, -1000, 1000)?;
+                range(&call, "dy", 0, -1000, 1000)?;
             }
             "wait" => {
                 if call.get("ms").is_some()
@@ -250,6 +271,34 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                 }
                 wait_budget = wait_budget.saturating_add(high as u64);
             }
+
+            "android.connect" => {
+                let mode = text(&call, "mode", "foreground")?;
+                let display = range(&call, "display", 0, 0, u32::MAX as i64)?;
+                if !["foreground", "preempt", "background"].contains(&mode.as_str()) {
+                    return Err("android mode must be foreground, preempt or background".into());
+                }
+                if mode == "background" && display == 0 {
+                    return Err("background Android requires an explicit nonzero display".into());
+                }
+                if mode != "background" && display != 0 {
+                    return Err("foreground Android uses display 0".into());
+                }
+            }
+            "android.tap" | "android.swipe" => {
+                for key in ["x", "y", "x1", "y1", "x2", "y2"] {
+                    if call.get(key).is_some() {
+                        range(&call, key, 0, 0, 65535)?;
+                    }
+                }
+                let duration = range(&call, "duration", 300, 1, 10000)?;
+                if call.name == "android.swipe" {
+                    wait_budget = wait_budget.saturating_add(duration as u64);
+                }
+            }
+            "accessibility.action" => {
+                range(&call, "index", 0, 0, 128)?;
+            }
             "human.request" => {
                 let kind = text(&call, "kind", "")?;
                 if !crate::human::KINDS.contains(&kind.as_str()) {
@@ -260,8 +309,11 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                 {
                     return Err("human request message must contain 1..4096 bytes".into());
                 }
-                if kind == "password" && text(&call, "window", "")?.is_empty() {
-                    return Err("password requires target window".into());
+                if kind == "password" {
+                    let target = text(&call, "window", "")?;
+                    if target.is_empty() || target == "active" {
+                        return Err("password requires a stable explicit target window ID".into());
+                    }
                 }
                 let url = text(&call, "url", "")?;
                 if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
@@ -273,14 +325,39 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                 range(&call, "limit", 256, 1, 4096)?;
                 range(&call, "depth", 8, 1, 32)?;
             }
+            "browser.viewport" => {
+                range(&call, "width", 0, 1, 8192)?;
+                range(&call, "height", 0, 1, 8192)?;
+            }
             "ide.open" => {
                 range(&call, "line", 1, 1, i32::MAX as i64)?;
                 range(&call, "column", 1, 1, i32::MAX as i64)?;
             }
-            name if name.starts_with("process.") || name.starts_with("harness.") => {
-                if call.get("id").is_some() {
-                    range(&call, "id", 0, 1, i64::MAX)?;
+            "keyboard.key" => {
+                crate::platform::split_chord(&text(&call, "key", "")?)?;
+            }
+            "process.start" | "harness.start" => {
+                let program = text(
+                    &call,
+                    if call.name == "process.start" {
+                        "program"
+                    } else {
+                        "name"
+                    },
+                    "",
+                )?;
+                if call.name == "harness.start"
+                    && !["codex", "claude", "pi", "opencode", "ssmcp", "aider"]
+                        .contains(&program.as_str())
+                {
+                    return Err("unknown harness; use process.start for other executables".into());
                 }
+                integrations::validate_start(&program, &text(&call, "args", "")?)?;
+            }
+            name if (name.starts_with("process.") || name.starts_with("harness."))
+                && call.get("id").is_some() =>
+            {
+                range(&call, "id", 0, 1, i64::MAX)?;
             }
             _ => {}
         }
@@ -318,6 +395,7 @@ pub fn check(source: &str, options: Options) -> Result<String, String> {
 pub struct Runtime {
     desktop: Option<Desktop>,
     browser: Option<Browser>,
+    android: Option<Android>,
     processes: ProcessManager,
 }
 impl Runtime {
@@ -338,6 +416,11 @@ impl Runtime {
             .ok_or_else(|| "use browser.launch or browser.connect first".into())
     }
 
+    fn android(&self) -> Result<&Android, String> {
+        self.android
+            .as_ref()
+            .ok_or_else(|| "use android.connect first".into())
+    }
     pub fn capabilities(&mut self) -> String {
         let desktop = match self.desktop() {
             Ok(d) => d.capabilities(),
@@ -359,6 +442,13 @@ impl Runtime {
             return Err("resume consumes a human request; use human.pending to inspect it".into());
         }
         let queue = Queue::new()?;
+        let saved = queue.options(id)?;
+        let options = Options {
+            dry_run: false,
+            read_only: options.read_only || saved.read_only,
+            max_steps: options.max_steps.min(saved.max_steps),
+            max_wait_ms: options.max_wait_ms.min(saved.max_wait_ms),
+        };
         // Validate the saved plan before claiming its single-use approval.
         validate(&queue.continuation(id)?, options)?;
         let source = queue.take(id)?;
@@ -379,7 +469,7 @@ impl Runtime {
                 let message = text(call, "message", "")?;
                 let url = text(call, "url", "")?;
                 let window = text(call, "window", "")?;
-                let pending = Queue::new()?.request(
+                let pending = Queue::new()?.request_with_options(
                     Request {
                         kind: &kind,
                         message: &message,
@@ -389,6 +479,7 @@ impl Runtime {
                     },
                     &source[next..],
                     true,
+                    options,
                 )?;
                 return Ok(format!(
                     "{{\"status\":\"waiting_for_human\",\"completed\":{index},\"handoff\":{pending},\"results\":[{}]}}",
@@ -477,6 +568,12 @@ impl Runtime {
             }
             "mouse.click" | "mouse.down" | "mouse.up" => {
                 let button = text(c, "button", "left")?;
+                let button = match button.as_str() {
+                    "1" => "left",
+                    "2" => "middle",
+                    "3" => "right",
+                    other => other,
+                };
                 let action = c.name.rsplit('.').next().unwrap_or("click");
                 for i in 0..integer(c, "count", 1) {
                     if i > 0 {
@@ -484,7 +581,7 @@ impl Runtime {
                             Duration::from_millis(integer(c, "interval", 80) as u64),
                         );
                     }
-                    self.desktop()?.button(&button, action)?;
+                    self.desktop()?.button(button, action)?;
                 }
                 done()
             }
@@ -513,7 +610,18 @@ impl Runtime {
                 }
                 done()
             }
-            "window.list" | "wine.windows" => self.desktop()?.windows(),
+            "window.list" => self.desktop()?.windows(),
+            "wine.windows" => {
+                let windows = self.desktop()?.windows()?;
+                json::with_value(&windows, |v| {
+                    let list: Vec<_> = v
+                        .elements()
+                        .filter(|w| w.get("wine").and_then(|x| x.boolean()) == Some(true))
+                        .map(|w| w.raw().to_owned())
+                        .collect();
+                    Ok(format!("[{}]", list.join(",")))
+                })
+            }
             "window.focus" => {
                 self.desktop()?.focus(&text(c, "id", "")?)?;
                 done()
@@ -543,31 +651,19 @@ impl Runtime {
             ),
             "screen.text" => {
                 if !boolean(c, "ocr", false) {
-                    return accessibility::text(
+                    let value = accessibility::text(
                         integer(c, "limit", 256) as usize,
                         integer(c, "depth", 8) as usize,
-                    );
+                    )?;
+                    return Ok(format!(
+                        "{{\"source\":\"accessibility\",\"text\":{}}}",
+                        quote(&value)
+                    ));
                 }
-                let path = std::env::temp_dir().join(format!(
-                    "zuse-ocr-{}-{}.png",
-                    std::process::id(),
-                    SystemTimeId::next()
-                ));
-                self.desktop()?.screenshot(&path, None)?;
-                let result = std::process::Command::new("tesseract")
-                    .arg(&path)
-                    .args(["stdout", "quiet"])
-                    .output()
-                    .map_err(|e| e.to_string());
-                let _ = std::fs::remove_file(&path);
-                let output = result?;
-                if !output.status.success() {
-                    return Err("tesseract could not read screenshot".into());
-                }
-                Ok(format!(
-                    "{{\"source\":\"ocr\",\"text\":{}}}",
-                    quote(&String::from_utf8_lossy(&output.stdout))
-                ))
+                let capture = TemporaryScreenshot::new()?;
+                self.desktop()?.screenshot(&capture.path, None)?;
+                let value = integrations::ocr(&capture.path)?;
+                Ok(format!("{{\"source\":\"ocr\",\"text\":{}}}", quote(&value)))
             }
             "wait" => {
                 let min = integer(c, "min", integer(c, "ms", 0)) as u64;
@@ -596,6 +692,10 @@ impl Runtime {
             }
             "browser.select" => self.browser()?.select(&text(c, "id", "")?),
             "browser.tabs" => self.browser()?.tabs(),
+            "browser.viewport" => self.browser()?.viewport(
+                integer(c, "width", 0) as u32,
+                integer(c, "height", 0) as u32,
+            ),
             "browser.navigate" => self.browser()?.navigate(&text(c, "url", "")?),
             "browser.snapshot" => self.browser()?.snapshot(),
             "browser.text" => self.browser()?.text(),
@@ -647,8 +747,91 @@ impl Runtime {
             "omarchy.workspace" => integrations::omarchy_workspace(&text(c, "id", "")?),
             "omarchy.themes" => integrations::omarchy_themes(),
             "omarchy.theme" => integrations::omarchy_theme(&text(c, "name", "")?),
+
+            "accessibility.action" => {
+                accessibility::action(&text(c, "path", "")?, integer(c, "index", 0) as usize)
+            }
+            "accessibility.focus" => accessibility::focus(&text(c, "path", "")?),
+            "accessibility.set_text" => {
+                accessibility::set_text(&text(c, "path", "")?, &text(c, "text", "")?)
+            }
+            "android.devices" => Android::devices(),
+            "android.connect" => {
+                let serial = text(c, "serial", "")?;
+                self.android = Some(Android::connect(
+                    if serial.is_empty() {
+                        None
+                    } else {
+                        Some(&serial)
+                    },
+                    &text(c, "mode", "foreground")?,
+                    integer(c, "display", 0) as u32,
+                )?);
+                self.android()?.status()
+            }
+            "android.status" => self.android()?.status(),
+            "android.snapshot" => self.android()?.snapshot(),
+            "android.capture" => self.android()?.screenshot(Path::new(&text(c, "path", "")?)),
+            "android.tap" => {
+                self.android()?
+                    .tap(integer(c, "x", 0) as i32, integer(c, "y", 0) as i32)?;
+                done()
+            }
+            "android.swipe" => {
+                self.android()?.swipe(
+                    integer(c, "x1", 0) as i32,
+                    integer(c, "y1", 0) as i32,
+                    integer(c, "x2", 0) as i32,
+                    integer(c, "y2", 0) as i32,
+                    integer(c, "duration", 300) as u32,
+                )?;
+                done()
+            }
+            "android.key" => {
+                self.android()?.key(&text(c, "key", "")?)?;
+                done()
+            }
+            "android.type" => {
+                self.android()?.type_text(&text(c, "text", "")?)?;
+                done()
+            }
+            "android.start" => {
+                self.android()?.start_app(&text(c, "component", "")?)?;
+                done()
+            }
             _ => Err(format!("unsupported operation {}", c.name)),
         }
+    }
+}
+struct TemporaryScreenshot {
+    directory: std::path::PathBuf,
+    path: std::path::PathBuf,
+}
+impl TemporaryScreenshot {
+    fn new() -> Result<Self, String> {
+        let directory = std::env::temp_dir().join(format!(
+            "zuse-ocr-{}-{}",
+            std::process::id(),
+            SystemTimeId::next()
+        ));
+        std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
+        let capture = Self {
+            path: directory.join("screen.png"),
+            directory,
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&capture.directory, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(capture)
+    }
+}
+impl Drop for TemporaryScreenshot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir(&self.directory);
     }
 }
 struct SystemTimeId;

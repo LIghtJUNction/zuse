@@ -88,6 +88,15 @@ impl Queue {
         continuation: &str,
         notify: bool,
     ) -> Result<String, String> {
+        self.request_with_options(r, continuation, notify, crate::runtime::Options::default())
+    }
+    pub fn request_with_options(
+        &self,
+        r: Request<'_>,
+        continuation: &str,
+        notify: bool,
+        options: crate::runtime::Options,
+    ) -> Result<String, String> {
         if !KINDS.contains(&r.kind) {
             return Err("unknown human request kind".into());
         }
@@ -100,7 +109,7 @@ impl Queue {
         if !r.url.is_empty() && !r.url.starts_with("https://") && !r.url.starts_with("http://") {
             return Err("login URL must use http or https".into());
         }
-        if r.kind == "password" && r.window.is_empty() {
+        if r.kind == "password" && (r.window.is_empty() || r.window == "active") {
             return Err("password requests require an explicit target window ID".into());
         }
         let stamp = SystemTime::now()
@@ -113,14 +122,17 @@ impl Queue {
             SEQ.fetch_add(1, Ordering::Relaxed)
         );
         let record = format!(
-            "{{\"id\":{},\"kind\":{},\"message\":{},\"url\":{},\"window\":{},\"created\":{},\"expires\":{}}}",
+            "{{\"id\":{},\"kind\":{},\"message\":{},\"url\":{},\"window\":{},\"created\":{},\"expires\":{},\"options\":{{\"read_only\":{},\"max_steps\":{},\"max_wait_ms\":{}}}}}",
             quote(&id),
             quote(r.kind),
             quote(r.message),
             quote(r.url),
             quote(r.window),
             now(),
-            now() + r.timeout_secs
+            now() + r.timeout_secs,
+            options.read_only,
+            options.max_steps,
+            options.max_wait_ms,
         );
         private_write(&self.path(&id, "zu")?, continuation.as_bytes())?;
         private_write(&self.path(&id, "json")?, record.as_bytes())?;
@@ -134,6 +146,40 @@ impl Queue {
             "{{\"status\":\"waiting_for_human\",\"request\":{record},\"notification\":{delivered},\"resume\":{}}}",
             quote(&format!("zuse resume {id}"))
         ))
+    }
+    pub fn options(&self, id: &str) -> Result<crate::runtime::Options, String> {
+        let record = self.record(id)?;
+        json::with_value(&record, |v| {
+            let Some(value) = v.get("options") else {
+                return Ok(crate::runtime::Options::default());
+            };
+            let read_only = value
+                .get("read_only")
+                .and_then(|v| v.boolean())
+                .ok_or("invalid saved read_only")?;
+            let max_steps = usize::try_from(
+                value
+                    .get("max_steps")
+                    .ok_or("missing saved max_steps")?
+                    .integer()
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|_| "invalid saved step limit")?;
+            let max_wait_ms = u64::try_from(
+                value
+                    .get("max_wait_ms")
+                    .ok_or("missing saved max_wait_ms")?
+                    .integer()
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|_| "invalid saved wait limit")?;
+            Ok(crate::runtime::Options {
+                dry_run: false,
+                read_only,
+                max_steps,
+                max_wait_ms,
+            })
+        })
     }
     pub fn record(&self, id: &str) -> Result<String, String> {
         fs::read_to_string(self.path(id, "json")?).map_err(|e| e.to_string())
@@ -212,14 +258,25 @@ impl Queue {
         let kind = json::field(&r, "kind")?;
         let message = json::field(&r, "message")?;
         if kind == "password" {
+            let target = json::field(&r, "window")?;
+            let mut desktop = crate::platform::Desktop::connect()?;
+            // Empty targeted input validates backend permissions and the window
+            // before collecting a secret, without generating key events.
+            desktop.type_into(&target, "")?;
             let mut secret = password_dialog(&message)?;
             while matches!(secret.last(), Some(b'\n' | b'\r')) {
                 secret.pop();
             }
             let result = (|| {
-                let mut d = crate::platform::Desktop::connect()?;
-                d.focus(&json::field(&r, "window")?)?;
-                d.type_text(std::str::from_utf8(&secret).map_err(|e| e.to_string())?)
+                if self.status(id)? != "pending" {
+                    return Err(
+                        "human request expired or was answered while the prompt was open".into(),
+                    );
+                }
+                desktop.type_into(
+                    &target,
+                    std::str::from_utf8(&secret).map_err(|e| e.to_string())?,
+                )
             })();
             for byte in &mut secret {
                 unsafe { std::ptr::write_volatile(byte, 0) }

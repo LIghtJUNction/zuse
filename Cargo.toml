@@ -1,5 +1,5 @@
 [package]
-name = "zuse"
+name = "zuse-computer"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
@@ -9,7 +9,11 @@ repository = "https://github.com/LIghtJUNction/zuse"
 readme = "README.md"
 keywords = ["computer-use", "mcp", "automation", "no-std", "agents"]
 categories = ["command-line-utilities", "api-bindings", "no-std"]
-include = ["src/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README*", "LICENSE", "CHANGELOG.md"]
+include = ["scripts/**", "benches/**", "src/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README*", "LICENSE", "CHANGELOG.md"]
+
+[lib]
+name = "zuse"
+path = "src/lib.rs"
 
 [features]
 default = ["std"]

@@ -1,0 +1,5 @@
+# Device observation only. A local authorized ADB server is required.
+android.devices()
+android.connect(mode="foreground")
+android.status()
+android.snapshot()

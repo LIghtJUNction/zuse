@@ -39,7 +39,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zuse"
+name = "zuse-computer"
 version = "0.1.0"
 dependencies = [
  "z64",

@@ -1,0 +1,40 @@
+name: Bump and release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: patch, minor, major or explicit MAJOR.MINOR.PATCH
+        required: true
+        default: patch
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: bump-main
+  cancel-in-progress: false
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure release identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - id: bump
+        env:
+          ZUSE_BUMP: ${{ inputs.version }}
+        run: python scripts/bump.py "$ZUSE_BUMP" --commit --tag --push
+  release:
+    needs: bump
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.bump.outputs.tag }}
+    secrets: inherit

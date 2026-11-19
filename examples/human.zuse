@@ -1,0 +1,3 @@
+# Use a persistent shell or MCP session to retain other runtime state.
+human.request(kind="approval", message="Please confirm you are ready to continue.", timeout=300)
+wait(ms=1)

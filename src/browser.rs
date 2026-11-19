@@ -40,35 +40,71 @@ impl Browser {
         let executable = browser_executable()?;
         let profile = new_profile()?;
         let mut command = Command::new(executable);
-        command.args([
-            "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
-            "--no-first-run", "--no-default-browser-check", "--disable-background-networking",
-        ]).arg(format!("--user-data-dir={}", profile.display()));
-        if headless { command.arg("--headless=new"); }
-        command.arg("about:blank").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        command
+            .args([
+                "--remote-debugging-port=0",
+                "--remote-debugging-address=127.0.0.1",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-background-networking",
+            ])
+            .arg(format!("--user-data-dir={}", profile.display()));
+        if headless {
+            command.arg("--headless=new");
+        }
+        command
+            .arg("about:blank")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         let mut child = match command.spawn() {
             Ok(child) => child,
-            Err(error) => { let _ = fs::remove_dir_all(&profile); return Err(format!("launch browser: {error}")); }
+            Err(error) => {
+                let _ = fs::remove_dir_all(&profile);
+                return Err(format!("launch browser: {error}"));
+            }
         };
         let deadline = Instant::now() + Duration::from_secs(15);
         let connection = loop {
             if let Ok(text) = fs::read_to_string(profile.join("DevToolsActivePort")) {
                 let mut lines = text.lines();
-                if let (Some(port), Some(path)) = (lines.next(), lines.next()) {
-                    if port.parse::<u16>().is_ok() && path.starts_with("/devtools/browser/") {
-                        break Self::connect(&format!("ws://127.0.0.1:{port}{path}"));
-                    }
+                if let (Some(port), Some(path)) = (lines.next(), lines.next())
+                    && port.parse::<u16>().is_ok()
+                    && path.starts_with("/devtools/browser/")
+                {
+                    break Self::connect(&format!("ws://127.0.0.1:{port}{path}"));
                 }
             }
-            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                break Err(format!("browser exited before its debugging endpoint became ready: {status}"));
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    break Err(format!(
+                        "browser exited before its debugging endpoint became ready: {status}"
+                    ));
+                }
+                Err(error) => break Err(format!("observe browser launch: {error}")),
+                Ok(None) => {}
             }
-            if Instant::now() >= deadline { break Err("browser launch timed out".into()); }
+            if Instant::now() >= deadline {
+                break Err("browser launch timed out".into());
+            }
             thread::sleep(Duration::from_millis(40));
         };
         match connection {
-            Ok(mut browser) => { browser.child = Some(child); browser.profile = Some(profile); Ok(browser) }
-            Err(error) => { let _ = child.kill(); let _ = child.wait(); let _ = fs::remove_dir_all(profile); Err(error) }
+            Ok(mut browser) => {
+                browser.child = Some(child);
+                browser.profile = Some(profile);
+                Ok(browser)
+            }
+            Err(error) => {
+                stop_owned_browser(&mut child, Duration::ZERO);
+                let _ = fs::remove_dir_all(profile);
+                Err(error)
+            }
         }
     }
 
@@ -76,12 +112,27 @@ impl Browser {
     /// resolved through `/json/version`; a WebSocket URL is used directly.
     /// A fresh page is created; existing pages can be selected with `select`.
     pub fn connect(endpoint: &str) -> Result<Self> {
-        let endpoint = if endpoint.starts_with("http://") { discover_endpoint(endpoint)? } else { endpoint.to_owned() };
+        let endpoint = if endpoint.starts_with("http://") {
+            discover_endpoint(endpoint)?
+        } else {
+            endpoint.to_owned()
+        };
         let socket = WebSocket::connect(&endpoint)?;
         let page_endpoint = endpoint.contains("/devtools/page/");
-        let mut browser = Self { socket, child: None, profile: None, session: String::new(), target: String::new(), next_id: 1, events: VecDeque::new(), owned_target: false, closed: false };
+        let mut browser = Self {
+            socket,
+            child: None,
+            profile: None,
+            session: String::new(),
+            target: String::new(),
+            next_id: 1,
+            events: VecDeque::new(),
+            owned_target: false,
+            closed: false,
+        };
         if !page_endpoint {
-            let result = browser.request("Target.createTarget", r#"{"url":"about:blank"}"#, false)?;
+            let result =
+                browser.request("Target.createTarget", r#"{"url":"about:blank"}"#, false)?;
             let target = field_string(&result, &["targetId"])?;
             browser.target = target.clone();
             browser.owned_target = true;
@@ -93,30 +144,54 @@ impl Browser {
 
     fn enable_page(&mut self) -> Result<()> {
         self.request("Page.enable", "{}", true)?;
-        self.request("Page.setLifecycleEventsEnabled", r#"{"enabled":true}"#, true)?;
+        self.request(
+            "Page.setLifecycleEventsEnabled",
+            r#"{"enabled":true}"#,
+            true,
+        )?;
         Ok(())
     }
 
     fn attach(&mut self, target: &str) -> Result<()> {
-        let result = self.request("Target.attachToTarget", &format!(r#"{{"targetId":{},"flatten":true}}"#, quote(target)), false)?;
+        let result = self.request(
+            "Target.attachToTarget",
+            &format!(r#"{{"targetId":{},"flatten":true}}"#, quote(target)),
+            false,
+        )?;
         self.session = field_string(&result, &["sessionId"])?;
         self.target = target.to_owned();
         Ok(())
     }
 
     /// List all inspectable targets as CDP JSON.
-    pub fn tabs(&mut self) -> Result<String> { self.request("Target.getTargets", "{}", false) }
+    pub fn tabs(&mut self) -> Result<String> {
+        self.request("Target.getTargets", "{}", false)
+    }
 
     /// Select an existing page by its exact target ID. Closing zuse does not
     /// close a selected user-owned target.
     pub fn select(&mut self, target: &str) -> Result<String> {
-        let result = self.request("Target.getTargetInfo", &format!(r#"{{"targetId":{}}}"#, quote(target)), false)?;
-        if field_string(&result, &["targetInfo", "type"])? != "page" { return Err("target is not a page".into()); }
+        let result = self.request(
+            "Target.getTargetInfo",
+            &format!(r#"{{"targetId":{}}}"#, quote(target)),
+            false,
+        )?;
+        if field_string(&result, &["targetInfo", "type"])? != "page" {
+            return Err("target is not a page".into());
+        }
         if !self.session.is_empty() {
-            self.request("Target.detachFromTarget", &format!(r#"{{"sessionId":{}}}"#, quote(&self.session)), false)?;
+            self.request(
+                "Target.detachFromTarget",
+                &format!(r#"{{"sessionId":{}}}"#, quote(&self.session)),
+                false,
+            )?;
         }
         if self.owned_target {
-            self.request("Target.closeTarget", &format!(r#"{{"targetId":{}}}"#, quote(&self.target)), false)?;
+            self.request(
+                "Target.closeTarget",
+                &format!(r#"{{"targetId":{}}}"#, quote(&self.target)),
+                false,
+            )?;
         }
         self.attach(target)?;
         self.owned_target = false;
@@ -126,21 +201,35 @@ impl Browser {
 
     /// Navigate and wait for the resulting loader's load event (30 s limit).
     pub fn navigate(&mut self, url: &str) -> Result<String> {
-        if url.len() > 65536 || url.chars().any(|c| c == '\0') { return Err("invalid URL".into()); }
+        if url.len() > 65536 || url.chars().any(|c| c == '\0') {
+            return Err("invalid URL".into());
+        }
         self.events.clear();
-        let result = self.request("Page.navigate", &format!(r#"{{"url":{}}}"#, quote(url)), true)?;
+        let result = self.request(
+            "Page.navigate",
+            &format!(r#"{{"url":{}}}"#, quote(url)),
+            true,
+        )?;
         let error = optional_string(&result, &["errorText"])?;
-        if let Some(error) = error { return Err(format!("navigation failed: {error}")); }
+        if let Some(error) = error {
+            return Err(format!("navigation failed: {error}"));
+        }
         if let Some(loader) = optional_string(&result, &["loaderId"])? {
             let deadline = Instant::now() + TIMEOUT;
             loop {
                 if let Some(event) = self.events.pop_front() {
-                    if lifecycle_loaded(&event, &loader, &self.session)? { break; }
+                    if lifecycle_loaded(&event, &loader, &self.session)? {
+                        break;
+                    }
                 } else {
                     let event = self.socket.read_text(deadline)?;
-                    if lifecycle_loaded(&event, &loader, &self.session)? { break; }
+                    if lifecycle_loaded(&event, &loader, &self.session)? {
+                        break;
+                    }
                 }
-                if Instant::now() >= deadline { return Err("navigation load timed out".into()); }
+                if Instant::now() >= deadline {
+                    return Err("navigation load timed out".into());
+                }
             }
         }
         Ok(result)
@@ -148,12 +237,19 @@ impl Browser {
 
     /// Evaluate JavaScript in the selected page and return its JSON value.
     pub fn evaluate(&mut self, expression: &str) -> Result<String> {
-        if expression.len() > 1 << 20 { return Err("expression exceeds 1 MiB".into()); }
+        if expression.len() > 1 << 20 {
+            return Err("expression exceeds 1 MiB".into());
+        }
         let result = self.request("Runtime.evaluate", &format!(r#"{{"expression":{},"returnByValue":true,"awaitPromise":true,"userGesture":true,"timeout":30000}}"#, quote(expression)), true)?;
         with_json(&result, |root| {
-            if let Some(exception) = root.get("exceptionDetails") { return Err(format!("page JavaScript failed: {}", exception.raw())); }
+            if let Some(exception) = root.get("exceptionDetails") {
+                return Err(format!("page JavaScript failed: {}", exception.raw()));
+            }
             let value = root.get("result").ok_or("missing evaluation result")?;
-            Ok(value.get("value").map(|v| v.raw().to_owned()).unwrap_or_else(|| "null".into()))
+            Ok(value
+                .get("value")
+                .map(|v| v.raw().to_owned())
+                .unwrap_or_else(|| "null".into()))
         })
     }
 
@@ -168,19 +264,39 @@ impl Browser {
             let mut count = 0;
             let mut truncated = false;
             for node in nodes.elements() {
-                if node.get("ignored").and_then(Value::boolean) == Some(true) { continue; }
-                if count == 2048 { truncated = true; break; }
-                if count > 0 { output.push(','); }
+                if node.get("ignored").and_then(Value::boolean) == Some(true) {
+                    continue;
+                }
+                if count == 2048 {
+                    truncated = true;
+                    break;
+                }
+                if count > 0 {
+                    output.push(',');
+                }
                 output.push('{');
                 let mut first = true;
-                for key in ["nodeId", "parentId", "childIds", "role", "name", "description", "backendDOMNodeId"] {
+                for key in [
+                    "nodeId",
+                    "parentId",
+                    "childIds",
+                    "role",
+                    "name",
+                    "description",
+                    "backendDOMNodeId",
+                ] {
                     if let Some(value) = node.get(key) {
-                        if !first { output.push(','); }
+                        if !first {
+                            output.push(',');
+                        }
                         first = false;
-                        output.push_str(&quote(key)); output.push(':'); output.push_str(value.raw());
+                        output.push_str(&quote(key));
+                        output.push(':');
+                        output.push_str(value.raw());
                     }
                 }
-                output.push('}'); count += 1;
+                output.push('}');
+                count += 1;
             }
             output.push_str(&format!("],\"truncated\":{truncated}}}"));
             Ok(output)
@@ -188,15 +304,26 @@ impl Browser {
     }
 
     /// Text currently rendered in the page, bounded to 200,000 UTF-16 units.
-    pub fn text(&mut self) -> Result<String> { self.evaluate("(document.body?.innerText ?? '').slice(0,200000)") }
+    pub fn text(&mut self) -> Result<String> {
+        self.evaluate("(document.body?.innerText ?? '').slice(0,200000)")
+    }
 
     /// Click the visible center of a CSS-selected element using trusted CDP
     /// mouse input. Occlusion and zero-sized targets fail explicitly.
     pub fn click(&mut self, selector: &str) -> Result<String> {
-        let expression = format!(r#"(()=>{{const e=document.querySelector({});if(!e)throw Error('selector not found');e.scrollIntoView({{block:'center',inline:'center'}});const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)throw Error('element has no visible area');const x=Math.max(0,Math.min(innerWidth-1,r.x+r.width/2)),y=Math.max(0,Math.min(innerHeight-1,r.y+r.height/2));const h=document.elementFromPoint(x,y);if(!h||!(h===e||e.contains(h)))throw Error('element is obscured');return{{x,y}}}})()"#, quote(selector));
+        let expression = format!(
+            r#"(()=>{{const e=document.querySelector({});if(!e)throw Error('selector not found');e.scrollIntoView({{block:'center',inline:'center'}});const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)throw Error('element has no visible area');const x=Math.max(0,Math.min(innerWidth-1,r.x+r.width/2)),y=Math.max(0,Math.min(innerHeight-1,r.y+r.height/2));const h=document.elementFromPoint(x,y);if(!h||!(h===e||e.contains(h)))throw Error('element is obscured');return{{x,y}}}})()"#,
+            quote(selector)
+        );
         let point = self.evaluate(&expression)?;
-        let (x, y) = with_json(&point, |root| Ok((number(root.get("x"))?, number(root.get("y"))?)))?;
-        for (kind, button, count) in [("mouseMoved", "none", 0), ("mousePressed", "left", 1), ("mouseReleased", "left", 1)] {
+        let (x, y) = with_json(&point, |root| {
+            Ok((number(root.get("x"))?, number(root.get("y"))?))
+        })?;
+        for (kind, button, count) in [
+            ("mouseMoved", "none", 0),
+            ("mousePressed", "left", 1),
+            ("mouseReleased", "left", 1),
+        ] {
             self.request("Input.dispatchMouseEvent", &format!(r#"{{"type":"{kind}","x":{x},"y":{y},"button":"{button}","clickCount":{count}}}"#), true)?;
         }
         Ok(point)
@@ -204,9 +331,16 @@ impl Browser {
 
     /// Focus and replace the selected input's content through CDP text input.
     pub fn fill(&mut self, selector: &str, text: &str) -> Result<String> {
-        let expression = format!(r#"(()=>{{const e=document.querySelector({});if(!e)throw Error('selector not found');if(e.disabled||e.readOnly)throw Error('element is not editable');e.focus();if(e instanceof HTMLInputElement||e instanceof HTMLTextAreaElement){{if(e.type==='password')throw Error('password input requires human assistance');e.select();}}else if(e.isContentEditable){{const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r);}}else throw Error('element is not a text input');return true}})()"#, quote(selector));
+        let expression = format!(
+            r#"(()=>{{const e=document.querySelector({});if(!e)throw Error('selector not found');if(e.disabled||e.readOnly)throw Error('element is not editable');e.focus();if(e instanceof HTMLInputElement||e instanceof HTMLTextAreaElement){{if(e.type==='password')throw Error('password input requires human assistance');e.select();}}else if(e.isContentEditable){{const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r);}}else throw Error('element is not a text input');return true}})()"#,
+            quote(selector)
+        );
         self.evaluate(&expression)?;
-        self.request("Input.insertText", &format!(r#"{{"text":{}}}"#, quote(text)), true)
+        self.request(
+            "Input.insertText",
+            &format!(r#"{{"text":{}}}"#, quote(text)),
+            true,
+        )
     }
 
     /// Press a key or chord, e.g. `Enter`, `Control+a`, or `Meta+l`.
@@ -215,108 +349,278 @@ impl Browser {
         let key = parts.pop().filter(|v| !v.is_empty()).ok_or("missing key")?;
         let mut modifiers = 0;
         for part in parts {
-            modifiers |= match part.to_ascii_lowercase().as_str() { "alt" => 1, "control" | "ctrl" => 2, "meta" | "super" | "cmd" => 4, "shift" => 8, _ => return Err(format!("unknown modifier: {part}")) };
+            modifiers |= match part.to_ascii_lowercase().as_str() {
+                "alt" => 1,
+                "control" | "ctrl" => 2,
+                "meta" | "super" | "cmd" => 4,
+                "shift" => 8,
+                _ => return Err(format!("unknown modifier: {part}")),
+            };
         }
         let (code, vk, printable) = key_code(key)?;
-        let text = if printable && modifiers & 7 == 0 { format!(",\"text\":{}", quote(key)) } else if key == "Enter" { ",\"text\":\"\\r\"".into() } else { String::new() };
+        let text = if printable && modifiers & 7 == 0 {
+            format!(",\"text\":{}", quote(key))
+        } else if key == "Enter" {
+            ",\"text\":\"\\r\"".into()
+        } else {
+            String::new()
+        };
         self.request("Input.dispatchKeyEvent", &format!(r#"{{"type":"keyDown","key":{},"code":{},"windowsVirtualKeyCode":{vk},"modifiers":{modifiers}{text}}}"#, quote(key), quote(&code)), true)?;
         self.request("Input.dispatchKeyEvent", &format!(r#"{{"type":"keyUp","key":{},"code":{},"windowsVirtualKeyCode":{vk},"modifiers":{modifiers}}}"#, quote(key), quote(&code)), true)
     }
 
     /// Save the selected page as a PNG screenshot.
     pub fn screenshot(&mut self, path: &str) -> Result<String> {
-        let result = self.request("Page.captureScreenshot", r#"{"format":"png","fromSurface":true,"captureBeyondViewport":false}"#, true)?;
+        let result = self.request(
+            "Page.captureScreenshot",
+            r#"{"format":"png","fromSurface":true,"captureBeyondViewport":false}"#,
+            true,
+        )?;
         let encoded = field_string(&result, &["data"])?;
         let bytes = decode_base64(&encoded)?;
-        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") { return Err("browser returned invalid PNG data".into()); }
-        let mut options = OpenOptions::new(); options.write(true).create(true).truncate(true);
-        #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
-        let mut file = options.open(path).map_err(|e| format!("screenshot output: {e}"))?;
+        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Err("browser returned invalid PNG data".into());
+        }
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(path)
+            .map_err(|e| format!("screenshot output: {e}"))?;
         file.write_all(&bytes).map_err(|e| e.to_string())?;
-        Ok(format!(r#"{{"path":{},"mimeType":"image/png","bytes":{}}}"#, quote(path), bytes.len()))
+        Ok(format!(
+            r#"{{"path":{},"mimeType":"image/png","bytes":{}}}"#,
+            quote(path),
+            bytes.len()
+        ))
     }
 
     /// Set the page viewport in CSS pixels.
     pub fn viewport(&mut self, width: u32, height: u32) -> Result<String> {
-        if !(1..=8192).contains(&width) || !(1..=8192).contains(&height) { return Err("viewport dimensions must be 1..8192".into()); }
-        self.request("Emulation.setDeviceMetricsOverride", &format!(r#"{{"width":{width},"height":{height},"deviceScaleFactor":1,"mobile":false}}"#), true)
+        if !(1..=8192).contains(&width) || !(1..=8192).contains(&height) {
+            return Err("viewport dimensions must be 1..8192".into());
+        }
+        self.request(
+            "Emulation.setDeviceMetricsOverride",
+            &format!(
+                r#"{{"width":{width},"height":{height},"deviceScaleFactor":1,"mobile":false}}"#
+            ),
+            true,
+        )
     }
 
     /// Close owned resources. A connected user-owned browser is left running.
     pub fn close(&mut self) -> Result<String> {
-        if self.closed { return Ok(r#"{"closed":true}"#.into()); }
+        if self.closed {
+            return Ok(r#"{"closed":true}"#.into());
+        }
         let mut error = None;
-        if self.child.is_none() && self.owned_target && !self.target.is_empty() {
-            if let Err(value) = self.request("Target.closeTarget", &format!(r#"{{"targetId":{}}}"#, quote(&self.target)), false) { error = Some(value); }
+        if self.child.is_none()
+            && self.owned_target
+            && !self.target.is_empty()
+            && let Err(value) = self.request(
+                "Target.closeTarget",
+                &format!(r#"{{"targetId":{}}}"#, quote(&self.target)),
+                false,
+            )
+        {
+            error = Some(value);
+        }
+        if self.child.is_some() {
+            // Graceful browser shutdown also closes its renderer processes.
+            let _ = self.socket.send(
+                1,
+                format!(
+                    r#"{{"id":{},"method":"Browser.close","params":{{}}}}"#,
+                    self.next_id
+                )
+                .as_bytes(),
+            );
         }
         self.closed = true;
         let _ = self.socket.stream.shutdown(std::net::Shutdown::Both);
-        if let Some(mut child) = self.child.take() { let _ = child.kill(); let _ = child.wait(); }
-        if let Some(profile) = self.profile.take() { let _ = fs::remove_dir_all(profile); }
-        match error { Some(error) => Err(error), None => Ok(r#"{"closed":true}"#.into()) }
+        if let Some(mut child) = self.child.take() {
+            stop_owned_browser(&mut child, Duration::from_secs(2));
+        }
+        if let Some(profile) = self.profile.take()
+            && let Err(value) = fs::remove_dir_all(&profile)
+            && value.kind() != std::io::ErrorKind::NotFound
+        {
+            error = Some(format!(
+                "browser stopped, but temporary profile cleanup failed: {value}"
+            ));
+        }
+        match error {
+            Some(error) => Err(error),
+            None => Ok(r#"{"closed":true}"#.into()),
+        }
     }
 
     fn request(&mut self, method: &str, params: &str, page: bool) -> Result<String> {
-        if self.closed { return Err("browser connection is closed".into()); }
+        if self.closed {
+            return Err("browser connection is closed".into());
+        }
         let id = self.next_id;
-        self.next_id = self.next_id.checked_add(1).ok_or("browser request ID exhausted")?;
-        let session = if page && !self.session.is_empty() { format!(",\"sessionId\":{}", quote(&self.session)) } else { String::new() };
-        self.socket.send(1, format!(r#"{{"id":{id},"method":{},"params":{params}{session}}}"#, quote(method)).as_bytes())?;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or("browser request ID exhausted")?;
+        let session = if page && !self.session.is_empty() {
+            format!(",\"sessionId\":{}", quote(&self.session))
+        } else {
+            String::new()
+        };
+        self.socket.send(
+            1,
+            format!(
+                r#"{{"id":{id},"method":{},"params":{params}{session}}}"#,
+                quote(method)
+            )
+            .as_bytes(),
+        )?;
         let deadline = Instant::now() + TIMEOUT;
         for _ in 0..10000 {
             let message = self.socket.read_text(deadline)?;
             let response = with_json(&message, |root| {
                 if root.get("id").and_then(|v| v.integer().ok()) == Some(id as i64) {
-                    if let Some(error) = root.get("error") { return Err(format!("CDP {method}: {}", error.raw())); }
-                    return Ok(Some(root.get("result").map(|v| v.raw().to_owned()).unwrap_or_else(|| "{}".into())));
+                    if let Some(error) = root.get("error") {
+                        return Err(format!("CDP {method}: {}", error.raw()));
+                    }
+                    return Ok(Some(
+                        root.get("result")
+                            .map(|v| v.raw().to_owned())
+                            .unwrap_or_else(|| "{}".into()),
+                    ));
                 }
                 Ok(None)
             })?;
-            if let Some(result) = response { return Ok(result); }
-            if self.events.len() == 64 { self.events.pop_front(); }
+            if let Some(result) = response {
+                return Ok(result);
+            }
+            if self.events.len() == 64 {
+                self.events.pop_front();
+            }
             self.events.push_back(message);
         }
         Err("browser event limit exceeded".into())
     }
 }
 
-impl Drop for Browser { fn drop(&mut self) { let _ = self.close(); } }
+impl Drop for Browser {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
 
 fn lifecycle_loaded(message: &str, loader: &str, session: &str) -> Result<bool> {
     with_json(message, |root| {
         let method = root.get("method").and_then(Value::string);
-        if !method.is_some_and(|s| s.matches("Page.lifecycleEvent")) { return Ok(false); }
-        if !session.is_empty() && !root.get("sessionId").and_then(Value::string).is_some_and(|s| s.matches(session)) { return Ok(false); }
-        let Some(params) = root.get("params") else { return Ok(false); };
-        Ok(params.get("name").and_then(Value::string).is_some_and(|s| s.matches("load")) && params.get("loaderId").and_then(Value::string).is_some_and(|s| s.matches(loader)))
+        if !method.is_some_and(|s| s.matches("Page.lifecycleEvent")) {
+            return Ok(false);
+        }
+        if !session.is_empty()
+            && !root
+                .get("sessionId")
+                .and_then(Value::string)
+                .is_some_and(|s| s.matches(session))
+        {
+            return Ok(false);
+        }
+        let Some(params) = root.get("params") else {
+            return Ok(false);
+        };
+        Ok(params
+            .get("name")
+            .and_then(Value::string)
+            .is_some_and(|s| s.matches("load"))
+            && params
+                .get("loaderId")
+                .and_then(Value::string)
+                .is_some_and(|s| s.matches(loader)))
     })
 }
 
 fn browser_executable() -> Result<String> {
-    if let Some(path) = std::env::var_os("ZUSE_BROWSER") { return path.into_string().map_err(|_| "ZUSE_BROWSER is not UTF-8".into()); }
+    if let Some(path) = std::env::var_os("ZUSE_BROWSER") {
+        return path
+            .into_string()
+            .map_err(|_| "ZUSE_BROWSER is not UTF-8".into());
+    }
     #[cfg(target_os = "macos")]
-    let candidates = vec!["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "chromium"];
+    let candidates = vec![
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_owned(),
+        "/Applications/Chromium.app/Contents/MacOS/Chromium".to_owned(),
+        "chromium".to_owned(),
+    ];
     #[cfg(target_os = "windows")]
-    let candidates = vec!["chrome.exe", "msedge.exe", "chromium.exe"];
+    let candidates = {
+        let mut candidates = vec![
+            "chrome.exe".to_owned(),
+            "msedge.exe".to_owned(),
+            "chromium.exe".to_owned(),
+        ];
+        for variable in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
+            if let Some(directory) = std::env::var_os(variable) {
+                for relative in [
+                    "Google/Chrome/Application/chrome.exe",
+                    "Microsoft/Edge/Application/msedge.exe",
+                    "Chromium/Application/chrome.exe",
+                ] {
+                    candidates.push(
+                        PathBuf::from(&directory)
+                            .join(relative)
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                }
+            }
+        }
+        candidates
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let candidates = vec!["chromium", "chromium-browser", "google-chrome", "google-chrome-stable"];
+    let candidates = vec![
+        "chromium".to_owned(),
+        "chromium-browser".to_owned(),
+        "google-chrome".to_owned(),
+        "google-chrome-stable".to_owned(),
+    ];
     for candidate in candidates {
-        if Path::new(candidate).is_file() { return Ok(candidate.into()); }
-        if let Some(paths) = std::env::var_os("PATH") {
-            if std::env::split_paths(&paths).any(|path| path.join(candidate).is_file()) { return Ok(candidate.into()); }
+        if Path::new(&candidate).is_file() {
+            return Ok(candidate);
+        }
+        if let Some(paths) = std::env::var_os("PATH")
+            && std::env::split_paths(&paths).any(|path| path.join(&candidate).is_file())
+        {
+            return Ok(candidate);
         }
     }
     Err("Chromium was not found; set ZUSE_BROWSER to a Chrome/Chromium executable".into())
 }
 
 fn new_profile() -> Result<PathBuf> {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
-    let path = std::env::temp_dir().join(format!("zuse-browser-{}-{now}-{}", std::process::id(), PROFILE_ID.fetch_add(1, Ordering::Relaxed)));
-    #[cfg(unix)] {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "zuse-browser-{}-{now}-{}",
+        std::process::id(),
+        PROFILE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    #[cfg(unix)]
+    {
         use std::os::unix::fs::DirBuilderExt;
-        fs::DirBuilder::new().mode(0o700).create(&path).map_err(|e| e.to_string())?;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .map_err(|e| e.to_string())?;
     }
-    #[cfg(not(unix))] fs::create_dir(&path).map_err(|e| e.to_string())?;
+    #[cfg(not(unix))]
+    fs::create_dir(&path).map_err(|e| e.to_string())?;
     Ok(path)
 }
 
@@ -324,10 +628,17 @@ pub(crate) fn with_json<T>(input: &str, f: impl FnOnce(Value<'_>) -> Result<T>) 
     let mut capacity = 128;
     loop {
         let mut tokens = vec![Token::EMPTY; capacity];
-        let limits = Limits { max_bytes: MAX_MESSAGE, max_depth: 64, max_members: 65536, max_string_bytes: MAX_MESSAGE };
+        let limits = Limits {
+            max_bytes: MAX_MESSAGE,
+            max_depth: 64,
+            max_members: 65536,
+            max_string_bytes: MAX_MESSAGE,
+        };
         match Document::parse(input.as_bytes(), &mut tokens, limits) {
             Ok(document) => return f(document.root()),
-            Err(error) if error.kind == zmcpio::ErrorKind::Tokens && capacity < 262144 => capacity *= 2,
+            Err(error) if error.kind == zmcpio::ErrorKind::Tokens && capacity < 262144 => {
+                capacity *= 2
+            }
             Err(error) => return Err(format!("browser JSON: {error}")),
         }
     }
@@ -335,202 +646,592 @@ pub(crate) fn with_json<T>(input: &str, f: impl FnOnce(Value<'_>) -> Result<T>) 
 
 fn optional_string(input: &str, path: &[&str]) -> Result<Option<String>> {
     with_json(input, |mut value| {
-        for key in path { match value.get(key) { Some(next) => value = next, None => return Ok(None) } }
+        for key in path {
+            match value.get(key) {
+                Some(next) => value = next,
+                None => return Ok(None),
+            }
+        }
         Ok(value.string().map(|s| s.chars().collect()))
     })
 }
-fn field_string(input: &str, path: &[&str]) -> Result<String> { optional_string(input, path)?.ok_or_else(|| format!("missing string field: {}", path.join("."))) }
+fn field_string(input: &str, path: &[&str]) -> Result<String> {
+    optional_string(input, path)?.ok_or_else(|| format!("missing string field: {}", path.join(".")))
+}
 fn number(value: Option<Value<'_>>) -> Result<f64> {
-    let number = value.ok_or("missing coordinate")?.raw().parse::<f64>().map_err(|_| "invalid coordinate")?;
-    if !number.is_finite() { return Err("coordinate is not finite".into()); }
+    let number = value
+        .ok_or("missing coordinate")?
+        .raw()
+        .parse::<f64>()
+        .map_err(|_| "invalid coordinate")?;
+    if !number.is_finite() {
+        return Err("coordinate is not finite".into());
+    }
     Ok(number)
 }
 
 pub(crate) fn quote(text: &str) -> String {
-    let mut output = String::with_capacity(text.len() + 2); output.push('"');
+    let mut output = String::with_capacity(text.len() + 2);
+    output.push('"');
     for character in text.chars() {
-        match character { '"' => output.push_str("\\\""), '\\' => output.push_str("\\\\"), '\n' => output.push_str("\\n"), '\r' => output.push_str("\\r"), '\t' => output.push_str("\\t"), c if c <= '\u{1f}' => output.push_str(&format!("\\u{:04x}", c as u32)), c => output.push(c) }
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            c if c <= '\u{1f}' => output.push_str(&format!("\\u{:04x}", c as u32)),
+            c => output.push(c),
+        }
     }
-    output.push('"'); output
+    output.push('"');
+    output
 }
 
 fn key_code(key: &str) -> Result<(String, u32, bool)> {
     let code = match key {
-        "Enter" => 13, "Tab" => 9, "Escape" => 27, "Backspace" => 8, "Delete" => 46,
-        "ArrowLeft" => 37, "ArrowUp" => 38, "ArrowRight" => 39, "ArrowDown" => 40,
-        "Home" => 36, "End" => 35, "PageUp" => 33, "PageDown" => 34, " " | "Space" => 32,
+        "Enter" => 13,
+        "Tab" => 9,
+        "Escape" => 27,
+        "Backspace" => 8,
+        "Delete" => 46,
+        "ArrowLeft" => 37,
+        "ArrowUp" => 38,
+        "ArrowRight" => 39,
+        "ArrowDown" => 40,
+        "Home" => 36,
+        "End" => 35,
+        "PageUp" => 33,
+        "PageDown" => 34,
+        " " | "Space" => 32,
         _ if key.chars().count() == 1 => {
             let c = key.chars().next().unwrap();
-            let code = if c.is_ascii_alphabetic() { format!("Key{}", c.to_ascii_uppercase()) } else if c.is_ascii_digit() { format!("Digit{c}") } else { String::new() };
-            return Ok((code, if c.is_ascii() { c.to_ascii_uppercase() as u32 } else { 0 }, true));
+            let code = if c.is_ascii_alphabetic() {
+                format!("Key{}", c.to_ascii_uppercase())
+            } else if c.is_ascii_digit() {
+                format!("Digit{c}")
+            } else {
+                String::new()
+            };
+            return Ok((
+                code,
+                if c.is_ascii() {
+                    c.to_ascii_uppercase() as u32
+                } else {
+                    0
+                },
+                true,
+            ));
         }
         _ => return Err(format!("unsupported browser key: {key}")),
     };
-    Ok((if key == " " { "Space" } else { key }.into(), code, key == " "))
+    Ok((
+        if key == " " { "Space" } else { key }.into(),
+        code,
+        key == " ",
+    ))
 }
 
-struct Endpoint { address: SocketAddr, host: String, path: String }
+struct Endpoint {
+    address: SocketAddr,
+    host: String,
+    path: String,
+}
 fn endpoint(input: &str, scheme: &str) -> Result<Endpoint> {
-    let rest = input.strip_prefix(scheme).ok_or("expected local ws:// or http:// endpoint")?;
-    if rest.chars().any(|c| c.is_ascii_control() || c == ' ' || c == '#') || rest.contains('@') { return Err("invalid debugging endpoint".into()); }
-    let (authority, path) = rest.split_once('/').map(|(a, p)| (a, format!("/{p}"))).unwrap_or((rest, "/".into()));
+    if input.len() > 8192 {
+        return Err("browser endpoint exceeds 8 KiB".into());
+    }
+
+    let rest = input
+        .strip_prefix(scheme)
+        .ok_or("expected local ws:// or http:// endpoint")?;
+    if rest
+        .chars()
+        .any(|c| c.is_ascii_control() || c == ' ' || c == '#')
+        || rest.contains('@')
+    {
+        return Err("invalid debugging endpoint".into());
+    }
+    let (authority, path) = rest
+        .split_once('/')
+        .map(|(a, p)| (a, format!("/{p}")))
+        .unwrap_or((rest, "/".into()));
     let (host, port) = if authority.starts_with('[') {
-        let (host, port) = authority.split_once("]:").ok_or("endpoint requires an explicit port")?;
+        let (host, port) = authority
+            .split_once("]:")
+            .ok_or("endpoint requires an explicit port")?;
         (&host[1..], port)
-    } else { authority.rsplit_once(':').ok_or("endpoint requires an explicit port")? };
+    } else {
+        authority
+            .rsplit_once(':')
+            .ok_or("endpoint requires an explicit port")?
+    };
     let port = port.parse::<u16>().map_err(|_| "invalid endpoint port")?;
-    if port == 0 { return Err("endpoint port must be nonzero".into()); }
-    let ip = if host.eq_ignore_ascii_case("localhost") { IpAddr::from([127, 0, 0, 1]) } else { host.parse::<IpAddr>().map_err(|_| "debugging endpoint must use a literal loopback IP or localhost")? };
-    if !ip.is_loopback() { return Err("browser debugging endpoints must be loopback".into()); }
-    Ok(Endpoint { address: SocketAddr::new(ip, port), host: authority.to_owned(), path })
+    if port == 0 {
+        return Err("endpoint port must be nonzero".into());
+    }
+    let ip = if host.eq_ignore_ascii_case("localhost") {
+        IpAddr::from([127, 0, 0, 1])
+    } else {
+        host.parse::<IpAddr>()
+            .map_err(|_| "debugging endpoint must use a literal loopback IP or localhost")?
+    };
+    if !ip.is_loopback() {
+        return Err("browser debugging endpoints must be loopback".into());
+    }
+    Ok(Endpoint {
+        address: SocketAddr::new(ip, port),
+        host: authority.to_owned(),
+        path,
+    })
 }
 
 fn discover_endpoint(input: &str) -> Result<String> {
     let endpoint = endpoint(input, "http://")?;
-    let mut socket = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(5)).map_err(|e| e.to_string())?;
-    socket.set_read_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
-    socket.set_write_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
-    write!(socket, "GET /json/version HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", endpoint.host).map_err(|e| e.to_string())?;
-    let mut response = Vec::new(); socket.take(65537).read_to_end(&mut response).map_err(|e| e.to_string())?;
-    if response.len() > 65536 { return Err("browser discovery exceeds 64 KiB".into()); }
+    let mut socket = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let request = format!(
+        "GET /json/version HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        endpoint.host
+    );
+    write_all_deadline(&mut socket, request.as_bytes(), deadline)?;
+    let mut response = Vec::new();
+    let mut buffer = [0; 4096];
+    loop {
+        let count = read_some_deadline(&mut socket, &mut buffer, deadline)?;
+        if count == 0 {
+            break;
+        }
+        if response.len() + count > 65536 {
+            return Err("browser discovery exceeds 64 KiB".into());
+        }
+        response.extend_from_slice(&buffer[..count]);
+    }
     let response = String::from_utf8(response).map_err(|_| "invalid HTTP discovery response")?;
-    let (head, body) = response.split_once("\r\n\r\n").ok_or("incomplete discovery HTTP headers")?;
-    if !head.starts_with("HTTP/1.1 200 ") && !head.starts_with("HTTP/1.0 200 ") { return Err("browser discovery HTTP status is not 200".into()); }
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or("incomplete discovery HTTP headers")?;
+    if !head.starts_with("HTTP/1.1 200 ") && !head.starts_with("HTTP/1.0 200 ") {
+        return Err("browser discovery HTTP status is not 200".into());
+    }
     field_string(body, &["webSocketDebuggerUrl"])
 }
 
-struct WebSocket { stream: TcpStream }
+struct WebSocket {
+    stream: TcpStream,
+}
 impl WebSocket {
     fn connect(url: &str) -> Result<Self> {
         let endpoint = endpoint(url, "ws://")?;
-        let mut stream = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(5)).map_err(|e| e.to_string())?;
+        let mut stream = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(5))
+            .map_err(|e| e.to_string())?;
         stream.set_nodelay(true).map_err(|e| e.to_string())?;
-        stream.set_read_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
-        stream.set_write_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
-        let mut random = [0; 16]; entropy(&mut random)?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| e.to_string())?;
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| e.to_string())?;
+        let mut random = [0; 16];
+        entropy(&mut random)?;
         let key = encode_base64(&random);
-        write!(stream, "GET {} HTTP/1.1\r\nHost: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n", endpoint.path, endpoint.host, key).map_err(|e| e.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let request = format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
+            endpoint.path, endpoint.host, key
+        );
+        write_all_deadline(&mut stream, request.as_bytes(), deadline)?;
         let mut head = Vec::new();
         while !head.ends_with(b"\r\n\r\n") {
-            if head.len() == 16384 { return Err("WebSocket headers exceed 16 KiB".into()); }
-            let mut byte = [0]; stream.read_exact(&mut byte).map_err(|e| e.to_string())?; head.push(byte[0]);
+            if head.len() == 16384 {
+                return Err("WebSocket headers exceed 16 KiB".into());
+            }
+            let mut byte = [0];
+            read_exact_deadline(&mut stream, &mut byte, deadline)?;
+            head.push(byte[0]);
         }
         let head = std::str::from_utf8(&head).map_err(|_| "invalid WebSocket handshake")?;
-        if !head.starts_with("HTTP/1.1 101 ") { return Err(format!("WebSocket upgrade failed: {}", head.lines().next().unwrap_or(""))); }
-        let headers = head.lines().skip(1).filter_map(|line| line.split_once(':')).collect::<Vec<_>>();
-        let header = |name: &str| -> Option<&str> { headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.trim()) };
-        let accept = encode_base64(&sha1(format!("{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11").as_bytes()));
-        if header("sec-websocket-accept") != Some(accept.as_str()) || !header("upgrade").is_some_and(|v| v.eq_ignore_ascii_case("websocket")) || !header("connection").is_some_and(|v| v.split(',').any(|p| p.trim().eq_ignore_ascii_case("upgrade"))) {
+        if !head.starts_with("HTTP/1.1 101 ") {
+            return Err(format!(
+                "WebSocket upgrade failed: {}",
+                head.lines().next().unwrap_or("")
+            ));
+        }
+        let headers = head
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.split_once(':'))
+            .collect::<Vec<_>>();
+        let header = |name: &str| -> Option<&str> {
+            headers
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.trim())
+        };
+        let accept = encode_base64(&sha1(
+            format!("{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11").as_bytes(),
+        ));
+        if header("sec-websocket-accept") != Some(accept.as_str())
+            || !header("upgrade").is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+            || !header("connection").is_some_and(|v| {
+                v.split(',')
+                    .any(|p| p.trim().eq_ignore_ascii_case("upgrade"))
+            })
+        {
             return Err("invalid WebSocket handshake acceptance".into());
         }
         Ok(Self { stream })
     }
 
     fn send(&mut self, opcode: u8, payload: &[u8]) -> Result<()> {
-        if payload.len() > MAX_MESSAGE { return Err("WebSocket output exceeds 16 MiB".into()); }
+        if payload.len() > MAX_MESSAGE {
+            return Err("WebSocket output exceeds 16 MiB".into());
+        }
         let mut header = vec![0x80 | opcode];
-        match payload.len() { n if n < 126 => header.push(0x80 | n as u8), n if n <= 65535 => { header.push(0xfe); header.extend_from_slice(&(n as u16).to_be_bytes()); }, n => { header.push(0xff); header.extend_from_slice(&(n as u64).to_be_bytes()); } }
-        let mut mask = [0; 4]; entropy(&mut mask)?; header.extend_from_slice(&mask);
-        self.stream.write_all(&header).map_err(|e| e.to_string())?;
+        match payload.len() {
+            n if n < 126 => header.push(0x80 | n as u8),
+            n if n <= 65535 => {
+                header.push(0xfe);
+                header.extend_from_slice(&(n as u16).to_be_bytes());
+            }
+            n => {
+                header.push(0xff);
+                header.extend_from_slice(&(n as u64).to_be_bytes());
+            }
+        }
+        let mut mask = [0; 4];
+        entropy(&mut mask)?;
+        header.extend_from_slice(&mask);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        write_all_deadline(&mut self.stream, &header, deadline)?;
         let mut buffer = [0; 8192];
         for (block, bytes) in payload.chunks(buffer.len()).enumerate() {
-            for (index, byte) in bytes.iter().enumerate() { buffer[index] = byte ^ mask[(block * 8192 + index) % 4]; }
-            self.stream.write_all(&buffer[..bytes.len()]).map_err(|e| e.to_string())?;
+            for (index, byte) in bytes.iter().enumerate() {
+                buffer[index] = byte ^ mask[(block * 8192 + index) % 4];
+            }
+            write_all_deadline(&mut self.stream, &buffer[..bytes.len()], deadline)?;
         }
         Ok(())
     }
 
     fn read_text(&mut self, deadline: Instant) -> Result<String> {
-        let mut output = Vec::new(); let mut fragmented = false;
+        let mut output = Vec::new();
+        let mut fragmented = false;
         loop {
-            let remaining = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()).ok_or("browser response timed out")?;
-            self.stream.set_read_timeout(Some(remaining)).map_err(|e| e.to_string())?;
-            let mut head = [0; 2]; self.stream.read_exact(&mut head).map_err(|e| format!("browser frame: {e}"))?;
-            let fin = head[0] & 0x80 != 0; let opcode = head[0] & 15;
-            if head[0] & 0x70 != 0 || head[1] & 0x80 != 0 { return Err("unsupported WebSocket flags or masked server frame".into()); }
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero())
+                .ok_or("browser response timed out")?;
+            self.stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|e| e.to_string())?;
+            let mut head = [0; 2];
+            read_exact_deadline(&mut self.stream, &mut head, deadline)?;
+            let fin = head[0] & 0x80 != 0;
+            let opcode = head[0] & 15;
+            if head[0] & 0x70 != 0 || head[1] & 0x80 != 0 {
+                return Err("unsupported WebSocket flags or masked server frame".into());
+            }
             let marker = head[1] & 0x7f;
             let length = match marker {
-                126 => { let mut bytes = [0; 2]; self.stream.read_exact(&mut bytes).map_err(|e| e.to_string())?; let n = u16::from_be_bytes(bytes) as u64; if n < 126 { return Err("non-canonical frame length".into()); } n },
-                127 => { let mut bytes = [0; 8]; self.stream.read_exact(&mut bytes).map_err(|e| e.to_string())?; let n = u64::from_be_bytes(bytes); if n < 65536 || n >> 63 != 0 { return Err("invalid frame length".into()); } n },
+                126 => {
+                    let mut bytes = [0; 2];
+                    read_exact_deadline(&mut self.stream, &mut bytes, deadline)?;
+                    let n = u16::from_be_bytes(bytes) as u64;
+                    if n < 126 {
+                        return Err("non-canonical frame length".into());
+                    }
+                    n
+                }
+                127 => {
+                    let mut bytes = [0; 8];
+                    read_exact_deadline(&mut self.stream, &mut bytes, deadline)?;
+                    let n = u64::from_be_bytes(bytes);
+                    if n < 65536 || n >> 63 != 0 {
+                        return Err("invalid frame length".into());
+                    }
+                    n
+                }
                 n => n as u64,
             };
             let control = opcode & 8 != 0;
-            if length > MAX_MESSAGE as u64 || output.len().saturating_add(length as usize) > MAX_MESSAGE || (control && (!fin || length > 125)) { return Err("WebSocket frame exceeds limits".into()); }
-            let mut payload = vec![0; length as usize]; self.stream.read_exact(&mut payload).map_err(|e| e.to_string())?;
+            if length > MAX_MESSAGE as u64
+                || output.len().saturating_add(length as usize) > MAX_MESSAGE
+                || (control && (!fin || length > 125))
+            {
+                return Err("WebSocket frame exceeds limits".into());
+            }
+            let mut payload = vec![0; length as usize];
+            read_exact_deadline(&mut self.stream, &mut payload, deadline)?;
             match opcode {
                 8 => return Err("browser closed the WebSocket".into()),
-                9 => { self.send(10, &payload)?; continue; },
+                9 => {
+                    self.send(10, &payload)?;
+                    continue;
+                }
                 10 => continue,
-                1 if !fragmented => { fragmented = !fin; output.extend_from_slice(&payload); },
-                0 if fragmented => { output.extend_from_slice(&payload); },
+                1 if !fragmented => {
+                    fragmented = !fin;
+                    output.extend_from_slice(&payload);
+                }
+                0 if fragmented => {
+                    output.extend_from_slice(&payload);
+                }
                 _ => return Err("unexpected WebSocket opcode or continuation".into()),
             }
-            if fin { return String::from_utf8(output).map_err(|_| "browser frame is not UTF-8".into()); }
+            if fin {
+                return String::from_utf8(output).map_err(|_| "browser frame is not UTF-8".into());
+            }
         }
     }
 }
 
-fn entropy(bytes: &mut [u8]) -> Result<()> {
-    #[cfg(unix)] { fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(bytes)).map_err(|e| format!("OS randomness: {e}")) }
-    #[cfg(windows)] {
-        #[link(name = "bcrypt")]
-        unsafe extern "system" { fn BCryptGenRandom(algorithm: *mut core::ffi::c_void, buffer: *mut u8, length: u32, flags: u32) -> i32; }
-        // SAFETY: writable buffer spans its declared length; system-preferred RNG uses a null algorithm.
-        let status = unsafe { BCryptGenRandom(core::ptr::null_mut(), bytes.as_mut_ptr(), bytes.len() as u32, 2) };
-        if status < 0 { Err(format!("OS randomness failed: {status}")) } else { Ok(()) }
+/// Chromium is started in its own Unix process group, so failed launches and
+/// shutdown also reap that launch's renderer/helper descendants.
+fn stop_owned_browser(child: &mut Child, grace: Duration) {
+    let deadline = Instant::now() + grace;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            _ => break,
+        }
     }
-    #[cfg(not(any(unix, windows)))] { let _ = bytes; Err("OS randomness is unavailable".into()) }
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn kill(pid: i32, signal: i32) -> i32;
+        }
+        if let Ok(pid) = i32::try_from(child.id()) {
+            // SAFETY: launch configured this child's dedicated process group.
+            // A negative PID targets only that owned group, including renderers.
+            unsafe {
+                kill(-pid, 9);
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+fn remaining(deadline: Instant) -> Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+        .ok_or_else(|| "browser I/O deadline exceeded".into())
+}
+fn read_some_deadline(
+    stream: &mut TcpStream,
+    output: &mut [u8],
+    deadline: Instant,
+) -> Result<usize> {
+    loop {
+        stream
+            .set_read_timeout(Some(remaining(deadline)?))
+            .map_err(|e| e.to_string())?;
+        match stream.read(output) {
+            Ok(count) => return Ok(count),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err("browser I/O deadline exceeded".into());
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+fn read_exact_deadline(stream: &mut TcpStream, output: &mut [u8], deadline: Instant) -> Result<()> {
+    let mut position = 0;
+    while position < output.len() {
+        let count = read_some_deadline(stream, &mut output[position..], deadline)?;
+        if count == 0 {
+            return Err("browser connection ended before the frame was complete".into());
+        }
+        position += count;
+    }
+    Ok(())
+}
+fn write_all_deadline(stream: &mut TcpStream, input: &[u8], deadline: Instant) -> Result<()> {
+    let mut position = 0;
+    while position < input.len() {
+        stream
+            .set_write_timeout(Some(remaining(deadline)?))
+            .map_err(|e| e.to_string())?;
+        match stream.write(&input[position..]) {
+            Ok(0) => return Err("browser connection stopped accepting bytes".into()),
+            Ok(count) => position += count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err("browser I/O deadline exceeded".into());
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn entropy(bytes: &mut [u8]) -> Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(bytes))
+            .map_err(|e| format!("OS randomness: {e}"))
+    }
+    #[cfg(windows)]
+    {
+        #[link(name = "bcrypt")]
+        unsafe extern "system" {
+            fn BCryptGenRandom(
+                algorithm: *mut core::ffi::c_void,
+                buffer: *mut u8,
+                length: u32,
+                flags: u32,
+            ) -> i32;
+        }
+        // SAFETY: writable buffer spans its declared length; system-preferred RNG uses a null algorithm.
+        let status = unsafe {
+            BCryptGenRandom(
+                core::ptr::null_mut(),
+                bytes.as_mut_ptr(),
+                bytes.len() as u32,
+                2,
+            )
+        };
+        if status < 0 {
+            Err(format!("OS randomness failed: {status}"))
+        } else {
+            Ok(())
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = bytes;
+        Err("OS randomness is unavailable".into())
+    }
 }
 
 fn encode_base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let bits = ((chunk[0] as u32) << 16) | ((chunk.get(1).copied().unwrap_or(0) as u32) << 8) | chunk.get(2).copied().unwrap_or(0) as u32;
-        output.push(ALPHABET[(bits >> 18) as usize] as char); output.push(ALPHABET[((bits >> 12) & 63) as usize] as char);
-        output.push(if chunk.len() > 1 { ALPHABET[((bits >> 6) & 63) as usize] as char } else { '=' });
-        output.push(if chunk.len() > 2 { ALPHABET[(bits & 63) as usize] as char } else { '=' });
+        let bits = ((chunk[0] as u32) << 16)
+            | ((chunk.get(1).copied().unwrap_or(0) as u32) << 8)
+            | chunk.get(2).copied().unwrap_or(0) as u32;
+        output.push(ALPHABET[(bits >> 18) as usize] as char);
+        output.push(ALPHABET[((bits >> 12) & 63) as usize] as char);
+        output.push(if chunk.len() > 1 {
+            ALPHABET[((bits >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        output.push(if chunk.len() > 2 {
+            ALPHABET[(bits & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     output
 }
 
 fn decode_base64(text: &str) -> Result<Vec<u8>> {
-    if text.len() % 4 != 0 || text.len() > MAX_MESSAGE { return Err("invalid base64 length".into()); }
+    if !text.len().is_multiple_of(4) || text.len() > MAX_MESSAGE {
+        return Err("invalid base64 length".into());
+    }
     let mut output = Vec::with_capacity(text.len() / 4 * 3);
-    let value = |byte: u8| -> Result<u8> { match byte { b'A'..=b'Z' => Ok(byte - b'A'), b'a'..=b'z' => Ok(byte - b'a' + 26), b'0'..=b'9' => Ok(byte - b'0' + 52), b'+' => Ok(62), b'/' => Ok(63), _ => Err("invalid base64 character".into()) } };
-    for (index, chunk) in text.as_bytes().chunks_exact(4).enumerate() {
+    let value = |byte: u8| -> Result<u8> {
+        match byte {
+            b'A'..=b'Z' => Ok(byte - b'A'),
+            b'a'..=b'z' => Ok(byte - b'a' + 26),
+            b'0'..=b'9' => Ok(byte - b'0' + 52),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            _ => Err("invalid base64 character".into()),
+        }
+    };
+    for (index, chunk) in text.as_bytes().as_chunks::<4>().0.iter().enumerate() {
         let last = (index + 1) * 4 == text.len();
-        let a = value(chunk[0])?; let b = value(chunk[1])?;
-        let pad_c = chunk[2] == b'='; let pad_d = chunk[3] == b'=';
-        if (pad_c && !pad_d) || ((pad_c || pad_d) && !last) { return Err("invalid base64 padding".into()); }
-        let c = if pad_c { 0 } else { value(chunk[2])? }; let d = if pad_d { 0 } else { value(chunk[3])? };
-        if (pad_c && b & 15 != 0) || (pad_d && !pad_c && c & 3 != 0) { return Err("non-canonical base64 padding".into()); }
+        let a = value(chunk[0])?;
+        let b = value(chunk[1])?;
+        let pad_c = chunk[2] == b'=';
+        let pad_d = chunk[3] == b'=';
+        if (pad_c && !pad_d) || ((pad_c || pad_d) && !last) {
+            return Err("invalid base64 padding".into());
+        }
+        let c = if pad_c { 0 } else { value(chunk[2])? };
+        let d = if pad_d { 0 } else { value(chunk[3])? };
+        if (pad_c && b & 15 != 0) || (pad_d && !pad_c && c & 3 != 0) {
+            return Err("non-canonical base64 padding".into());
+        }
         output.push((a << 2) | (b >> 4));
-        if !pad_c { output.push((b << 4) | (c >> 2)); }
-        if !pad_d { output.push((c << 6) | d); }
+        if !pad_c {
+            output.push((b << 4) | (c >> 2));
+        }
+        if !pad_d {
+            output.push((c << 6) | d);
+        }
     }
     Ok(output)
 }
 
 fn sha1(input: &[u8]) -> [u8; 20] {
-    let mut bytes = input.to_vec(); bytes.push(0x80);
-    while bytes.len() % 64 != 56 { bytes.push(0); }
+    let mut bytes = input.to_vec();
+    bytes.push(0x80);
+    while bytes.len() % 64 != 56 {
+        bytes.push(0);
+    }
     bytes.extend_from_slice(&((input.len() as u64) * 8).to_be_bytes());
-    let mut state = [0x67452301u32, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0];
-    for chunk in bytes.chunks_exact(64) {
+    let mut state = [
+        0x67452301u32,
+        0xefcdab89,
+        0x98badcfe,
+        0x10325476,
+        0xc3d2e1f0,
+    ];
+    for chunk in bytes.as_chunks::<64>().0 {
         let mut words = [0u32; 80];
-        for (i, bytes) in chunk.chunks_exact(4).enumerate() { words[i] = u32::from_be_bytes(bytes.try_into().unwrap()); }
-        for i in 16..80 { words[i] = (words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16]).rotate_left(1); }
+        for (i, bytes) in chunk.as_chunks::<4>().0.iter().enumerate() {
+            words[i] = u32::from_be_bytes(*bytes);
+        }
+        for i in 16..80 {
+            words[i] = (words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16]).rotate_left(1);
+        }
         let [mut a, mut b, mut c, mut d, mut e] = state;
         for (i, word) in words.into_iter().enumerate() {
-            let (f, k) = match i { 0..=19 => ((b & c) | ((!b) & d), 0x5a827999), 20..=39 => (b ^ c ^ d, 0x6ed9eba1), 40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1bbcdc), _ => (b ^ c ^ d, 0xca62c1d6) };
-            let next = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(word);
-            e = d; d = c; c = b.rotate_left(30); b = a; a = next;
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5a827999),
+                20..=39 => (b ^ c ^ d, 0x6ed9eba1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1bbcdc),
+                _ => (b ^ c ^ d, 0xca62c1d6),
+            };
+            let next = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = next;
         }
-        for (item, value) in state.iter_mut().zip([a, b, c, d, e]) { *item = item.wrapping_add(value); }
+        for (item, value) in state.iter_mut().zip([a, b, c, d, e]) {
+            *item = item.wrapping_add(value);
+        }
     }
     let mut output = [0; 20];
-    for (chunk, value) in output.chunks_exact_mut(4).zip(state) { chunk.copy_from_slice(&value.to_be_bytes()); }
+    for (chunk, value) in output.as_chunks_mut::<4>().0.iter_mut().zip(state) {
+        chunk.copy_from_slice(&value.to_be_bytes());
+    }
     output
 }
 
@@ -538,38 +1239,119 @@ fn sha1(input: &[u8]) -> [u8; 20] {
 mod tests {
     use super::*;
     #[test]
-    fn websocket_accept_vector() { assert_eq!(encode_base64(&sha1(b"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11")), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="); }
+    fn websocket_accept_vector() {
+        assert_eq!(
+            encode_base64(&sha1(
+                b"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+            )),
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        );
+    }
     #[test]
     fn base64_round_trip_and_padding() {
-        for n in 0..128 { let bytes = (0..n).map(|v| v as u8).collect::<Vec<_>>(); assert_eq!(decode_base64(&encode_base64(&bytes)).unwrap(), bytes); }
-        for text in ["A", "====", "AB==", "AAB=", "AA=A", "AA==AA==", "?AAA"] { assert!(decode_base64(text).is_err(), "{text}"); }
+        for n in 0..128 {
+            let bytes = (0..n).map(|v| v as u8).collect::<Vec<_>>();
+            assert_eq!(decode_base64(&encode_base64(&bytes)).unwrap(), bytes);
+        }
+        for text in ["A", "====", "AB==", "AAB=", "AA=A", "AA==AA==", "?AAA"] {
+            assert!(decode_base64(text).is_err(), "{text}");
+        }
     }
     #[test]
     fn endpoint_is_loopback_only() {
-        for good in ["ws://127.0.0.1:9222/devtools/browser/a", "ws://[::1]:9222/a", "ws://localhost:9222/"] { assert!(endpoint(good, "ws://").is_ok()); }
-        for bad in ["ws://example.com:9222/", "ws://127.0.0.1.evil:9222/", "ws://user@127.0.0.1:9222/", "ws://127.0.0.1:0/", "ws://192.168.1.1:9222/", "ws://127.0.0.1:9222/\r\nX:a"] { assert!(endpoint(bad, "ws://").is_err()); }
+        for good in [
+            "ws://127.0.0.1:9222/devtools/browser/a",
+            "ws://[::1]:9222/a",
+            "ws://localhost:9222/",
+        ] {
+            assert!(endpoint(good, "ws://").is_ok());
+        }
+        for bad in [
+            "ws://example.com:9222/",
+            "ws://127.0.0.1.evil:9222/",
+            "ws://user@127.0.0.1:9222/",
+            "ws://127.0.0.1:0/",
+            "ws://192.168.1.1:9222/",
+            "ws://127.0.0.1:9222/\r\nX:a",
+        ] {
+            assert!(endpoint(bad, "ws://").is_err());
+        }
     }
     #[test]
-    fn quoted_selector_stays_data() { assert_eq!(quote("a\"\\\n中"), "\"a\\\"\\\\\\n中\""); }
+    fn quoted_selector_stays_data() {
+        assert_eq!(quote("a\"\\\n中"), "\"a\\\"\\\\\\n中\"");
+    }
     #[test]
     fn frames_allow_fragmented_text_and_ping() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            stream.write_all(&[1, 2, b'h', b'e', 0x89, 1, b'!', 0x80, 3, b'l', b'l', b'o']).unwrap();
-            let mut pong = [0; 7]; stream.read_exact(&mut pong).unwrap();
-            assert_eq!(pong[0], 0x8a); assert_eq!(pong[1], 0x81); assert_eq!(pong[6] ^ pong[2], b'!');
+            stream
+                .write_all(&[1, 2, b'h', b'e', 0x89, 1, b'!', 0x80, 3, b'l', b'l', b'o'])
+                .unwrap();
+            let mut pong = [0; 7];
+            stream.read_exact(&mut pong).unwrap();
+            assert_eq!(pong[0], 0x8a);
+            assert_eq!(pong[1], 0x81);
+            assert_eq!(pong[6] ^ pong[2], b'!');
         });
-        let mut websocket = WebSocket { stream: TcpStream::connect(address).unwrap() };
-        assert_eq!(websocket.read_text(Instant::now() + Duration::from_secs(2)).unwrap(), "hello");
+        let mut websocket = WebSocket {
+            stream: TcpStream::connect(address).unwrap(),
+        };
+        assert_eq!(
+            websocket
+                .read_text(Instant::now() + Duration::from_secs(2))
+                .unwrap(),
+            "hello"
+        );
+        server.join().unwrap();
+    }
+    #[test]
+    fn partial_frame_reads_cannot_extend_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(&[0x81, 4, b'a']).unwrap();
+            for byte in *b"bcd" {
+                thread::sleep(Duration::from_millis(40));
+                if stream.write_all(&[byte]).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut websocket = WebSocket {
+            stream: TcpStream::connect(address).unwrap(),
+        };
+        assert!(
+            websocket
+                .read_text(Instant::now() + Duration::from_millis(70))
+                .unwrap_err()
+                .contains("deadline")
+        );
         server.join().unwrap();
     }
     #[test]
     fn frame_size_is_rejected_before_allocation() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap(); let address = listener.local_addr().unwrap();
-        let server = thread::spawn(move || { let (mut stream, _) = listener.accept().unwrap(); stream.write_all(&[0x81, 127]).unwrap(); stream.write_all(&((MAX_MESSAGE + 1) as u64).to_be_bytes()).unwrap(); });
-        let mut websocket = WebSocket { stream: TcpStream::connect(address).unwrap() };
-        assert!(websocket.read_text(Instant::now() + Duration::from_secs(2)).unwrap_err().contains("limits")); server.join().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(&[0x81, 127]).unwrap();
+            stream
+                .write_all(&((MAX_MESSAGE + 1) as u64).to_be_bytes())
+                .unwrap();
+        });
+        let mut websocket = WebSocket {
+            stream: TcpStream::connect(address).unwrap(),
+        };
+        assert!(
+            websocket
+                .read_text(Instant::now() + Duration::from_secs(2))
+                .unwrap_err()
+                .contains("limits")
+        );
+        server.join().unwrap();
     }
 }

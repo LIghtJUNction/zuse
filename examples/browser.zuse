@@ -1,0 +1,9 @@
+# A self-contained page in an isolated background browser.
+browser.launch(headless=true)
+browser.viewport(width=960, height=640)
+browser.navigate(url="data:text/html,<title>zuse demo</title><h1>Computer use</h1><input id=message><button id=save>Save</button>")
+browser.fill(selector="#message", text="Hello from zuse")
+browser.click(selector="#save")
+browser.snapshot()
+browser.capture(path="browser.png")
+browser.close()

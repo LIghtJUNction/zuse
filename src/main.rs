@@ -25,7 +25,7 @@ const CLI: Command = Command::new("zuse").args(&[
 const HELP: &str = r#"zuse — an agent-native computer-use shell
 
 USAGE
-  zuse eval 'mouse.position(); screen.windows()'
+  zuse eval 'mouse.position(); window.list()'
   zuse run FILE                 Run a UTF-8 .zuse program; '-' reads stdin
   zuse check FILE               Validate every statement without execution
   zuse shell                    Persistent line-oriented interactive shell
@@ -85,7 +85,7 @@ fn output(value: String) -> Result<i32, String> {
     Ok(if failed { 1 } else { 0 })
 }
 
-fn exactly<'a>(words: &'a [&str], count: usize, usage: &str) -> Result<(), String> {
+fn exactly(words: &[&str], count: usize, usage: &str) -> Result<(), String> {
     if words.len() == count {
         Ok(())
     } else {
@@ -251,6 +251,9 @@ fn run() -> Result<i32, String> {
                     output(queue.list()?)
                 }
                 Some(action @ ("approve" | "deny" | "assist")) => {
+                    if options.read_only || options.dry_run {
+                        return Err("human operator actions require normal execution mode".into());
+                    }
                     exactly(&words, 3, "human approve|deny|assist REQUEST_ID")?;
                     if action == "assist" {
                         queue.assist(words[2])?;

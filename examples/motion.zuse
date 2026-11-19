@@ -1,0 +1,4 @@
+# Run with --dry-run first. This program moves the current desktop pointer.
+mouse.move(x=400, y=240, duration=350, curve="bezier", jitter=1, seed=42)
+wait(min=80, max=160, seed=42)
+mouse.position()
