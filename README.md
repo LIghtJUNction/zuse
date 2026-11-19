@@ -2,7 +2,7 @@
 
 **An agent-native computer-use shell, Rust library, and MCP server.**
 
-zuse turns small programs into desktop observations and actions. The same executor drives native windows, an isolated Chromium browser, accessibility trees, Android displays, IDE entry points, and managed harness processes. Human assistance pauses a program and gives it an explicit continuation.
+zuse turns small programs into desktop observations and actions. The same executor drives native windows, an isolated Chromium browser, accessibility trees, Android displays and Chrome tabs, iOS through WebDriverAgent, serial/USB devices, IDE entry points, and managed harness processes. Human assistance pauses a program and gives it an explicit continuation.
 
 [中文](README.zh-CN.md) · [Language](docs/language.md) · [Platforms](docs/platforms.md) · [Architecture](docs/architecture.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
 
@@ -154,6 +154,54 @@ Foreground/preempt mode uses display 0. Background mode requires an existing non
 
 Physical Android 16 testing covered foreground input, all 95 printable ASCII characters, exact screenshot pixels, and a fixture-owned secondary display whose input left the primary fixture unchanged. See [native acceptance testing](docs/native-testing.md) and the [device evidence](docs/evidence/android-physical-2026-11-20.json).
 
+## Mobile browsers and iOS
+
+~~~text
+android.browser.sockets(serial="YOUR_DEVICE_SERIAL")
+browser.connect_android(serial="YOUR_DEVICE_SERIAL")
+browser.navigate(url="https://example.com")
+browser.snapshot()
+browser.capture(path="phone-browser.png")
+browser.close()
+~~~
+
+Android Chrome uses a native ADB tunnel without a forwarded TCP listener. The
+connection creates one owned tab in the existing Chrome profile. Mobile
+`browser.tabs` exposes only that tab, and selection of other tabs is rejected.
+Chrome must already expose a responsive debugging socket; a listed socket alone
+does not prove readiness. See [mobile browser control](docs/mobile-browser.md)
+for setup, ownership and observed background behavior.
+
+iOS connects to an explicitly configured local WebDriverAgent endpoint. It
+supports touch, Unicode input, native UI observations, screenshots, application
+launch and opening HTTP(S) URLs. No iPhone was available for this release:
+protocol fixtures pass, but real-device validation remains outstanding.
+[The iOS guide](docs/ios.md) explains WDA preparation, session ownership, secure
+field redaction and the distinction between UIKit points and screenshot pixels.
+
+The MCP `zuse.screenshot` tool accepts `source=desktop`, `browser`, `android`
+or `ios`; mobile sources use the device already connected in that persistent
+runtime.
+
+## Serial and USB devices
+
+~~~text
+serial.ports()
+usb.devices()
+~~~
+
+Native serial adapters support explicit Linux/macOS TTY paths and Windows COM
+ports, raw 8N1 configuration, bounded reads/writes and restoration on close.
+The USB adapter loads the system libusb through zsys and requires explicit
+bus/address, VID/PID and interface selection. It provides bulk, interrupt and
+control transfers without automatically detaching kernel drivers.
+
+Partial writes report progress and stop the remaining program; they are never
+automatically replayed. Linux serial behavior was tested through real kernel
+PTYs. USB transfer behavior was tested against an isolated C ABI fixture, not
+an arbitrary physical device. See [device I/O](docs/device-io.md) for examples,
+limits, timeouts and cleanup semantics.
+
 ## Native integrations
 
 | Area | Interface |
@@ -164,7 +212,9 @@ Physical Android 16 testing covered foreground input, all 95 printable ASCII cha
 | Windows | Win32 input/window/GDI APIs; UI Automation through the system PowerShell runtime |
 | macOS | Quartz/ApplicationServices; System Events accessibility through the system JXA runtime |
 | Chromium | Native CDP client, visible or headless isolated browser |
-| Android | Native ADB protocol, explicit foreground or existing secondary display |
+| Android | Native ADB protocol, explicit displays and an owned Chrome CDP tab |
+| iOS | Native HTTP client to an explicit local WebDriverAgent endpoint |
+| Serial / USB | Native termios/Win32 COM; system libusb through zsys |
 | IDE | VS Code open/goto/diff/extensions command interfaces |
 | Harnesses | Installed harness discovery and bounded managed process input/output |
 
@@ -174,7 +224,7 @@ Backend dependencies and tested coverage are listed in [Platforms](docs/platform
 
 ~~~toml
 [dependencies]
-zuse = { package = "zuse-computer", version = "0.1.1", default-features = false }
+zuse = { package = "zuse-computer", version = "0.2.0", default-features = false }
 ~~~
 
 ~~~rust
@@ -201,7 +251,7 @@ python3 scripts/bump.py patch --commit --tag --push
 
 Checks run locally; the CI workflow is available for pull requests and manual dispatch. The release workflow builds Linux x86_64/ARM64, macOS x86_64/ARM64, and Windows x86_64 archives. It also publishes the Cargo package when `CARGO_REGISTRY_TOKEN` is configured. The Bump and release workflow performs the version commit, atomic branch/tag push, and reusable release call.
 
-See [Development](docs/development.md) and [Validation](docs/validation.md) for exact gates and measured results.
+See [Development](docs/development.md) and [Validation](docs/validation-0.2.0.md) for exact gates and measured results.
 
 ## License
 

@@ -1,0 +1,302 @@
+{
+  "schema": 1,
+  "report_date": "2026-11-20",
+  "date_note": "The filename follows the release reporting date; UTC report timestamps are retained separately.",
+  "scope": {
+    "serial_transfer_platform": "Linux kernel PTY",
+    "usb_transfer_platform": "Linux with a synthetic C libusb shared library compiled against system headers",
+    "real_system_enumeration": true,
+    "physical_serial_ports_opened": false,
+    "physical_usb_interfaces_claimed": false,
+    "physical_usb_transfers_performed": false,
+    "live_macos_serial_or_usb_verified": false,
+    "live_windows_serial_or_usb_verified": false
+  },
+  "test_scripts": [
+    "tests/native_serial.py",
+    "tests/native_usb.py"
+  ],
+  "final_transfer_results": {
+    "serial": {
+      "report_written_at_utc": "2026-11-19T22:33:31.824987+00:00",
+      "report_sha256": "234bc0c908f38f858e7439c0a20d4153d0de32854d226027f696ba2736690448",
+      "report": {
+        "schema": 1,
+        "platform": "linux",
+        "backend": "owned-kernel-pty",
+        "binary_sha256": "ef1394bc6947eb6085dc057a1a084ee9509c6af5ba0ed8e67d6bced8c88eaa44",
+        "physical_devices_opened": false,
+        "tests": [
+          {
+            "name": "all_256_bytes_bidirectional_and_termios_restore",
+            "status": "passed",
+            "detail": {
+              "bytes_each_direction": 256,
+              "raw_8n1": true,
+              "kernel_baud": 115200,
+              "complete_configuration_restored": true
+            }
+          },
+          {
+            "name": "read_timeout",
+            "status": "passed",
+            "detail": {
+              "requested_timeout_ms": 80,
+              "elapsed_ms": 80,
+              "configuration_restored": true
+            }
+          },
+          {
+            "name": "implicit_drop_restores_configuration",
+            "status": "passed",
+            "detail": {
+              "explicit_close": false,
+              "configuration_restored": true
+            }
+          },
+          {
+            "name": "partial_write_timeout_stops_and_restores",
+            "status": "passed",
+            "detail": {
+              "requested_bytes": 32768,
+              "bytes_before_timeout": 15360,
+              "later_step_stopped": true,
+              "configuration_restored": true
+            }
+          },
+          {
+            "name": "whole_program_preflight_has_no_prior_effects",
+            "status": "passed",
+            "detail": {
+              "invalid_cases": 7,
+              "prior_effects": 0
+            }
+          }
+        ],
+        "passed": 5,
+        "failed": 0
+      }
+    },
+    "usb": {
+      "report_written_at_utc": "2026-11-19T22:33:32.003570+00:00",
+      "report_sha256": "298a427d2b263d620097ad4f68454ff8a4eafe08218d2f2bf73bdc03b7ead940",
+      "report": {
+        "schema": 1,
+        "platform": "linux",
+        "backend": "synthetic-libusb-c-abi",
+        "binary_sha256": "ef1394bc6947eb6085dc057a1a084ee9509c6af5ba0ed8e67d6bced8c88eaa44",
+        "library_sha256": "23226f6c51b1b1b11ffce8cbfabeb951789c7085c4ef410a0dae993df8fc0225",
+        "physical_devices_opened": false,
+        "library_path_scope": "CLI child processes only",
+        "tests": [
+          {
+            "name": "enumeration_only_proves_fake_library_selection",
+            "status": "passed",
+            "detail": {
+              "devices": 2,
+              "handles_opened": 0,
+              "fixture_selected": true
+            }
+          },
+          {
+            "name": "bus_address_and_vid_pid_locked_before_open",
+            "status": "passed",
+            "detail": {
+              "mismatched_vendor_product_address_cases": 3,
+              "handles_opened": 0
+            }
+          },
+          {
+            "name": "busy_interface_does_not_detach",
+            "status": "passed",
+            "detail": {
+              "automatic_detach": false,
+              "released_unclaimed_interface": false
+            }
+          },
+          {
+            "name": "bulk_interrupt_control_ffi_payloads",
+            "status": "passed",
+            "detail": {
+              "bulk_bytes_each_direction": 256,
+              "interrupt_bytes_each_direction": 256,
+              "control_bytes_each_direction": 32,
+              "argument_abi_verified": true
+            }
+          },
+          {
+            "name": "partial_writes_not_retried_and_stop_following_steps",
+            "status": "passed",
+            "detail": {
+              "short_or_timed_out_write_cases": 4,
+              "transfer_calls_per_failure": 1,
+              "later_steps_executed": 0
+            }
+          },
+          {
+            "name": "read_timeout_preserves_partial_bytes",
+            "status": "passed",
+            "detail": {
+              "partial_bytes": 17,
+              "timed_out": true,
+              "transfer_calls": 1
+            }
+          },
+          {
+            "name": "invalid_native_count_is_rejected",
+            "status": "passed",
+            "detail": {
+              "impossible_count_rejected": true,
+              "later_step_stopped": true
+            }
+          },
+          {
+            "name": "control_timeout_completion_unknown",
+            "status": "passed",
+            "detail": {
+              "read_and_write_timeout_cases": 2,
+              "completion_reported_unknown": true
+            }
+          },
+          {
+            "name": "release_failure_still_closes_handle_context_library",
+            "status": "passed",
+            "detail": {
+              "release_failure_reported": true,
+              "handle_context_and_library_closed": true
+            }
+          },
+          {
+            "name": "implicit_drop_releases_all_resources",
+            "status": "passed",
+            "detail": {
+              "explicit_close": false,
+              "release_close_exit_unload": true
+            }
+          },
+          {
+            "name": "whole_program_preflight_has_no_prior_effects",
+            "status": "passed",
+            "detail": {
+              "invalid_cases": 11,
+              "libraries_loaded": 0,
+              "prior_transfers": 0
+            }
+          }
+        ],
+        "fixture_selection_proven": true,
+        "passed": 11,
+        "failed": 0
+      }
+    }
+  },
+  "first_transfer_harness_run": {
+    "serial": {
+      "report_written_at_utc": "2026-11-19T22:30:58.186495+00:00",
+      "report_sha256": "ad1fa775d5251df5a4207ffe160b6c27b0ce8f24e0d9ca003341b861190ecc1d",
+      "binary_sha256": "ef1394bc6947eb6085dc057a1a084ee9509c6af5ba0ed8e67d6bced8c88eaa44",
+      "passed": 3,
+      "failed": 2,
+      "failed_cases": [
+        {
+          "name": "partial_write_timeout_stops_and_restores",
+          "status": "failed",
+          "error": "CLI did not return JSON: {\"error\":\"StringTooLong at 1:65604 (byte 65603)\"}\n"
+        },
+        {
+          "name": "whole_program_preflight_has_no_prior_effects",
+          "status": "failed",
+          "error": "CLI did not return JSON: {\"error\":\"serial.read: length must be 1..65536\"}\n"
+        }
+      ]
+    },
+    "usb": {
+      "report_written_at_utc": "2026-11-19T22:30:58.342813+00:00",
+      "report_sha256": "fe333f70d9ad3ac536641fc712f8655e9f6c1c4a7d0016376c4c213e5933c01a",
+      "binary_sha256": "ef1394bc6947eb6085dc057a1a084ee9509c6af5ba0ed8e67d6bced8c88eaa44",
+      "passed": 10,
+      "failed": 1,
+      "failed_cases": [
+        {
+          "name": "whole_program_preflight_has_no_prior_effects",
+          "status": "failed",
+          "error": "CLI did not return fixture JSON: {\"error\":\"USB endpoint must be 1..15 with the requested IN/OUT direction bit\"}\n"
+        }
+      ]
+    }
+  },
+  "harness_corrections": [
+    {
+      "issue": "The harness expected CLI JSON only on stdout.",
+      "observed_behavior": "Whole-program validation returned a nonzero exit and a structured error object on stderr.",
+      "correction": "Accept stderr JSON only when stdout is empty, exit is nonzero, and the parsed object has a string error field.",
+      "affected_groups": [
+        "serial.whole_program_preflight_has_no_prior_effects",
+        "usb.whole_program_preflight_has_no_prior_effects"
+      ]
+    },
+    {
+      "issue": "The first serial backpressure case base64-encoded 65536 raw bytes into one DSL string.",
+      "observed_behavior": "The parser rejected it with StringTooLong before the intended transfer case.",
+      "correction": "Use 32768 raw bytes, within the DSL string bound; the real PTY then accepted 15360 bytes before timeout.",
+      "affected_groups": [
+        "serial.partial_write_timeout_stops_and_restores"
+      ]
+    }
+  ],
+  "product_binary_changed_between_transfer_runs": false,
+  "real_system_enumeration": {
+    "report_written_at_utc": "2026-11-19T22:43:52.144986+00:00",
+    "report_sha256": "c4177739dd1d0ba53d54361cfe6961105a102a6f2a60e5aba2dbc1e8f5b6672d",
+    "report": {
+      "status": "completed",
+      "exit_code": 0,
+      "opened_device": false,
+      "claimed_interface": false,
+      "transfers_sent": false,
+      "operations": [
+        {
+          "operation": "serial.ports",
+          "result_type": "list",
+          "field_names": null,
+          "items": 32
+        },
+        {
+          "operation": "usb.devices",
+          "result_type": "list",
+          "field_names": null,
+          "items": 9
+        }
+      ]
+    },
+    "binary_sha256": "d08444886a0f6d77c6b844317c9dc46716dc93e7daa08a18dc33c902a4851a01",
+    "binary_sha256_provenance": "Frozen executable fingerprint supplied by the operator of the enumeration check.",
+    "read_only": true,
+    "scope": "Real system serial candidate names and system libusb numeric device descriptors; no open, claim, or transfer.",
+    "serial_count_interpretation": "32 candidate paths, not a count of attached physical serial devices."
+  },
+  "limits_at_validation": {
+    "native_serial_bulk_interrupt_max_bytes": 65536,
+    "usb_control_max_bytes": 65535,
+    "dsl_string_max_bytes": 65536,
+    "dsl_base64_binary_capacity": "approximately 48 KiB",
+    "recommended_binary_chunk_bytes_when_device_protocol_allows": 32768,
+    "per_transfer_timeout_ms_min": 1,
+    "per_transfer_timeout_ms_max": 30000,
+    "default_program_requested_wait_budget_ms": 60000,
+    "usb_open_enumeration_cleanup_hard_wall_clock_bound": false
+  },
+  "interpretation": [
+    "PTY results establish Linux byte handling and configuration restoration under the tested kernel; they do not establish physical serial timing or driver compatibility.",
+    "The USB transfer fixture validates real C ABI calls, buffers, statuses and native resource lifetime; it contains no physical USB backend.",
+    "Real-system enumeration establishes candidate-name/descriptor access only, without opening a physical device or claiming an interface.",
+    "Neither Windows nor macOS serial/USB behavior was executed in these acceptance runs.",
+    "USB release uses libusb semantics, including reset to the first alternate setting, and does not promise complete original device-state restoration."
+  ],
+  "official_references": [
+    "https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-dcb",
+    "https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-commtimeouts",
+    "https://libusb.sourceforge.io/api-1.0/group__libusb__dev.html",
+    "https://libusb.sourceforge.io/api-1.0/group__libusb__syncio.html"
+  ]
+}

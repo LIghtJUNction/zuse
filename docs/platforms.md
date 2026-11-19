@@ -2,21 +2,25 @@
 
 Capabilities are discovered at runtime. Missing permissions, system libraries, display protocols, or device commands produce explicit errors. Compilation and actual application interaction are recorded separately.
 
-| Backend | Implemented interface | Verified scope through 0.1.1 |
+| Backend | Implemented interface | Verified scope through 0.2.0 |
 | --- | --- | --- |
 | Linux X11 | Xlib/XTest pointer and keyboard, window metadata, targeted synthetic events, PNG | Private Xvfb fixture; delivered text and events, image dimensions/pixels/CRCs |
 | Linux Hyprland | Native compositor IPC, Wayland virtual keyboard, actual XKB keymap lookup | Hyprland 0.57.2 private graphical sessions, including Fcitx; foreground Unicode, background ASCII and state rejection |
 | Shared Linux desktop | Window discovery and pointer operations | Actual development session; keyboard stopped before effects because Num Lock was enabled; focus/pointer restored |
 | Wayland capture | grim using the compositor's capture protocol | Fixture PNG color and dimensions verified; window capture is its composited visible region |
 | Linux AT-SPI | Tree, text, bounds, focus, actions, editable text and password redaction | Private D-Bus/Xvfb GTK fixture |
-| Chromium CDP | Isolated browser, navigation, text/AX, input, viewport and PNG | Isolated sandboxed Chromium fixture from 0.1.0; protocol regression tests retained |
+| Chromium CDP | Isolated browser, navigation, text/AX, input, viewport and PNG | Isolated sandboxed Chromium fixture rerun after the 0.2.0 mobile fix |
 | Windows | Win32 input/window/GDI and system UI Automation | Full x86_64-pc-windows-gnu type check; no live Windows desktop in this acceptance |
-| macOS | Quartz/ApplicationServices and System Events accessibility | Full aarch64-apple-darwin type check; no live macOS desktop in this acceptance |
+| macOS | Quartz/ApplicationServices and System Events accessibility | Clippy/all-targets on aarch64 and x86_64 apple-darwin; permission preflight implemented; no live Mac |
 | Android | Native ADB/shell-v2, display-aware input/capture/launch | Physical Android 16/API 36, foreground and fixture-owned secondary display |
+| Android Chrome | Native ADB tunnel and owned CDP target | Physical Chrome 157: 13 checks, restored foreground during background page operations |
+| iOS | Native HTTP to explicit local WDA | 20 protocol/MCP tests; no iPhone available |
+| Serial | Linux/macOS termios, Windows COM | 5 real Linux PTY test groups; no physical serial peripheral |
+| USB | System libusb through zsys | 11 isolated C ABI groups and real descriptor enumeration; no hardware transfer tests |
 | Wine | Host X11/XWayland control and Wine-marked discovery | Shared X11 implementation verified; no separate Wine application acceptance |
 | IDE / Omarchy / harness | Installed command interfaces and bounded managed processes | Process tests and capability discovery; tests do not launch model sessions |
 
-Detailed results: [0.1.1 validation](validation-0.1.1.md), [Android evidence](evidence/android-physical-2026-11-20.json), [Linux evidence](evidence/linux-native-2026-11-20.json).
+Detailed results: [0.2.0 validation](validation-0.2.0.md), [0.1.1 validation](validation-0.1.1.md), [Android evidence](evidence/android-physical-2026-11-20.json), [Linux evidence](evidence/linux-native-2026-11-20.json).
 
 ## Linux libraries and helpers
 
@@ -44,11 +48,11 @@ Keyboard results include delivery=submitted and application_confirmation_require
 
 Windows uses Win32 for native input/window/capture and the system PowerShell/.NET UI Automation interface for accessibility. OS-protected desktops and application permission boundaries remain in effect.
 
-macOS requires Accessibility and Screen Recording permissions. Native input uses Quartz; tree operations use System Events/JXA. The local password dialog uses the OS scripting interface. These desktop paths need live acceptance on their respective systems; cross-target compilation does not establish permission behavior or widget delivery.
+macOS exposes non-prompting Accessibility and Screen Recording preflight with granted/denied/unknown states. See [macOS setup](macos.md). Actual input/capture requires the corresponding permission. Native input uses Quartz; tree operations use System Events/JXA. The local password dialog uses the OS scripting interface. These desktop paths need live acceptance on their respective systems; cross-target compilation does not establish permission behavior or widget delivery.
 
 ## Browser scope
 
-The browser adapter supports Chromium-family DevTools Protocol. A launched browser owns an isolated temporary profile. Connecting uses an explicit loopback endpoint and creates a fresh page. Existing pages require explicit selection; closing an external connection preserves pages it did not create. Firefox and Safari remote automation are outside 0.1.1.
+The browser adapter supports Chromium-family DevTools Protocol. A launched browser owns an isolated temporary profile. Connecting uses an explicit loopback endpoint and creates a fresh page. Existing pages require explicit selection; closing an external connection preserves pages it did not create. Android Chrome uses an owned target in its existing profile; see [mobile browser scope](mobile-browser.md). Firefox remote automation and Safari DOM/CDP are outside 0.2.0. [iOS](ios.md) controls native application UI through WDA and opens URLs through the default handler.
 
 ## Android scope
 
@@ -61,3 +65,7 @@ Capture maps logical displays to SurfaceFlinger IDs. Physical IDs and virtual di
 Text input accepts printable ASCII, excluding the ADB-reserved literal sequence %s, up to 4096 bytes. Unsupported text, keys and components fail whole-program preflight. Android I/O uses a shared operation deadline, including handshake and partial reads; this is not a promise that arbitrary filesystem work or a multi-step program finishes within 15 seconds.
 
 The tested Android 16 device exposes window metadata, but its uiautomator command does not offer XML dumping. The result reports this observation source explicitly. Other devices and permission configurations can expose different accessibility capabilities.
+
+## Peripheral interfaces
+
+See [device I/O](device-io.md) for serial configuration/restoration, exact USB selection, transfer bounds, partial completion and cleanup. Device operations use the same runtime and MCP command schema.

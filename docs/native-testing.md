@@ -59,3 +59,16 @@ Android platform sources used when interpreting device output:
 - [Virtual display API](https://developer.android.com/reference/android/hardware/display/DisplayManager)
 
 Release-specific results are recorded separately from this procedure. The [physical Android evidence](evidence/android-physical-2026-11-20.json) retains the source run counts and identifies which checks were verified by a later targeted rerun; it does not present merged results as a single unchanged passing run.
+
+## Mobile browsers and peripheral fixtures
+
+Android Chrome now has a separate owned-tab acceptance runner. It uses an offline
+page, checks real DOM/input/AX/image state, and preserves private target identities.
+See [mobile browser testing](mobile-browser.md#reproduce) for explicit serial and
+optional readiness activation. The final evidence retains prior failures rather
+than merging them into a fictitious unchanged passing run.
+
+Linux serial tests use owned PTYs; USB tests compile an isolated C libusb fixture
+and verify its identity before sending transfers. Neither test accepts a physical
+peripheral path or opens an unidentified USB device. Run instructions and exact
+limits are in [device I/O](device-io.md) and [0.2.0 validation](validation-0.2.0.md).

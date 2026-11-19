@@ -1,0 +1,203 @@
+{
+  "local_date": "2026-11-20",
+  "timezone": "Asia/Taipei",
+  "recorded_at_utc": "2026-11-19T22:46:57.858468+00:00",
+  "candidate_version": "0.2.0",
+  "tested_source_revision": "459771656ebed8d9bbc8d8c404beee3c5829c0ac",
+  "final_complete_run": {
+    "kind": "physical_android_chrome",
+    "binary_sha256": "852655fa9a0441dd2220e80a07b5dd613d75792478bae8c13c31e78c178b654e",
+    "version": "zuse 0.1.1",
+    "device_model": "PHK110",
+    "android_api": "36",
+    "transport": "native_adb_localabstract",
+    "page": "owned offline data URL fixture",
+    "profile_isolated": false,
+    "preexisting_targets_enumerated": false,
+    "readiness_setup": "temporary Chrome foreground, restored before page operations",
+    "checks": [
+      {
+        "name": "observed_chrome_socket",
+        "passed": true
+      },
+      {
+        "name": "native_adb_connection",
+        "passed": true,
+        "backend": "adb-native-tunnel"
+      },
+      {
+        "name": "readiness_focus_restored_before_page_operations",
+        "passed": true
+      },
+      {
+        "name": "owned_target_scope",
+        "passed": true
+      },
+      {
+        "name": "offline_navigation",
+        "passed": true
+      },
+      {
+        "name": "unicode_input",
+        "passed": true,
+        "text": "zuse 中文 ✓ 🙂"
+      },
+      {
+        "name": "keyboard_event",
+        "passed": true
+      },
+      {
+        "name": "trusted_selector_click",
+        "passed": true,
+        "state": {
+          "clicks": 1,
+          "trusted": true,
+          "result": "clicked 1"
+        }
+      },
+      {
+        "name": "accessibility_snapshot",
+        "passed": true,
+        "nodes": 16,
+        "password_value_omitted": true
+      },
+      {
+        "name": "rendered_text",
+        "passed": true
+      },
+      {
+        "name": "viewport_png",
+        "passed": true,
+        "dimensions": [
+          640,
+          480
+        ],
+        "sample_rgb": [
+          32,
+          160,
+          96
+        ],
+        "sha256": "a2728f18fb70fb85cda1a159d84db46cbbbe8a97af57f3679edd3435ae11b75f"
+      },
+      {
+        "name": "foreign_target_selection_rejected",
+        "passed": true
+      },
+      {
+        "name": "foreground_activity_preserved",
+        "passed": true
+      }
+    ],
+    "cleanup": {
+      "setup_focus_restored": true,
+      "owned_target_close_acknowledged": true,
+      "shell_exit_code": 1,
+      "foreground_activity_preserved": true
+    },
+    "passed": true
+  },
+  "previous_runs": [
+    {
+      "run": "android-chrome",
+      "result": {
+        "kind": "physical_android_chrome",
+        "binary_sha256": "ef1394bc6947eb6085dc057a1a084ee9509c6af5ba0ed8e67d6bced8c88eaa44",
+        "version": "zuse 0.1.1",
+        "device_model": "PHK110",
+        "android_api": "36",
+        "transport": "native_adb_localabstract",
+        "page": "owned offline data URL fixture",
+        "profile_isolated": false,
+        "preexisting_targets_enumerated": false,
+        "checks": [
+          {
+            "name": "observed_chrome_socket",
+            "passed": true
+          },
+          {
+            "name": "execution",
+            "passed": false,
+            "error": "unexpected CLI result: {\"status\": \"failed\", \"failed_step\": 0, \"operation\": \"browser.connect_android\", \"error\": \"browser I/O deadline exceeded\", \"error_code\": \"execution_error\", \"completed\": 0, \"results\": []}"
+          }
+        ],
+        "cleanup": {
+          "shell_exit_code": 1,
+          "foreground_activity_preserved": true
+        },
+        "passed": false
+      }
+    },
+    {
+      "run": "android-chrome-ready",
+      "result": {
+        "kind": "physical_android_chrome",
+        "binary_sha256": "d08444886a0f6d77c6b844317c9dc46716dc93e7daa08a18dc33c902a4851a01",
+        "version": "zuse 0.1.1",
+        "device_model": "PHK110",
+        "android_api": "36",
+        "transport": "native_adb_localabstract",
+        "page": "owned offline data URL fixture",
+        "profile_isolated": false,
+        "preexisting_targets_enumerated": false,
+        "readiness_setup": "temporary Chrome foreground, restored before page operations",
+        "checks": [
+          {
+            "name": "observed_chrome_socket",
+            "passed": true
+          },
+          {
+            "name": "execution",
+            "passed": false,
+            "error": "unexpected CLI result: {\"status\": \"failed\", \"failed_step\": 0, \"operation\": \"browser.connect_android\", \"error\": \"Android Chrome HTTP /json/version: browser I/O deadline exceeded\", \"error_code\": \"execution_error\", \"completed\": 0, \"results\": []}"
+          }
+        ],
+        "cleanup": {
+          "setup_focus_restored": true,
+          "shell_exit_code": 1,
+          "foreground_activity_preserved": true
+        },
+        "passed": false
+      }
+    },
+    {
+      "run": "android-chrome-waited",
+      "result": {
+        "kind": "physical_android_chrome",
+        "binary_sha256": "d08444886a0f6d77c6b844317c9dc46716dc93e7daa08a18dc33c902a4851a01",
+        "version": "zuse 0.1.1",
+        "device_model": "PHK110",
+        "android_api": "36",
+        "transport": "native_adb_localabstract",
+        "page": "owned offline data URL fixture",
+        "profile_isolated": false,
+        "preexisting_targets_enumerated": false,
+        "readiness_setup": "temporary Chrome foreground, restored before page operations",
+        "checks": [
+          {
+            "name": "observed_chrome_socket",
+            "passed": true
+          },
+          {
+            "name": "execution",
+            "passed": false,
+            "error": "unexpected CLI result: {\"status\": \"failed\", \"failed_step\": 0, \"operation\": \"browser.connect_android\", \"error\": \"Android Chrome HTTP /json/version: browser I/O deadline exceeded\", \"error_code\": \"execution_error\", \"completed\": 0, \"results\": []}"
+          }
+        ],
+        "cleanup": {
+          "setup_focus_restored": true,
+          "shell_exit_code": 1,
+          "foreground_activity_preserved": true
+        },
+        "passed": false
+      }
+    }
+  ],
+  "confirmed_http_regression": {
+    "http_status": 200,
+    "content_length": 447,
+    "complete_body_parsed": true,
+    "stream_still_open_after_ms": 1000,
+    "fix": "Read declared Content-Length without waiting for TCP EOF"
+  },
+  "image": "../assets/android-chrome-2026-11-20.png"
+}

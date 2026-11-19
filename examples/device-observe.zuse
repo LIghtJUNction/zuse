@@ -1,0 +1,3 @@
+# Enumerate without claiming a USB interface or opening a serial port.
+serial.ports()
+usb.devices()

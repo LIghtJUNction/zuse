@@ -1,0 +1,6 @@
+# Prepare a signed/running WDA and an explicit loopback endpoint first.
+# No session is automatically created or replaced.
+ios.connect(endpoint="http://127.0.0.1:8100")
+ios.status()
+ios.screen()
+ios.capture(path="ios.png")

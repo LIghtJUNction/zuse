@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 — 2026-11-20
+
+- Added native Android Chrome over ADB with an owned tab, Unicode/selector input, AX/text and viewport screenshots; 13 physical-device checks passed.
+- Fixed real Chrome discovery timeouts by honoring HTTP Content-Length instead of waiting for a persistent ADB stream to close.
+- Added explicit iOS/WDA touch, text, screenshot, source and session operations, native secure-field redaction and 20 protocol/MCP regressions; no iPhone was available.
+- Added native Linux/macOS/Windows serial adapters and system-libusb USB bulk, interrupt and control transfers, with bounded buffers and explicit partial completion.
+- Verified 5 Linux PTY groups, 11 isolated USB C ABI groups and real read-only device enumeration.
+- Added Android/iOS PNG sources to the MCP image tool and non-prompting macOS permission diagnostics.
+- Preserved the no_std zero-dependency core and reused the existing six Project Z dependencies.
+- Verified 109 Rust tests, desktop Chromium, 12 MCP wire tests, no_std/wasm, Windows and both macOS target checks; wired deterministic device I/O fixtures into Linux CI.
+
+See [validation](docs/validation-0.2.0.md) for exact evidence, initial failures and live-platform limits.
+
 ## 0.1.1 — 2026-11-20
 
 - Validated foreground and owned-secondary-display actions on a physical Android 16 device, with published sanitized evidence and a zero-permission fixture.

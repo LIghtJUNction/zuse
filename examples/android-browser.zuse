@@ -1,0 +1,9 @@
+# Start an authorized ADB server and open Chrome first.
+# Replace the serial; run this file in one persistent runtime.
+android.browser.sockets(serial="YOUR_DEVICE_SERIAL")
+browser.connect_android(serial="YOUR_DEVICE_SERIAL")
+browser.navigate(url="data:text/html,<title>zuse phone</title><input id=message><button id=go>Go</button>")
+browser.fill(selector="#message",text="Hello from zuse")
+browser.snapshot()
+browser.capture(path="phone-browser.png")
+browser.close()

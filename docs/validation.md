@@ -1,4 +1,4 @@
-Latest patch results: [zuse 0.1.1](validation-0.1.1.md). The record below is the original 0.1.0 acceptance.
+Latest release results: [zuse 0.2.0](validation-0.2.0.md). Previous native acceptance: [0.1.1](validation-0.1.1.md). The record below is the original 0.1.0 acceptance.
 
 # Validation — zuse 0.1.0
 
