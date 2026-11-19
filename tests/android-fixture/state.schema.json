@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "zuse Android fixture state",
+  "type": "object",
+  "required": [
+    "schema",
+    "package",
+    "instance",
+    "role",
+    "ownerInstance",
+    "pid",
+    "taskId",
+    "displayId",
+    "displayName",
+    "displayWidth",
+    "displayHeight",
+    "densityDpi",
+    "sequence",
+    "uptimeMs",
+    "ready",
+    "lifecycle",
+    "windowFocus",
+    "destroyed",
+    "text",
+    "selectionStart",
+    "selectionEnd",
+    "counter",
+    "editorActions",
+    "backPresses",
+    "keyDowns",
+    "keyUps",
+    "keys",
+    "gesture",
+    "storageError",
+    "ownedVirtualDisplayId",
+    "ownedVirtualDisplayName",
+    "virtualError",
+    "controls",
+    "pixelSamples",
+    "inputDiagnostics"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "package": {
+      "const": "best.lmm.zuse.fixture"
+    },
+    "instance": {
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "activity",
+        "presentation"
+      ]
+    },
+    "ownerInstance": {
+      "type": "string"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "taskId": {
+      "type": "integer"
+    },
+    "displayId": {
+      "type": "integer"
+    },
+    "displayName": {
+      "type": "string"
+    },
+    "displayWidth": {
+      "type": "integer"
+    },
+    "displayHeight": {
+      "type": "integer"
+    },
+    "densityDpi": {
+      "type": "integer"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "uptimeMs": {
+      "type": "integer"
+    },
+    "ready": {
+      "type": "boolean"
+    },
+    "lifecycle": {
+      "enum": [
+        "created",
+        "resumed",
+        "paused",
+        "shown",
+        "destroyed"
+      ]
+    },
+    "windowFocus": {
+      "type": "boolean"
+    },
+    "destroyed": {
+      "type": "boolean"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 512
+    },
+    "selectionStart": {
+      "type": "integer"
+    },
+    "selectionEnd": {
+      "type": "integer"
+    },
+    "counter": {
+      "type": "integer"
+    },
+    "editorActions": {
+      "type": "integer"
+    },
+    "backPresses": {
+      "type": "integer"
+    },
+    "keyDowns": {
+      "type": "integer"
+    },
+    "keyUps": {
+      "type": "integer"
+    },
+    "keys": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "required": [
+          "action",
+          "code",
+          "name",
+          "unicode",
+          "repeat",
+          "recipientDisplayId",
+          "eventTimeMs"
+        ],
+        "properties": {
+          "action": {
+            "type": "integer"
+          },
+          "code": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unicode": {
+            "type": "integer"
+          },
+          "repeat": {
+            "type": "integer"
+          },
+          "recipientDisplayId": {
+            "type": "integer"
+          },
+          "eventTimeMs": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "gesture": {
+      "type": "object",
+      "required": [
+        "taps",
+        "swipes",
+        "moves",
+        "cancelled",
+        "lastKind",
+        "durationMs",
+        "recipientDisplayId",
+        "downX",
+        "downY",
+        "upX",
+        "upY",
+        "suggestedSwipe"
+      ],
+      "properties": {
+        "taps": {
+          "type": "integer"
+        },
+        "swipes": {
+          "type": "integer"
+        },
+        "moves": {
+          "type": "integer"
+        },
+        "cancelled": {
+          "type": "integer"
+        },
+        "lastKind": {
+          "enum": [
+            "none",
+            "down",
+            "tap",
+            "swipe",
+            "cancel"
+          ]
+        },
+        "durationMs": {
+          "type": "integer"
+        },
+        "recipientDisplayId": {
+          "type": "integer"
+        },
+        "downX": {
+          "type": "number"
+        },
+        "downY": {
+          "type": "number"
+        },
+        "upX": {
+          "type": "number"
+        },
+        "upY": {
+          "type": "number"
+        },
+        "suggestedSwipe": {
+          "type": "object",
+          "required": [
+            "x1",
+            "y1",
+            "x2",
+            "y2"
+          ],
+          "properties": {
+            "x1": {
+              "type": "integer"
+            },
+            "y1": {
+              "type": "integer"
+            },
+            "x2": {
+              "type": "integer"
+            },
+            "y2": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "storageError": {
+      "type": "string"
+    },
+    "ownedVirtualDisplayId": {
+      "type": "integer"
+    },
+    "ownedVirtualDisplayName": {
+      "type": "string"
+    },
+    "virtualError": {
+      "type": "string"
+    },
+    "controls": {
+      "type": "object",
+      "required": [
+        "root",
+        "input",
+        "counter",
+        "reset",
+        "exit",
+        "gesture",
+        "swatches"
+      ],
+      "properties": {
+        "root": {
+          "$ref": "#/$defs/control"
+        },
+        "input": {
+          "$ref": "#/$defs/control"
+        },
+        "counter": {
+          "$ref": "#/$defs/control"
+        },
+        "reset": {
+          "$ref": "#/$defs/control"
+        },
+        "exit": {
+          "$ref": "#/$defs/control"
+        },
+        "gesture": {
+          "$ref": "#/$defs/control"
+        },
+        "swatches": {
+          "$ref": "#/$defs/control"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pixelSamples": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "argb",
+          "red",
+          "green",
+          "blue"
+        ],
+        "properties": {
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "argb": {
+            "type": "string",
+            "pattern": "^#[0-9A-F]{8}$"
+          },
+          "red": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "green": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "blue": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "inputDiagnostics": {
+      "type": "object",
+      "required": [
+        "focusChanges",
+        "lastFocusUptimeMs",
+        "touchEvents",
+        "lastTouchAction",
+        "lastTouchUptimeMs"
+      ],
+      "properties": {
+        "focusChanges": {
+          "type": "integer"
+        },
+        "lastFocusUptimeMs": {
+          "type": "integer"
+        },
+        "touchEvents": {
+          "type": "integer"
+        },
+        "lastTouchAction": {
+          "type": "integer"
+        },
+        "lastTouchUptimeMs": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "control": {
+      "type": "object",
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height",
+        "centerX",
+        "centerY",
+        "visible",
+        "focused",
+        "visibleLeft",
+        "visibleTop",
+        "visibleRight",
+        "visibleBottom"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "centerX": {
+          "type": "integer"
+        },
+        "centerY": {
+          "type": "integer"
+        },
+        "visibleLeft": {
+          "type": "integer"
+        },
+        "visibleTop": {
+          "type": "integer"
+        },
+        "visibleRight": {
+          "type": "integer"
+        },
+        "visibleBottom": {
+          "type": "integer"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "focused": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
