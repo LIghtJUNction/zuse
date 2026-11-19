@@ -70,16 +70,25 @@ pub fn validate_path(path: &str) -> Result<()> {
         return Err("serial path must be a nonempty device path without control characters".into());
     }
     #[cfg(windows)]
-    {
-        let name = path.strip_prefix(r"\\.\").unwrap_or(path);
-        let number = name.strip_prefix("COM").and_then(|n| n.parse::<u16>().ok());
-        if !matches!(number, Some(1..=4096)) {
-            return Err("Windows serial path must be COM1 through COM4096".into());
-        }
-    }
+    validate_windows_path(path)?;
     #[cfg(unix)]
     if !path.starts_with("/dev/") {
         return Err("serial path must explicitly select a device below /dev".into());
+    }
+    Ok(())
+}
+
+// Keep Windows path validation available in host-side unit tests without
+// opening a COM device. Integer parsing alone also accepts a leading '+'.
+#[cfg(any(windows, test))]
+fn validate_windows_path(path: &str) -> Result<()> {
+    let name = path.strip_prefix(r"\\.\").unwrap_or(path);
+    let number = name
+        .strip_prefix("COM")
+        .filter(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|digits| digits.parse::<u16>().ok());
+    if !matches!(number, Some(1..=4096)) {
+        return Err("Windows serial path must be COM1 through COM4096".into());
     }
     Ok(())
 }
@@ -619,5 +628,90 @@ mod native {
     }
     pub fn ports() -> Result<Vec<String>> {
         Err("serial enumeration unavailable".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_windows_path;
+
+    #[test]
+    fn windows_serial_paths_accept_decimal_ports_and_device_prefix() {
+        for number in 1..=4096 {
+            validate_windows_path(&format!("COM{number}")).unwrap();
+            validate_windows_path(&format!(r"\\.\COM{number}")).unwrap();
+        }
+        // Preserve the previously supported digit-only spelling.
+        validate_windows_path("COM0001").unwrap();
+        validate_windows_path(r"\\.\COM0001").unwrap();
+    }
+
+    #[test]
+    fn windows_serial_paths_reject_signed_malformed_and_out_of_range_names() {
+        for name in [
+            "",
+            "COM",
+            "COM+1",
+            "COM+4096",
+            "COM-1",
+            "COM0",
+            "COM4097",
+            "COM65535",
+            "COM65536",
+            "COM999999999999999999999999999999999999",
+            "COM 1",
+            " COM1",
+            "COM1 ",
+            "COM1\t",
+            "COM1\n",
+            "COM1\0",
+            "COM1/child",
+            "COM1\\child",
+            "COM1:",
+            "COM1.0",
+            "COM1e0",
+            "COM0x1",
+            "COM1_0",
+            "COM１",
+            "COM١",
+            "com1",
+            "LPT1",
+        ] {
+            assert!(validate_windows_path(name).is_err(), "{name:?}");
+            let prefixed = format!(r"\\.\{name}");
+            assert!(validate_windows_path(&prefixed).is_err(), "{prefixed:?}");
+        }
+        for path in [
+            r"\\?\COM1",
+            r"\\server\COM1",
+            r"\\.\C:\COM1",
+            r"\\.\pipe\COM1",
+            r"\\.\",
+            r"\\.\COM+1",
+        ] {
+            assert!(validate_windows_path(path).is_err(), "{path:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn invalid_windows_serial_path_fails_whole_program_preflight() {
+        use crate::{
+            json::quote,
+            runtime::{self, Options, Runtime},
+        };
+
+        for path in ["COM+1", r"\\.\COM+1", "COM-1", "COM4097"] {
+            // An unopened status query fails without native device access even
+            // if a regression lets validation proceed into execution.
+            let source = format!("serial.status(); serial.open(path={})", quote(path));
+            let expected = "Windows serial path must be COM1 through COM4096";
+            let checked = runtime::check(&source, Options::default()).unwrap_err();
+            assert!(checked.contains(expected), "{path}: {checked}");
+            let executed = Runtime::new()
+                .execute(&source, Options::default())
+                .unwrap_err();
+            assert!(executed.contains(expected), "{path}: {executed}");
+        }
     }
 }
