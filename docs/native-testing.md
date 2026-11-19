@@ -17,7 +17,7 @@ python3 tests/native_android.py \
   --background
 ```
 
-The serial is mandatory. The runner refuses to replace an existing installation of its fixture package. It installs its own fixture, runs the test, then force-stops and uninstalls that installation. Its optional secondary display is created by the fixture with PUBLIC, OWN_CONTENT_ONLY and PRESENTATION flags. It never selects an unrelated pre-existing secondary display and does not mirror the primary screen.
+The serial is mandatory. Before its first ADB call, the runner verifies the APK hash against its build record, source hashes, package/activity identity, and absence of requested permissions using aapt2. The runner refuses to replace an existing installation of its fixture package. It installs its own fixture, runs the test, then force-stops and uninstalls that installation. Its optional secondary display is created by the fixture with PUBLIC, OWN_CONTENT_ONLY and PRESENTATION flags. It never selects an unrelated pre-existing secondary display and does not mirror the primary screen.
 
 The runner checks:
 
@@ -28,11 +28,13 @@ The runner checks:
 - Explicit secondary-display input while the primary fixture's text, counters and key history remain unchanged.
 - Removal of the fixture and its owned display.
 
-Foreground input stops when another primary activity takes over. Read-only background observation may continue only against the fixture-owned secondary display. The runner does not reclaim focus from a user who switches applications. Reports distinguish fixture removal, display cleanup, and whether the original primary activity is still the active one.
+Foreground input stops when another primary activity takes over. Read-only background observation may continue only against the fixture-owned secondary display. The runner does not reclaim focus from a user who switches applications. Reports distinguish fixture removal, display cleanup, and whether the original primary activity is still the active one. A timeout during installation still triggers cleanup of the previously absent, verified fixture package. Cleanup attempts each independent step even if an earlier command fails, and reports whether the original activity returned or an external activity selection was preserved. Unknown activity state is never accepted as successful restoration.
 
-Outputs stay under the ignored `target/native-android` directory with private permissions. Reports omit the device serial and other applications' UI. Screenshot validation requires the expected fixture dimensions and instance-specific colors; an unexpected image is removed. Raw personal screenshots should never be copied into public test evidence.
+Outputs stay under the ignored `target/native-android` directory with private permissions. Reports omit the device serial and other applications' UI. Primary screenshot validation checks both fixture state and the system's focused window before and after capture. Screenshot validation requires the expected fixture dimensions and instance-specific colors; an unexpected or partially written image is removed, including when the capture command fails. Raw personal screenshots should never be copied into public test evidence.
 
 ## Linux
+
+Successful native key submission is not an application acknowledgement. X11 XSendEvent can be accepted by the X server while the target widget ignores the synthetic event. Keyboard results expose delivery=submitted and application_confirmation_required=true; typed_bytes is retained for compatibility and counts submitted UTF-8 bytes. Verify application state through accessibility, a fixture record, or an observation before assuming text changed. Use an explicit foreground operation when a target application cannot accept background events.
 
 The Wayland acceptance fixture uses dedicated native GTK windows with unique identities. It compares delivered text and pointer events with fixture state, and validates screenshots against a known color patch. Tests verify the intended window before sending input and stop on focus changes.
 
@@ -56,4 +58,4 @@ Android platform sources used when interpreting device output:
 - [DisplayContent window focus diagnostics](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/services/core/java/com/android/server/wm/DisplayContent.java)
 - [Virtual display API](https://developer.android.com/reference/android/hardware/display/DisplayManager)
 
-Release-specific results are recorded separately from this procedure.
+Release-specific results are recorded separately from this procedure. The [physical Android evidence](evidence/android-physical-2026-11-20.json) retains the source run counts and identifies which checks were verified by a later targeted rerun; it does not present merged results as a single unchanged passing run.

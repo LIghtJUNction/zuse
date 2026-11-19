@@ -1,3 +1,9 @@
+#[path = "wayland_keyboard.rs"]
+mod keyboard;
+#[path = "wayland_keymap.rs"]
+mod keymap;
+#[path = "wayland_xkb.rs"]
+mod xkb;
 use super::super::{Result, image_metadata, quote, split_chord, validate_text};
 use std::{
     fs::File,
@@ -98,7 +104,7 @@ impl Wayland {
     }
     pub fn capabilities(&self) -> String {
         format!(
-            "{{\"backend\":\"wayland\",\"compositor\":{},\"pointer\":{},\"windows\":{},\"keyboard\":{},\"capture\":{},\"nativeIpc\":{},\"inputHelper\":\"wtype or ydotool with user-authorized daemon\",\"windowCapture\":\"composited visible region\",\"backgroundInput\":\"Hyprland targeted shortcuts\"}}",
+            "{{\"backend\":\"wayland\",\"compositor\":{},\"pointer\":{},\"windows\":{},\"keyboard\":{},\"capture\":{},\"nativeIpc\":{},\"inputHelper\":\"native Wayland virtual keyboard; pointer buttons/wheel use authorized ydotool daemon\",\"windowCapture\":\"composited visible region\",\"backgroundInput\":\"Hyprland targeted shortcuts\",\"backgroundText\":\"current keymap plain/Shift levels; unavailable characters rejected before input\",\"keyboardState\":\"Hyprland 0.55+: no held keys, Caps/Num off, group 0; sticky/custom modifier state unsupported\"}}",
             if self.socket.is_some() {
                 "\"hyprland\""
             } else {
@@ -106,7 +112,7 @@ impl Wayland {
             },
             self.socket.is_some() || installed("ydotool"),
             self.socket.is_some(),
-            self.socket.is_some() || installed("wtype"),
+            self.modern && keyboard::probe().is_ok(),
             installed("grim"),
             self.socket.is_some()
         )
@@ -124,12 +130,23 @@ impl Wayland {
             .write_all(command.as_bytes())
             .map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
-        stream
-            .take(1_048_577)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() > 1_048_576 {
-            return Err("Hyprland IPC response exceeds 1 MiB".into());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut buffer = [0; 8192];
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or("Hyprland IPC exceeded five seconds")?;
+            stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|e| e.to_string())?;
+            let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len() + count > 1_048_576 {
+                return Err("Hyprland IPC response exceeds 1 MiB".into());
+            }
+            bytes.extend_from_slice(&buffer[..count]);
         }
         String::from_utf8(bytes).map_err(|e| e.to_string())
     }
@@ -144,6 +161,25 @@ impl Wayland {
             Err(format!("Hyprland: {}", response.trim()))
         } else {
             Ok(())
+        }
+    }
+    fn quiescent_keyboard(&self) -> Result<()> {
+        if !self.modern {
+            return Err(
+                "unsupported_state: keyboard state inspection requires Hyprland 0.55 or newer"
+                    .into(),
+            );
+        }
+        check_keyboard_state(&self.request("j/devices")?)?;
+        // This is a read-only compositor query, including extended Linux
+        // keyboard codes. It does not create a virtual input device.
+        let held = self.request("/repl return (function() for code=8,775 do if hl.is_key_down(code) then return true end end return false end)()")?;
+        match held.trim() {
+            "false" => Ok(()),
+            "true" => {
+                Err("unsupported_state: a keyboard key is held; release it before input".into())
+            }
+            _ => Err("unsupported_state: compositor cannot report held keyboard keys".into()),
         }
     }
     pub fn position(&self) -> Result<(i32, i32)> {
@@ -252,8 +288,15 @@ impl Wayland {
             "end" => "End",
             _ => last,
         };
-        if !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-            return Err("use XKB key names in chords, for example plus or slash".into());
+        let raw_code = key.strip_prefix("code:");
+        if let Some(code) = raw_code {
+            if !code.bytes().all(|b| b.is_ascii_digit())
+                || !code.parse::<u16>().is_ok_and(|n| (8..=255).contains(&n))
+            {
+                return Err("XKB keycode must be in 8..255".into());
+            }
+        } else if !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err("use XKB key names or code:8..255 in chords".into());
         }
         let mut modifiers = Vec::new();
         for p in &parts[..parts.len() - 1] {
@@ -266,6 +309,7 @@ impl Wayland {
             });
         }
         if self.socket.is_some() {
+            self.quiescent_keyboard()?;
             let mods = modifiers.join(" ");
             let selector = window.map(Self::selector).transpose()?.unwrap_or_default();
             let modern = if selector.is_empty() {
@@ -283,31 +327,17 @@ impl Wayland {
                 )
             };
             self.dispatch(&format!("sendshortcut {mods},{key},{selector}"), &modern)
-        } else if window.is_some() {
-            Err("background keys require Hyprland targeted input".into())
         } else {
-            let mut c = Command::new("wtype");
-            for m in &modifiers {
-                c.args(["-M", &m.to_ascii_lowercase()]);
-            }
-            c.args(["-k", key]);
-            for m in modifiers.iter().rev() {
-                c.args(["-m", &m.to_ascii_lowercase()]);
-            }
-            run(c)
+            Err("unsupported_state: Wayland keys require Hyprland keyboard-state inspection".into())
         }
     }
     pub fn type_text(&mut self, text: &str) -> Result<()> {
         validate_text(text)?;
-        let mut c = Command::new("wtype");
-        c.arg("--").arg(text);
-        run(c)
+        keyboard::type_text(text, || self.quiescent_keyboard())
     }
     pub fn type_into(&mut self, id: &str, text: &str) -> Result<()> {
         validate_text(text)?;
-        if !text.is_ascii() {
-            return Err("Hyprland background text currently accepts ASCII; use a foreground Unicode input method".into());
-        }
+        keymap::validate(text)?;
         Self::selector(id)?;
         if self.socket.is_none() {
             return Err("background text requires Hyprland targeted input".into());
@@ -325,27 +355,27 @@ impl Wayland {
                 return Err("Hyprland target window is unavailable".into());
             }
         }
-        for ch in text.chars() {
-            let (name, shift) = match ch {
-                'a'..='z' | '0'..='9' => (ch.to_string(), false),
-                'A'..='Z' => (ch.to_ascii_lowercase().to_string(), true),
-                ' ' => (String::from("space"), false),
-                '\n' | '\r' => (String::from("Return"), false),
-                '\t' => (String::from("Tab"), false),
-                c => {
-                    let name=match c{
-                    '!'=>"exclam",'"'=>"quotedbl",'#'=>"numbersign",'$'=>"dollar",'%'=>"percent",'&'=>"ampersand",
-                    '\''=>"apostrophe",'('=>"parenleft",')'=>"parenright",'*'=>"asterisk",'+'=>"plus",','=>"comma",
-                    '-'=>"minus",'.'=>"period",'/'=>"slash",':'=>"colon",';'=>"semicolon",'<'=>"less",'='=>"equal",
-                    '>'=>"greater",'?'=>"question",'@'=>"at",'['=>"bracketleft",'\\'=>"backslash",']'=>"bracketright",
-                    '^'=>"asciicircum",'_'=>"underscore",'\u{60}'=>"grave",'{'=>"braceleft",'|'=>"bar",'}'=>"braceright",'~'=>"asciitilde",
-                    _=>return Err("Hyprland background text currently accepts ASCII; foreground text uses wtype Unicode support".into())};
-                    (name.to_owned(), false)
-                }
-            };
-            self.key_target(
-                Some(id),
-                &if shift { format!("Shift+{name}") } else { name },
+        let selector = Self::selector(id)?;
+        // Resolve the whole string without changing the live keymap. This
+        // remains valid when an input method restores the original map while
+        // Hyprland temporarily routes a shortcut to an unfocused surface.
+        let original = keyboard::original_keymap()?;
+        let strokes = xkb::resolve(text, &original)?;
+        self.quiescent_keyboard()?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        for stroke in strokes {
+            if Instant::now() >= deadline {
+                return Err("targeted text exceeded its deadline".into());
+            }
+            let code = stroke.code;
+            let mods = stroke.modifiers;
+            self.dispatch(
+                &format!("sendshortcut {mods},code:{code},{selector}"),
+                &format!(
+                    "hl.dsp.send_shortcut({{mods={},key=\"code:{code}\",window={}}})",
+                    quote(mods),
+                    quote(&selector)
+                ),
             )?;
         }
         Ok(())
@@ -458,5 +488,76 @@ impl Wayland {
         metadata.pop();
         metadata.push_str(",\"captureMode\":\"composited-region\"}");
         Ok(metadata)
+    }
+}
+
+fn check_keyboard_state(json: &str) -> Result<()> {
+    let mut tokens = vec![Token::EMPTY; 8192];
+    let doc = Document::parse(json.as_bytes(), &mut tokens, Limits::default())
+        .map_err(|_| "unsupported_state: cannot parse compositor keyboard state")?;
+    let keyboards = doc
+        .root()
+        .get("keyboards")
+        .ok_or("unsupported_state: compositor keyboard state is unavailable")?;
+    let mut count = 0;
+    let mut main = 0;
+    for keyboard in keyboards.elements().take(65) {
+        count += 1;
+        if count > 64 {
+            return Err("unsupported_state: too many keyboards to inspect".into());
+        }
+        if keyboard.get("main").and_then(|v| v.boolean()) == Some(true) {
+            main += 1;
+        }
+        for (field, name) in [("capsLock", "Caps Lock"), ("numLock", "Num Lock")] {
+            match keyboard.get(field).and_then(|v| v.boolean()) {
+                Some(false) => {}
+                Some(true) => {
+                    return Err(format!(
+                        "unsupported_state: {name} is enabled; disable it before input"
+                    ));
+                }
+                None => return Err(format!("unsupported_state: {name} state is unavailable")),
+            }
+        }
+        match keyboard
+            .get("active_layout_index")
+            .and_then(|v| v.integer().ok())
+        {
+            Some(0) => {}
+            Some(_) => {
+                return Err(
+                    "unsupported_state: keyboard layout group must be 0 before input".into(),
+                );
+            }
+            None => return Err("unsupported_state: keyboard layout group is unavailable".into()),
+        }
+    }
+    if count == 0 || main != 1 {
+        return Err("unsupported_state: a unique main keyboard is required".into());
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod state_tests {
+    use super::check_keyboard_state;
+    #[test]
+    fn rejects_known_nonzero_or_unknown_states() {
+        let neutral = r#"{"keyboards":[{"main":true,"capsLock":false,"numLock":false,"active_layout_index":0}]}"#;
+        check_keyboard_state(neutral).unwrap();
+        for invalid in [
+            neutral.replace("capsLock\":false", "capsLock\":true"),
+            neutral.replace("numLock\":false", "numLock\":true"),
+            neutral.replace("active_layout_index\":0", "active_layout_index\":1"),
+            neutral.replace("main\":true", "main\":false"),
+            r#"{"keyboards":[]}"#.into(),
+            r#"{"keyboards":[{"main":true}]}"#.into(),
+        ] {
+            assert!(
+                check_keyboard_state(&invalid)
+                    .unwrap_err()
+                    .starts_with("unsupported_state:")
+            );
+        }
     }
 }

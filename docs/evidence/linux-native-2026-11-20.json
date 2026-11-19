@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-11-19T22:10:01.597626+00:00",
+  "project": "zuse-computer",
+  "planned_release": "0.1.1",
+  "platform": {
+    "os": "Linux",
+    "compositor": "Hyprland v0.57.2",
+    "fixture_toolkit": "GTK4",
+    "native_protocols": [
+      "Wayland virtual-keyboard-v1",
+      "Hyprland IPC"
+    ],
+    "native_libraries": [
+      "libwayland-client",
+      "libxkbcommon"
+    ],
+    "shared_loader": "zsys =0.1.1"
+  },
+  "scope": {
+    "owned_fixture_windows_per_run": 2,
+    "existing_application_content_used": false,
+    "user_keyboard_configuration_changed": false,
+    "retained_screenshots": false
+  },
+  "summary": {
+    "private_ime_current_binary": "pass",
+    "private_nonzero_keyboard_state_regression": "pass",
+    "shared_window_metadata_and_pointer": "pass",
+    "shared_keyboard": "not_executed_unsupported_state",
+    "shared_window_capture": "not_executed_after_preflight_stop"
+  },
+  "runs": [
+    {
+      "id": "private-ime-current-binary",
+      "environment": "owned nested compositor, private D-Bus without service activation, isolated Fcitx5 keyboard/Wayland addons",
+      "binary_sha256": "601aa3b8e60e7726e8445a35278292f20676bbff392333f0f7af6d35fd761f20",
+      "callback_state": "Cell<bool>",
+      "initial_held_key_count": 0,
+      "result": "pass",
+      "checks": {
+        "window_metadata": {
+          "ok": true,
+          "result": {
+            "owned_windows": 2,
+            "native_wayland": true
+          }
+        },
+        "pointer_motion": {
+          "ok": true,
+          "result": {
+            "coordinate_matches": true
+          }
+        },
+        "foreground_input": {
+          "ok": true,
+          "result": {
+            "text": "AZuse 42! 中文✓🙂"
+          }
+        },
+        "background_input": {
+          "ok": true,
+          "result": {
+            "text": "AZuse 42! 中文✓🙂 background!? !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~Z",
+            "focus_unchanged": true,
+            "foreground_text_unchanged": true,
+            "tested_character_range": "U+0020..U+007E (all 95 printable ASCII characters)",
+            "unfocused_target": "fixture A",
+            "foreground_window": "fixture B"
+          }
+        },
+        "rejected_input": {
+          "ok": true,
+          "result": {
+            "unsupported_text_rejected_before_input": true
+          }
+        },
+        "window_capture": {
+          "ok": true,
+          "result": {
+            "width": 980,
+            "height": 610,
+            "center_rgb": [
+              32,
+              160,
+              96
+            ],
+            "bytes": 19017
+          }
+        }
+      },
+      "cleanup": {
+        "own_windows_closed": true,
+        "focus": true,
+        "pointer": true
+      }
+    },
+    {
+      "id": "private-nonzero-keyboard-states",
+      "environment": "owned nested compositor and persistent test virtual keyboard with us,de map",
+      "binary_sha256": "09364b97bcf64b321f3cc05dd79c0c301165fa4a7177634ef2e41f9c61aa24ab",
+      "callback_state": "pre-Cell synchronization implementation; current callback separately exercised by private-ime-current-binary",
+      "result": "pass",
+      "rejected_states": [
+        "caps",
+        "num",
+        "group1",
+        "held_key"
+      ],
+      "assertions": {
+        "error_code": "unsupported_state",
+        "completed_steps": 0,
+        "result_entries": 0,
+        "fixture_text_unchanged_by_rejected_calls": true,
+        "reported_lock_and_group_state_unchanged": true,
+        "plain_letters_after_rejection": {
+          "caps": "A",
+          "num": "a",
+          "group1": "z"
+        },
+        "ordinary_letters_do_not_replay_modifiers": true,
+        "held_key_release_then_plain_letter": "a"
+      },
+      "cleanup": {
+        "own_windows_closed": true,
+        "focus": true,
+        "pointer": true
+      }
+    },
+    {
+      "id": "shared-desktop",
+      "environment": "existing compositor; two owned disposable GTK4 windows only",
+      "binary_sha256": "601aa3b8e60e7726e8445a35278292f20676bbff392333f0f7af6d35fd761f20",
+      "result": "stopped_at_keyboard_preflight",
+      "passed_checks": [
+        "owned_window_metadata",
+        "pointer_motion_and_position"
+      ],
+      "stop": {
+        "operation": "keyboard.key",
+        "error_code": "unsupported_state",
+        "reason": "Num Lock is enabled",
+        "completed_steps": 0,
+        "keyboard_events_sent": 0
+      },
+      "not_executed": [
+        "foreground_keyboard_input",
+        "background_keyboard_input",
+        "window_capture"
+      ],
+      "cleanup": {
+        "own_windows_closed": true,
+        "focus": true,
+        "pointer": true
+      },
+      "repeated_focus_attempts_after_stop": false
+    }
+  ],
+  "regressions": {
+    "temporary_keymap_residue": {
+      "before": "foreground utility typing could leave its temporary map in the client/input-method path",
+      "after": "owned native virtual keyboard restores the captured original map before destruction; current private IME run verified subsequent ASCII and Shift+Z"
+    },
+    "targeted_punctuation": {
+      "before": "keysym-only dispatch could type a prefix and then reject shifted punctuation",
+      "after": "entire text is resolved against the actual map before dispatch; all 95 printable ASCII characters verified"
+    },
+    "targeted_temporary_unicode_map_with_ime": {
+      "before": "an input-method keyboard switch could decode temporary codes using the original layout",
+      "after": "targeted text does not replace the map; plain/Shift levels are resolved from the real map, unavailable Unicode is rejected before any input"
+    },
+    "occupied_keyboard_preflight": {
+      "observation": "earlier private attempts reported held keys and refused zuse keyboard input",
+      "input_origin": "undetermined",
+      "final_private_runs_initial_held_keys": 0
+    }
+  },
+  "limits": {
+    "keyboard_state": "Requires inspectable Hyprland state, no held Linux evdev keys, Caps Lock and Num Lock off, group 0; checks all reported keyboards",
+    "unknown_sticky_custom_modifiers": "unsupported; complete arbitrary modifier-state preservation is not claimed",
+    "targeted_text": "Only characters represented in the current map's plain/Shift levels; unavailable text is rejected before dispatch",
+    "application_acceptance": "Input API success means events submitted; application confirmation still requires observation",
+    "shared_desktop_keyboard": "Not executed in this final attempt because Num Lock was enabled",
+    "pointer_buttons_and_wheel": "Not verified by these runs",
+    "window_capture": "Visible composited region of an owned fixture, not occluded-window pixels",
+    "other_compositors": "Not validated by these runs"
+  },
+  "reproduce": {
+    "private_ime": "python3 tests/native_wayland_private.py --with-ime --binary target/native-validation/debug/zuse --report target/native-wayland-ime.json",
+    "private_states": "python3 tests/native_wayland_private.py --state-tests --binary target/native-validation/debug/zuse --report target/native-wayland-states.json",
+    "shared_opt_in": "python3 tests/native_wayland.py --allow-desktop --binary target/native-validation/debug/zuse --report target/native-wayland-shared.json"
+  },
+  "source_sha256": {
+    "src/platform/wayland.rs": "b8b48ad0b777058abcd742880a90a71954c7a8f7d9e3fa29d26e0dbdb21b7772",
+    "src/platform/wayland_keyboard.rs": "5f8824ef19a96edc638c2e0066ec12b52618d18284f03eaaebae22e5d845eded",
+    "src/platform/wayland_keymap.rs": "e8d4509fe2e2a24ea7e45cc554afa54ad86a8eda4c24456a78556d6b0457625e",
+    "src/platform/wayland_xkb.rs": "daa059dc259dd925f17077c81ba26734e6120b71faac274946997f3cf0d482d9",
+    "src/platform/dylib.rs": "029d4944fd1141e04fd7a4f3c99b05418ece31ec2272c53423709806f35143f1",
+    "tests/native_wayland.py": "121dfddd083a44d7ea561af73811820755149a2397d6d983f1260cb8badffc79",
+    "tests/native_wayland_private.py": "4e3c209ace4913c4384982fe38c6145c6caf863d5ae598dd248035b5a693b443",
+    "tests/native_wayland_keyboard_fixture.c": "63643e53a0f64f8bf99dfa5b5a21d84c804e00f7a3a36ef7d7f65625b26e094e",
+    "tests/native_wayland_fixture.c": "adf1aea613c316d8ce23700569e701712a01720a0b5d572a64560ceeeb7806e3"
+  }
+}

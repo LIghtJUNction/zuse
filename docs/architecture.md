@@ -6,7 +6,7 @@ The motion kernel turns a start point, end point, duration, curve, jitter amplit
 
 ## Shared executor
 
-The CLI, embedded Rust interface, and MCP tools all call the same runtime. The runtime validates the whole batch, applies policy and budgets, then executes sequentially. A backend error stops later actions. Results identify the operation, elapsed time, completed steps, and structured output.
+The CLI, embedded Rust interface, and MCP tools all call the same runtime. The runtime validates the whole batch, applies policy and budgets, then executes sequentially. A backend error stops later actions. Results identify the operation, elapsed time, completed steps, and structured output. Execution failures retain their readable error and add an error_code. Unsupported keyboard states and unrepresentable background characters use unsupported_state and unsupported_character; other backend failures use execution_error.
 
 ~~~mermaid
 flowchart TD
@@ -22,7 +22,7 @@ flowchart TD
 
 ## Dependency boundary
 
-The no_std build contains the parser and motion kernel only. Host I/O is behind the std feature. MCP framing, protocol negotiation, JSON parsing, and HTTP validation reuse zmcpio. zclap parses CLI arguments and z64 encodes MCP image content. The transitive Project Z call contracts remain no_std libraries.
+The no_std build contains the parser and motion kernel only. Host I/O is behind the std feature. MCP framing, protocol negotiation, JSON parsing, and HTTP validation reuse zmcpio. zclap parses CLI arguments and z64 encodes MCP image content. The host runtime pins zsys 0.1.1 for native dynamic-library loading; X11, AT-SPI and Wayland adapters share that boundary. The transitive Project Z call contracts remain no_std libraries.
 
 This release reuses the existing Project Z primitive libraries and is maintained in one repository.
 

@@ -1,3 +1,5 @@
+Latest patch results: [zuse 0.1.1](validation-0.1.1.md). The record below is the original 0.1.0 acceptance.
+
 # Validation — zuse 0.1.0
 
 Recorded on 2026-11-20 with Rust 1.100.0 on an x86_64 Linux development host.

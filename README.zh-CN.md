@@ -30,7 +30,7 @@ screen.capture(path="desktop.png")
 
 ## Project Z 结构
 
-语法解析器和鼠标轨迹核心支持 `no_std`，不分配堆内存、零依赖。桌面运行时使用标准库，Rust 依赖树只有 Project Z 自有的 zmcpio、zcall、zconv、zclap、z64。CLI 和 MCP 共用执行器。
+语法解析器和鼠标轨迹核心支持 `no_std`，不分配堆内存、零依赖。桌面运行时使用标准库，Rust 依赖树只有 Project Z 自有的 zmcpio、zcall、zconv、zclap、z64、zsys。系统动态库加载复用 zsys 0.1.1；CLI 和 MCP 共用执行器。
 
 鼠标路径包含线性、平滑、缓入缓出和贝塞尔轨迹，支持种子固定的抖动与随机等待。轨迹首尾坐标准确，使用绝对时间安排采样。
 
@@ -66,18 +66,20 @@ Linux 无障碍通过 AT-SPI 读取角色、文本、边界、动作，并支持
 
 ~~~text
 android.devices()
-android.connect(mode="foreground")
+android.connect(serial="YOUR_DEVICE_SERIAL", mode="foreground")
 android.status()
 ~~~
 
 ~~~text
-android.connect(mode="background", display=4)
+android.connect(serial="YOUR_DEVICE_SERIAL", mode="background", display=4)
 android.tap(x=240, y=160)
 ~~~
 
 抢占式模式操作主显示；后台模式必须指定已有的非零显示 ID。输入、应用启动和截图都会检查目标，目标缺失或截图映射不明确时直接报错。此版本支持选择已有的第二显示，不自动创建虚拟显示。
 
-Android 适配器直接实现 ADB 协议。电脑上需运行已获设备授权的 ADB server；多设备时显式指定 serial。
+Android 适配器直接实现 ADB 协议。电脑上需运行已获设备授权的 ADB server；建议始终显式指定 serial。省略 serial 时，完整设备列表必须只有一个已就绪设备，不能在多设备中自动挑选。
+
+文字输入支持可打印 ASCII，排除 ADB 保留序列 %s，长度不超过 4096 字节。Unicode、控制字符、非法按键和组件参数在整段程序的预检查阶段拒绝。Android 16 实机已验证前台输入、全部 95 个可打印 ASCII 字符、截图像素，以及自有副显示输入与主显示隔离。详见[实机测试流程](docs/native-testing.md)及[设备证据](docs/evidence/android-physical-2026-11-20.json)。
 
 ## 人类协助
 

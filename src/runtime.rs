@@ -507,10 +507,18 @@ impl Runtime {
                     ));
                 }
                 Err(error) => {
+                    let error_code = if error.starts_with("unsupported_state:") {
+                        "unsupported_state"
+                    } else if error.starts_with("unsupported_character:") {
+                        "unsupported_character"
+                    } else {
+                        "execution_error"
+                    };
                     return Ok(format!(
-                        "{{\"status\":\"failed\",\"failed_step\":{index},\"operation\":{},\"error\":{},\"completed\":{index},\"results\":[{}]}}",
+                        "{{\"status\":\"failed\",\"failed_step\":{index},\"operation\":{},\"error\":{},\"error_code\":{},\"completed\":{index},\"results\":[{}]}}",
                         quote(call.name),
                         quote(&error),
+                        quote(error_code),
                         results.join(",")
                     ));
                 }
@@ -586,12 +594,12 @@ impl Runtime {
                     }
                     self.desktop()?.button(button, action)?;
                 }
-                done()
+                Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
             }
             "mouse.scroll" => {
                 self.desktop()?
                     .scroll(integer(c, "dx", 0) as i32, integer(c, "dy", 0) as i32)?;
-                done()
+                Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
             }
             "keyboard.type" => {
                 let value = text(c, "text", "")?;
@@ -601,7 +609,11 @@ impl Runtime {
                 } else {
                     self.desktop()?.type_into(&window, &value)?;
                 }
-                Ok(format!("{{\"typed_bytes\":{}}}", value.len()))
+                Ok(format!(
+                    "{{\"typed_bytes\":{},\"submitted_bytes\":{},\"delivery\":\"submitted\",\"application_confirmation_required\":true}}",
+                    value.len(),
+                    value.len()
+                ))
             }
             "keyboard.key" => {
                 let key = text(c, "key", "")?;
@@ -611,7 +623,7 @@ impl Runtime {
                 } else {
                     self.desktop()?.key_into(&window, &key)?;
                 }
-                done()
+                Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
             }
             "window.list" => self.desktop()?.windows(),
             "wine.windows" => {

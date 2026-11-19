@@ -1,46 +1,63 @@
 # Platform support and verification
 
-Capabilities are discovered at runtime. Missing permissions, system libraries, utilities, display protocols, or device commands produce explicit errors. A successful compile is recorded separately from a live interaction test.
+Capabilities are discovered at runtime. Missing permissions, system libraries, display protocols, or device commands produce explicit errors. Compilation and actual application interaction are recorded separately.
 
-| Backend | Implemented interface | Validation in this release |
+| Backend | Implemented interface | Verified scope through 0.1.1 |
 | --- | --- | --- |
-| Linux X11 | Xlib/XTest pointer, keyboard, windows, background window events, PNG capture | Live private Xvfb; exact input and PNG pixel/CRC checks |
-| Linux Hyprland | Native compositor socket IPC, windows/workspaces/focus, pointer operations | Current development compositor read-only discovery and harmless IPC check; no broad desktop settings changes |
-| Wayland input/capture | Compositor-supported native utilities | Capability detection; actual utilities and permissions remain host-specific |
-| Linux AT-SPI | Tree, text, bounds, focus, action, editable text, password redaction | Live private D-Bus/Xvfb GTK application |
-| Chromium CDP | Launch/connect, pages, navigation, text/AX snapshot, evaluation, input, viewport, PNG | Live isolated sandboxed Chromium fixture |
-| Windows | Win32 input, window management, GDI capture, UI Automation | Cross compile/type checks; live Windows session not available |
-| macOS | Quartz/ApplicationServices, window capture, System Events AX | Cross compile/type checks and JXA syntax check; live macOS session not available |
-| Android | Native ADB, shell-v2, display-aware input/capture/app launch | Wire tests with a fake ADB server and read-only connection to a real authorized device |
-| Wine | Host X11/XWayland window control and Wine-marked window discovery | Shared X11 path verified; no Wine application available for live testing |
-| IDE / Omarchy / harness adapters | Direct argument-based system command interfaces and managed processes | Process lifecycle tests; installed capability discovery; no model sessions launched by tests |
+| Linux X11 | Xlib/XTest pointer and keyboard, window metadata, targeted synthetic events, PNG | Private Xvfb fixture; delivered text and events, image dimensions/pixels/CRCs |
+| Linux Hyprland | Native compositor IPC, Wayland virtual keyboard, actual XKB keymap lookup | Hyprland 0.57.2 private graphical sessions, including Fcitx; foreground Unicode, background ASCII and state rejection |
+| Shared Linux desktop | Window discovery and pointer operations | Actual development session; keyboard stopped before effects because Num Lock was enabled; focus/pointer restored |
+| Wayland capture | grim using the compositor's capture protocol | Fixture PNG color and dimensions verified; window capture is its composited visible region |
+| Linux AT-SPI | Tree, text, bounds, focus, actions, editable text and password redaction | Private D-Bus/Xvfb GTK fixture |
+| Chromium CDP | Isolated browser, navigation, text/AX, input, viewport and PNG | Isolated sandboxed Chromium fixture from 0.1.0; protocol regression tests retained |
+| Windows | Win32 input/window/GDI and system UI Automation | Full x86_64-pc-windows-gnu type check; no live Windows desktop in this acceptance |
+| macOS | Quartz/ApplicationServices and System Events accessibility | Full aarch64-apple-darwin type check; no live macOS desktop in this acceptance |
+| Android | Native ADB/shell-v2, display-aware input/capture/launch | Physical Android 16/API 36, foreground and fixture-owned secondary display |
+| Wine | Host X11/XWayland control and Wine-marked discovery | Shared X11 implementation verified; no separate Wine application acceptance |
+| IDE / Omarchy / harness | Installed command interfaces and bounded managed processes | Process tests and capability discovery; tests do not launch model sessions |
 
-## Linux requirements
+Detailed results: [0.1.1 validation](validation-0.1.1.md), [Android evidence](evidence/android-physical-2026-11-20.json), [Linux evidence](evidence/linux-native-2026-11-20.json).
 
-X11 needs the system X11 and XTest libraries. zuse loads them at runtime, so the core and non-X11 backends do not acquire a link-time X11 dependency. Xvfb is needed only for isolated development tests.
+## Linux libraries and helpers
 
-On Wayland, global input and screenshots depend on the compositor's authorization model. Hyprland metadata and dispatch use its native socket. Capture and input adapters may require grim, wtype, or ydotool; inspect `zuse doctor` for the selected backend. `ZUSE_BACKEND=x11` selects an X11/XWayland target explicitly.
+Native dynamic-library loading uses the exact Project Z dependency zsys 0.1.1. X11 needs libX11 and libXtst. Wayland keyboard support needs libwayland-client and libxkbcommon. AT-SPI needs libatspi and a usable accessibility D-Bus session. These libraries are loaded at runtime, with no link-time X11 dependency. Static-musl native dynamic loading is unsupported by this zsys version.
 
-AT-SPI requires libatspi and an accessible D-Bus session. Applications must expose their accessibility tree. OCR requires Tesseract. Desktop notifications use notify-send. The local graphical password prompt uses Zenity.
+Hyprland metadata, focus and targeted input use its native socket. Screen capture uses grim. Pointer buttons/wheel require an authorized ydotool daemon; pointer positioning can use Hyprland IPC. Text input no longer depends on wtype.
 
-Omarchy operations call the installed Omarchy command interfaces and Hyprland. The package does not install or replace desktop themes, system settings, or Omarchy itself.
+OCR uses Tesseract, notifications use notify-send, and the graphical password prompt uses Zenity. Omarchy operations call installed Omarchy/Hyprland interfaces; zuse does not install a theme or change system settings during capability discovery.
+
+## Wayland keyboard conditions
+
+The current keyboard path requires a Hyprland session that exposes the state queries used by the adapter, no held keys, Caps Lock and Num Lock off, and layout group 0. Known nonzero or unobservable required state returns error_code=unsupported_state before keyboard effects. Sticky modifiers and custom latched/locked state are not supported: the compositor's public interface does not expose a complete modifier snapshot to an unfocused observer.
+
+Foreground typing installs a bounded Unicode keymap and restores the captured original keymap before disconnecting. Background typing leaves the live keymap intact. It resolves the whole string against the real plain/Shift levels before sending targeted shortcuts. A missing character returns error_code=unsupported_character before any character in that call is sent. This does not provide arbitrary background Unicode on every layout; a US map, for example, cannot represent Chinese or emoji through these levels.
+
+The Fcitx regression demonstrates the tested session, not every input method, preedit state, compositor or application. zuse does not toggle the operator's locks or reclaim a changed focus to make an operation pass.
+
+## Submission and application acceptance
+
+A successful native key request means the event was submitted to the OS/compositor. It does not prove that a widget consumed it. In particular, X11 applications can ignore XSendEvent events even when the X server accepts them.
+
+Keyboard results include delivery=submitted and application_confirmation_required=true. The compatibility field typed_bytes counts submitted UTF-8 bytes, as does submitted_bytes; neither measures the widget's final text. Read accessibility state or another application observation to verify the intended result. Applications that reject background events require an explicit foreground or accessibility operation.
 
 ## Windows and macOS requirements
 
-Windows input uses Win32 APIs. UI Automation uses the system PowerShell/.NET UIA interfaces. OS-protected desktops and application permission boundaries remain in effect. The password assistance flow uses the operator's secure terminal prompt.
+Windows uses Win32 for native input/window/capture and the system PowerShell/.NET UI Automation interface for accessibility. OS-protected desktops and application permission boundaries remain in effect.
 
-macOS requires the appropriate Accessibility and Screen Recording permissions. Native input uses Quartz; tree operations use the system System Events/JXA interface. The local password dialog uses the OS scripting interface.
-
-These backends have been type-checked, but runtime behavior still needs acceptance on their respective systems.
+macOS requires Accessibility and Screen Recording permissions. Native input uses Quartz; tree operations use System Events/JXA. The local password dialog uses the OS scripting interface. These desktop paths need live acceptance on their respective systems; cross-target compilation does not establish permission behavior or widget delivery.
 
 ## Browser scope
 
-The native browser backend supports Chromium-family DevTools Protocol. A launched instance owns an isolated temporary profile. Explicit close and orderly session shutdown clean up its owned browser and profile. Connecting requires an explicitly selected loopback `http://` or `ws://` endpoint; HTTP discovery uses `/json/version`. Browser endpoints create a fresh page, while a page WebSocket selects that page directly. Firefox and Safari remote automation protocols are outside this version.
+The browser adapter supports Chromium-family DevTools Protocol. A launched browser owns an isolated temporary profile. Connecting uses an explicit loopback endpoint and creates a fresh page. Existing pages require explicit selection; closing an external connection preserves pages it did not create. Firefox and Safari remote automation are outside 0.1.1.
 
 ## Android scope
 
-An authorized local ADB server must be listening on loopback. The Rust client selects a device transport and sends ADB/shell-v2 frames directly. Multiple devices require a serial.
+A previously authorized ADB server must listen on loopback. zuse sends smart-socket and shell-v2 frames directly from Rust. It does not spawn adb for product operations. An explicit serial is recommended. Without a serial, the complete inventory must contain exactly one ready device, including consideration of offline or unauthorized entries.
 
-Background mode selects an existing secondary logical display and verifies its presence before effects. The adapter resolves SurfaceFlinger capture IDs separately and rejects missing or ambiguous mappings. It does not fall back to the primary display. Virtual-display provisioning is external to this release.
+Foreground/preempt mode selects display 0. Background mode selects an explicitly supplied existing nonzero logical display, and never falls back to the primary display. The test APK can create its own temporary secondary display; that fixture ability is not a product virtual-display provisioning feature.
 
-Android command availability varies by device. The tested device exposes window/display metadata but its uiautomator command has no dump operation; zuse reports the available observation source. Unicode text support follows the device input service; unsupported text fails explicitly.
+Capture maps logical displays to SurfaceFlinger IDs. Physical IDs and virtual display IDs are resolved separately; absent, nonunique or ambiguous virtual names are rejected. Focus is correlated with per-display window tokens; unknown focus is reported as null rather than invented as false.
+
+Text input accepts printable ASCII, excluding the ADB-reserved literal sequence %s, up to 4096 bytes. Unsupported text, keys and components fail whole-program preflight. Android I/O uses a shared operation deadline, including handshake and partial reads; this is not a promise that arbitrary filesystem work or a multi-step program finishes within 15 seconds.
+
+The tested Android 16 device exposes window metadata, but its uiautomator command does not offer XML dumping. The result reports this observation source explicitly. Other devices and permission configurations can expose different accessibility capabilities.

@@ -8,7 +8,7 @@ zuse turns small programs into desktop observations and actions. The same execut
 
 ## Small core, explicit effects
 
-The parser and pointer-motion kernel compile with `no_std`, use no allocator, and have no dependencies. The optional host runtime uses Rust's standard library and five Project Z crates across its dependency tree: zmcpio, zcall, zconv, zclap, and z64. There is no embedded JavaScript engine or browser automation framework.
+The parser and pointer-motion kernel compile with `no_std`, use no allocator, and have no dependencies. The optional host runtime uses Rust's standard library and six Project Z crates across its dependency tree: zmcpio, zcall, zconv, zclap, z64, and zsys. Native dynamic-library loading reuses zsys 0.1.1. There is no embedded JavaScript engine or browser automation framework.
 
 The runtime checks the entire program before its first effect. Unknown operations, wrong argument types, duplicate arguments, malformed strings, excessive steps, and excess wait budgets fail before execution. Runtime errors return completed steps and stop the remaining program. Execution records omit keyboard input contents.
 
@@ -135,7 +135,7 @@ Keep stateful workflows in `zuse shell` or an MCP server. Those processes retain
 
 ~~~text
 android.devices()
-android.connect(mode="foreground")
+android.connect(serial="YOUR_DEVICE_SERIAL", mode="foreground")
 android.status()
 android.snapshot()
 ~~~
@@ -143,21 +143,23 @@ android.snapshot()
 Background control selects an existing secondary display explicitly:
 
 ~~~text
-android.connect(mode="background", display=4)
+android.connect(serial="YOUR_DEVICE_SERIAL", mode="background", display=4)
 android.tap(x=240, y=160)
 android.start(component="com.example.app/.MainActivity")
 ~~~
 
-The Android adapter implements the ADB smart-socket and shell-v2 wire protocols directly in Rust. It does not spawn adb for commands. Start an authorized ADB server first; select a serial when several devices are connected.
+The Android adapter implements the ADB smart-socket and shell-v2 wire protocols directly in Rust. It does not spawn adb for commands. Start an authorized ADB server first. Select a serial explicitly; an omitted serial is accepted only when the complete device inventory has one ready device.
 
-Foreground/preempt mode uses display 0. Background mode requires an existing nonzero logical display. Input and app launch stay bound to that display. Capture resolves the separate SurfaceFlinger display ID and fails if the mapping is absent or ambiguous. Automatic virtual-display creation is outside this release. Device permissions and available platform commands determine accessibility and capture support.
+Foreground/preempt mode uses display 0. Background mode requires an existing nonzero logical display. Input and app launch stay bound to that display. Capture resolves the separate SurfaceFlinger display ID and fails if the mapping is absent or ambiguous. Automatic virtual-display creation is outside this release. Device permissions and available platform commands determine accessibility and capture support. Text input accepts printable ASCII, excluding the ADB-reserved literal sequence %s, with a 4096-byte limit. Unsupported text and malformed key/component arguments fail during whole-program validation.
+
+Physical Android 16 testing covered foreground input, all 95 printable ASCII characters, exact screenshot pixels, and a fixture-owned secondary display whose input left the primary fixture unchanged. See [native acceptance testing](docs/native-testing.md) and the [device evidence](docs/evidence/android-physical-2026-11-20.json).
 
 ## Native integrations
 
 | Area | Interface |
 | --- | --- |
 | Linux X11 / Wine / XWayland | Xlib, XTest, targeted window events, window metadata and PNG capture |
-| Linux Wayland / Omarchy | Hyprland IPC, compositor metadata, supported desktop utilities |
+| Linux Wayland / Omarchy | Hyprland IPC, native Wayland keyboard/keymap handling, compositor metadata and capture utilities |
 | Linux accessibility | Native AT-SPI tree, text, focus, actions, editable text |
 | Windows | Win32 input/window/GDI APIs; UI Automation through the system PowerShell runtime |
 | macOS | Quartz/ApplicationServices; System Events accessibility through the system JXA runtime |
@@ -172,7 +174,7 @@ Backend dependencies and tested coverage are listed in [Platforms](docs/platform
 
 ~~~toml
 [dependencies]
-zuse = { package = "zuse-computer", version = "0.1.0", default-features = false }
+zuse = { package = "zuse-computer", version = "0.1.1", default-features = false }
 ~~~
 
 ~~~rust
