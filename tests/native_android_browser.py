@@ -175,7 +175,7 @@ def main():
                       if line.strip().startswith("com.android.chrome/")]
             require(len(launch) == 1, "Chrome launcher component is not unique")
             wake_attempted = True
-            value = adb("shell", "am", "start", "--display", "0",
+            value = adb("shell", "am", "start", "-W", "--display", "0",
                         "--activity-reorder-to-front", "-a", "android.intent.action.MAIN",
                         "-c", "android.intent.category.LAUNCHER", "-n", launch[0])
             require("Error:" not in value, "Chrome readiness launch failed")

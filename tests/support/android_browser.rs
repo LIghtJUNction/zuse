@@ -19,6 +19,16 @@ fn socket_line(name: &str) -> String {
 }
 
 #[derive(Clone, Copy)]
+enum DiscoveryFault {
+    ShortBody,
+    DuplicateLength,
+    ConflictingLength,
+    InvalidLength,
+    TransferEncoding,
+    Oversize,
+}
+
+#[derive(Clone, Copy)]
 enum Cdp {
     Ready,
     AttachFailure,
@@ -26,6 +36,9 @@ enum Cdp {
     ExternalDiscovery,
     WrongTargetInfo,
     CloseRefused,
+    DiscoveryKeepAlive,
+    DiscoveryEof,
+    InvalidDiscovery(DiscoveryFault),
 }
 
 struct Server {
@@ -89,17 +102,61 @@ impl Server {
                 r#"{{"Browser":"Chrome/136.0.0.0","webSocketDebuggerUrl":{}}}"#,
                 quote(url)
             );
+            let length_fields = match cdp {
+                Cdp::InvalidDiscovery(DiscoveryFault::ShortBody) => {
+                    format!("Content-Length: {}\r\n", body.len() + 10)
+                }
+                Cdp::InvalidDiscovery(DiscoveryFault::DuplicateLength) => {
+                    format!(
+                        "Content-Length: {}\r\ncontent-length: {}\r\n",
+                        body.len(),
+                        body.len()
+                    )
+                }
+                Cdp::InvalidDiscovery(DiscoveryFault::ConflictingLength) => {
+                    format!(
+                        "Content-Length: {}\r\nContent-Length: {}\r\n",
+                        body.len(),
+                        body.len() + 1
+                    )
+                }
+                Cdp::InvalidDiscovery(DiscoveryFault::InvalidLength) => {
+                    "Content-Length: +12\r\n".into()
+                }
+                Cdp::InvalidDiscovery(DiscoveryFault::TransferEncoding) => {
+                    format!(
+                        "Content-Length: {}\r\nTransfer-Encoding: chunked\r\n",
+                        body.len()
+                    )
+                }
+                Cdp::InvalidDiscovery(DiscoveryFault::Oversize) => {
+                    "Content-Length: 65536\r\n".into()
+                }
+                Cdp::DiscoveryEof => String::new(),
+                _ => format!("Content-Length: {}\r\n", body.len()),
+            };
+            let connection = if matches!(cdp, Cdp::DiscoveryKeepAlive) {
+                "keep-alive"
+            } else {
+                "close"
+            };
             stream
                 .write_all(
                     format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
+                        "HTTP/1.1 200 OK\r\n{length_fields}Connection: {connection}\r\n\r\n{body}",
                     )
                     .as_bytes(),
                 )
                 .unwrap();
-            drop(stream);
-            if matches!(cdp, Cdp::ExternalDiscovery) {
+            // A real complete HTTP response whose ADB stream deliberately stays
+            // open throughout the subsequent WebSocket/CDP conversation.
+            let _kept_open_discovery = if matches!(cdp, Cdp::DiscoveryKeepAlive) {
+                Some(stream)
+            } else {
+                drop(stream);
+                None
+            };
+            if matches!(cdp, Cdp::ExternalDiscovery | Cdp::InvalidDiscovery(_)) {
                 return observed;
             }
 
@@ -558,4 +615,69 @@ fn android_browser_close_refusal_is_error_and_never_touches_other_targets() {
         observed.last().map(String::as_str),
         Some("Target.closeTarget")
     );
+}
+
+#[test]
+fn android_browser_discovery_uses_length_without_waiting_for_adb_eof() {
+    let server = Server::ready(Cdp::DiscoveryKeepAlive);
+    let started = Instant::now();
+    let mut browser = Browser::connect_android_at(server.address, SERIAL, None).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    browser.close().unwrap();
+    let observed = server.finish();
+    assert!(
+        observed
+            .iter()
+            .any(|method| method == "Target.createTarget")
+    );
+    assert_eq!(
+        observed.last().map(String::as_str),
+        Some("Target.closeTarget")
+    );
+}
+
+#[test]
+fn android_browser_discovery_retains_bounded_eof_fallback_without_length() {
+    let server = Server::ready(Cdp::DiscoveryEof);
+    let mut browser = Browser::connect_android_at(server.address, SERIAL, None).unwrap();
+    browser.close().unwrap();
+    assert_eq!(
+        server.finish().last().map(String::as_str),
+        Some("Target.closeTarget")
+    );
+}
+
+#[test]
+fn android_browser_discovery_rejects_short_or_ambiguous_http_framing() {
+    for (fault, expected) in [
+        (DiscoveryFault::ShortBody, "HTTP /json/version"),
+        (
+            DiscoveryFault::DuplicateLength,
+            "duplicate HTTP discovery Content-Length",
+        ),
+        (
+            DiscoveryFault::ConflictingLength,
+            "duplicate HTTP discovery Content-Length",
+        ),
+        (
+            DiscoveryFault::InvalidLength,
+            "invalid HTTP discovery Content-Length",
+        ),
+        (
+            DiscoveryFault::TransferEncoding,
+            "unsupported HTTP discovery Transfer-Encoding",
+        ),
+        (DiscoveryFault::Oversize, "browser discovery exceeds 64 KiB"),
+    ] {
+        let server = Server::ready(Cdp::InvalidDiscovery(fault));
+        let error = Browser::connect_android_at(server.address, SERIAL, None)
+            .err()
+            .unwrap();
+        assert!(error.contains(expected), "{error}");
+        let observed = server.finish();
+        assert_eq!(
+            observed.last().map(String::as_str),
+            Some("GET /json/version")
+        );
+    }
 }

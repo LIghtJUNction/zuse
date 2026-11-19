@@ -150,6 +150,7 @@ impl Browser {
             .map_err(|error| format!("Android Chrome HTTP tunnel: {error}"))?;
         let advertised = discover_stream(&mut discovery, "localhost")
             .map_err(|error| format!("Android Chrome HTTP /json/version: {error}"))?;
+        drop(discovery);
         let path = android_debugging_path(&advertised)
             .map_err(|error| format!("Android Chrome discovery endpoint: {error}"))?;
         let stream = tunnel
@@ -931,32 +932,106 @@ fn discover_endpoint(input: &str) -> Result<String> {
 }
 
 fn discover_stream(socket: &mut TcpStream, host: &str) -> Result<String> {
+    const LIMIT: usize = 65_536;
     let deadline = Instant::now() + Duration::from_secs(5);
     let request = format!(
         "GET /json/version HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
         host
     );
     write_all_deadline(socket, request.as_bytes(), deadline)?;
-    let mut response = Vec::new();
-    let mut buffer = [0; 4096];
-    loop {
-        let count = read_some_deadline(socket, &mut buffer, deadline)?;
-        if count == 0 {
-            break;
-        }
-        if response.len() + count > 65536 {
+    // Read exactly through the header terminator so no bytes beyond a declared
+    // body are consumed. ADB tunnels need not reach EOF after a complete reply.
+    let mut header = Vec::new();
+    while !header.ends_with(b"\r\n\r\n") {
+        if header.len() == LIMIT {
             return Err("browser discovery exceeds 64 KiB".into());
         }
-        response.extend_from_slice(&buffer[..count]);
+        let mut byte = [0];
+        read_exact_deadline(socket, &mut byte, deadline)?;
+        header.push(byte[0]);
     }
-    let response = String::from_utf8(response).map_err(|_| "invalid HTTP discovery response")?;
-    let (head, body) = response
-        .split_once("\r\n\r\n")
-        .ok_or("incomplete discovery HTTP headers")?;
-    if !head.starts_with("HTTP/1.1 200 ") && !head.starts_with("HTTP/1.0 200 ") {
+    let head = std::str::from_utf8(&header[..header.len() - 4])
+        .map_err(|_| "invalid HTTP discovery headers")?;
+    let mut lines = head.split("\r\n");
+    let status = lines.next().unwrap_or("");
+    if !status.starts_with("HTTP/1.1 200 ") && !status.starts_with("HTTP/1.0 200 ") {
         return Err("browser discovery HTTP status is not 200".into());
     }
-    field_string(body, &["webSocketDebuggerUrl"])
+    let mut length = None;
+    for line in lines {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or("invalid HTTP discovery header field")?;
+        if name.is_empty()
+            || !name.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | 0x60
+                            | b'|'
+                            | b'~'
+                    )
+            })
+            || value
+                .bytes()
+                .any(|byte| byte == 0x7f || (byte < 0x20 && byte != b'\t'))
+        {
+            return Err("invalid HTTP discovery header field".into());
+        }
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err("unsupported HTTP discovery Transfer-Encoding".into());
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if length.is_some() {
+                return Err("duplicate HTTP discovery Content-Length".into());
+            }
+            let value = value.trim_matches(|character| character == ' ' || character == '\t');
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("invalid HTTP discovery Content-Length".into());
+            }
+            let count = value
+                .parse::<usize>()
+                .map_err(|_| "invalid HTTP discovery Content-Length")?;
+            if count > LIMIT - header.len() {
+                return Err("browser discovery exceeds 64 KiB".into());
+            }
+            length = Some(count);
+        }
+    }
+    let body = if let Some(length) = length {
+        let mut body = vec![0; length];
+        read_exact_deadline(socket, &mut body, deadline)?;
+        body
+    } else {
+        // A response without length/framing is delimited by EOF, still under
+        // the same absolute deadline and total header-plus-body size bound.
+        let mut body = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            let count = read_some_deadline(socket, &mut buffer, deadline)?;
+            if count == 0 {
+                break;
+            }
+            if body.len() + count > LIMIT - header.len() {
+                return Err("browser discovery exceeds 64 KiB".into());
+            }
+            body.extend_from_slice(&buffer[..count]);
+        }
+        body
+    };
+    let body = String::from_utf8(body).map_err(|_| "invalid HTTP discovery response")?;
+    field_string(&body, &["webSocketDebuggerUrl"])
 }
 
 struct WebSocket {
