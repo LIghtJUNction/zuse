@@ -1,0 +1,670 @@
+//! One executor shared by embedded callers, CLI and MCP.
+use crate::{
+    accessibility,
+    browser::Browser,
+    human::{Queue, Request},
+    integrations::{self, ProcessManager},
+    json::{self, quote},
+    language::{Call, Parser, Value},
+    motion::{Curve, Motion, Point, Rng},
+    platform::Desktop,
+};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
+
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+    pub dry_run: bool,
+    pub read_only: bool,
+    pub max_steps: usize,
+    pub max_wait_ms: u64,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            read_only: false,
+            max_steps: 256,
+            max_wait_ms: 60_000,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Type {
+    Text,
+    Integer,
+    Number,
+    Bool,
+}
+use Type::{Bool as B, Integer as I, Number as N, Text as T};
+type Param = (&'static str, Type, bool);
+struct Spec {
+    name: &'static str,
+    args: &'static [Param],
+    read_only: bool,
+}
+macro_rules! spec { ($name:literal, $read:literal, [$($arg:literal:$ty:ident:$required:literal),* $(,)?]) => { Spec{name:$name,args:&[$(($arg,$ty,$required)),*],read_only:$read} }; }
+static SPECS: &[Spec] = &[
+    spec!("system.capabilities", true, []),
+    spec!("mouse.position", true, []),
+    spec!("mouse.move",false,["x":I:true,"y":I:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"seed":I:false]),
+    spec!("mouse.click",false,["button":T:false,"count":I:false,"interval":I:false]),
+    spec!("mouse.down",false,["button":T:false]),
+    spec!("mouse.up",false,["button":T:false]),
+    spec!("mouse.scroll",false,["dx":I:false,"dy":I:false]),
+    spec!("keyboard.type",false,["text":T:true,"window":T:false]),
+    spec!("keyboard.key",false,["key":T:true,"window":T:false]),
+    spec!("window.list", true, []),
+    spec!("wine.windows", true, []),
+    spec!("window.focus",false,["id":T:true]),
+    spec!("screen.capture",true,["path":T:true,"window":T:false]),
+    spec!("window.capture",true,["id":T:true,"path":T:true]),
+    spec!("accessibility.tree",true,["limit":I:false,"depth":I:false]),
+    spec!("screen.text",true,["ocr":B:false,"limit":I:false,"depth":I:false]),
+    spec!("wait",true,["ms":I:false,"min":I:false,"max":I:false,"seed":I:false]),
+    spec!("browser.launch",false,["headless":B:false]),
+    spec!("browser.connect",false,["endpoint":T:true]),
+    spec!("browser.tabs", true, []),
+    spec!("browser.select",false,["id":T:true]),
+    spec!("browser.navigate",false,["url":T:true]),
+    spec!("browser.snapshot", true, []),
+    spec!("browser.text", true, []),
+    spec!("browser.evaluate",false,["expression":T:true]),
+    spec!("browser.click",false,["selector":T:true]),
+    spec!("browser.fill",false,["selector":T:true,"text":T:true]),
+    spec!("browser.key",false,["key":T:true]),
+    spec!("browser.capture",true,["path":T:true]),
+    spec!("browser.close", false, []),
+    spec!("human.request",false,["kind":T:true,"message":T:true,"url":T:false,"window":T:false,"timeout":I:false]),
+    spec!("human.pending", true, []),
+    spec!("notify",false,["title":T:false,"message":T:true]),
+    spec!("harness.list", true, []),
+    spec!("harness.start",false,["name":T:true,"args":T:false]),
+    spec!("process.start",false,["program":T:true,"args":T:false]),
+    spec!("process.list", true, []),
+    spec!("process.read",true,["id":I:true]),
+    spec!("harness.read",true,["id":I:true]),
+    spec!("process.write",false,["id":I:true,"text":T:true]),
+    spec!("harness.send",false,["id":I:true,"text":T:true]),
+    spec!("process.stop",false,["id":I:true]),
+    spec!("harness.stop",false,["id":I:true]),
+    spec!("ide.open",false,["path":T:true,"line":I:false,"column":I:false]),
+    spec!("ide.diff",false,["left":T:true,"right":T:true]),
+    spec!("ide.extensions", true, []),
+    spec!("omarchy.status", true, []),
+    spec!("omarchy.workspaces", true, []),
+    spec!("omarchy.workspace",false,["id":T:true]),
+    spec!("omarchy.themes", true, []),
+    spec!("omarchy.theme",false,["name":T:true]),
+];
+
+pub fn schema() -> String {
+    let commands: Vec<_> = SPECS
+        .iter()
+        .map(|spec| {
+            let parameters: Vec<_> = spec
+                .args
+                .iter()
+                .map(|(name, kind, required)| {
+                    format!(
+                        "{{\"name\":{},\"type\":{},\"required\":{required}}}",
+                        quote(name),
+                        quote(match kind {
+                            T => "text",
+                            I => "integer",
+                            N => "number",
+                            B => "boolean",
+                        })
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"name\":{},\"read_only\":{},\"parameters\":[{}]}}",
+                quote(spec.name),
+                spec.read_only,
+                parameters.join(",")
+            )
+        })
+        .collect();
+    format!(
+        "{{\"version\":{},\"syntax\":\"name(key=value); newline or semicolon separates calls\",\"commands\":[{}]}}",
+        quote(crate::VERSION),
+        commands.join(",")
+    )
+}
+
+fn text(call: &Call<'_>, name: &str, default: &str) -> Result<String, String> {
+    match call.get(name) {
+        None => Ok(default.into()),
+        Some(value) => {
+            let mut buffer = vec![0; value.decoded_len().map_err(|e| format!("{e:?}"))?];
+            Ok(value
+                .decode_text(&mut buffer)
+                .map_err(|e| format!("{e:?}"))?
+                .to_owned())
+        }
+    }
+}
+fn integer(call: &Call<'_>, name: &str, default: i64) -> i64 {
+    call.get(name).and_then(Value::as_i64).unwrap_or(default)
+}
+fn number(call: &Call<'_>, name: &str, default: f64) -> f64 {
+    call.get(name).and_then(Value::as_f64).unwrap_or(default)
+}
+fn boolean(call: &Call<'_>, name: &str, default: bool) -> bool {
+    call.get(name).and_then(Value::as_bool).unwrap_or(default)
+}
+fn range(call: &Call<'_>, name: &str, default: i64, min: i64, max: i64) -> Result<i64, String> {
+    let value = integer(call, name, default);
+    if value < min || value > max {
+        Err(format!("{}: {name} must be {min}..{max}", call.name))
+    } else {
+        Ok(value)
+    }
+}
+
+fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, String> {
+    let mut calls = Vec::new();
+    let mut wait_budget = 0u64;
+    for parsed in Parser::new(source) {
+        let call = parsed.map_err(|e| e.to_string())?;
+        if calls.len() >= options.max_steps {
+            return Err(format!("step limit exceeded ({})", options.max_steps));
+        }
+        let spec = SPECS
+            .iter()
+            .find(|s| s.name == call.name)
+            .ok_or_else(|| format!("line {}: unknown operation {}", call.span.line, call.name))?;
+        if options.read_only && !spec.read_only {
+            return Err(format!("{} is blocked in read-only mode", call.name));
+        }
+        for arg in call.args() {
+            let (_, kind, _) = spec
+                .args
+                .iter()
+                .find(|a| a.0 == arg.name)
+                .ok_or_else(|| format!("{}: unknown argument {}", call.name, arg.name))?;
+            let valid = match kind {
+                T => arg.value.as_text().is_some(),
+                I => arg.value.as_i64().is_some(),
+                N => arg.value.as_f64().is_some_and(f64::is_finite),
+                B => arg.value.as_bool().is_some(),
+            };
+            if !valid {
+                return Err(format!(
+                    "{}: invalid value type for {}",
+                    call.name, arg.name
+                ));
+            }
+        }
+        for (name, _, required) in spec.args {
+            if *required && call.get(name).is_none() {
+                return Err(format!("{} requires {name}", call.name));
+            }
+        }
+        match call.name {
+            "mouse.move" => {
+                range(&call, "x", 0, i32::MIN as i64, i32::MAX as i64)?;
+                range(&call, "y", 0, i32::MIN as i64, i32::MAX as i64)?;
+                let duration = range(&call, "duration", 0, 0, 60_000)?;
+                let steps = range(&call, "steps", (duration / 8).clamp(1, 4096), 1, 65536)?;
+                if (duration == 0 && steps != 1) || (duration > 0 && steps > duration) {
+                    return Err("mouse.move: steps must fit duration in milliseconds".into());
+                }
+                if Curve::parse(&text(&call, "curve", "smooth")?).is_none() {
+                    return Err("unknown motion curve".into());
+                }
+                if !(0.0..=1000.0).contains(&number(&call, "jitter", 0.0)) {
+                    return Err("jitter must be 0..1000 pixels".into());
+                }
+                wait_budget = wait_budget.saturating_add(duration as u64);
+            }
+            "mouse.click" | "mouse.down" | "mouse.up" => {
+                if !["left", "right", "middle", "1", "2", "3"]
+                    .contains(&text(&call, "button", "left")?.as_str())
+                {
+                    return Err("unknown mouse button".into());
+                }
+                let count = range(&call, "count", 1, 1, 10)?;
+                let interval = range(&call, "interval", 80, 0, 1000)?;
+                wait_budget = wait_budget.saturating_add(((count - 1) * interval) as u64);
+            }
+            "mouse.scroll" => {
+                range(&call, "dx", 0, -10000, 10000)?;
+                range(&call, "dy", 0, -10000, 10000)?;
+            }
+            "wait" => {
+                if call.get("ms").is_some()
+                    && (call.get("min").is_some() || call.get("max").is_some())
+                {
+                    return Err("wait uses either ms or min/max".into());
+                }
+                let low = range(&call, "min", integer(&call, "ms", 0), 0, 60_000)?;
+                let high = range(&call, "max", integer(&call, "ms", low), 0, 60_000)?;
+                range(&call, "ms", 0, 0, 60_000)?;
+                if low > high {
+                    return Err("wait min exceeds max".into());
+                }
+                wait_budget = wait_budget.saturating_add(high as u64);
+            }
+            "human.request" => {
+                let kind = text(&call, "kind", "")?;
+                if !crate::human::KINDS.contains(&kind.as_str()) {
+                    return Err("unknown human request kind".into());
+                }
+                if text(&call, "message", "")?.is_empty()
+                    || text(&call, "message", "")?.len() > 4096
+                {
+                    return Err("human request message must contain 1..4096 bytes".into());
+                }
+                if kind == "password" && text(&call, "window", "")?.is_empty() {
+                    return Err("password requires target window".into());
+                }
+                let url = text(&call, "url", "")?;
+                if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
+                    return Err("human login URL must use http or https".into());
+                }
+                range(&call, "timeout", 300, 1, 86400)?;
+            }
+            "accessibility.tree" | "screen.text" => {
+                range(&call, "limit", 256, 1, 4096)?;
+                range(&call, "depth", 8, 1, 32)?;
+            }
+            "ide.open" => {
+                range(&call, "line", 1, 1, i32::MAX as i64)?;
+                range(&call, "column", 1, 1, i32::MAX as i64)?;
+            }
+            name if name.starts_with("process.") || name.starts_with("harness.") => {
+                if call.get("id").is_some() {
+                    range(&call, "id", 0, 1, i64::MAX)?;
+                }
+            }
+            _ => {}
+        }
+        if wait_budget > options.max_wait_ms {
+            return Err(format!(
+                "program wait budget exceeds {}ms",
+                options.max_wait_ms
+            ));
+        }
+        calls.push(call);
+    }
+    Ok(calls)
+}
+
+pub fn check(source: &str, options: Options) -> Result<String, String> {
+    let calls = validate(source, options)?;
+    let list: Vec<_> = calls
+        .iter()
+        .map(|c| {
+            format!(
+                "{{\"operation\":{},\"line\":{}}}",
+                quote(c.name),
+                c.span.line
+            )
+        })
+        .collect();
+    Ok(format!(
+        "{{\"status\":\"valid\",\"steps\":{},\"plan\":[{}]}}",
+        calls.len(),
+        list.join(",")
+    ))
+}
+
+#[derive(Default)]
+pub struct Runtime {
+    desktop: Option<Desktop>,
+    browser: Option<Browser>,
+    processes: ProcessManager,
+}
+impl Runtime {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    fn desktop(&mut self) -> Result<&mut Desktop, String> {
+        if self.desktop.is_none() {
+            self.desktop = Some(Desktop::connect()?);
+        }
+        self.desktop
+            .as_mut()
+            .ok_or_else(|| "desktop is unavailable".into())
+    }
+    fn browser(&mut self) -> Result<&mut Browser, String> {
+        self.browser
+            .as_mut()
+            .ok_or_else(|| "use browser.launch or browser.connect first".into())
+    }
+
+    pub fn capabilities(&mut self) -> String {
+        let desktop = match self.desktop() {
+            Ok(d) => d.capabilities(),
+            Err(e) => format!("{{\"available\":false,\"reason\":{}}}", quote(&e)),
+        };
+        format!(
+            "{{\"version\":{},\"platform\":{},\"architecture\":{},\"desktop\":{},\"browser_connected\":{},\"harnesses\":{},\"transports\":[\"stdio\",\"http\",\"unix-socket\"],\"core\":{{\"no_std\":true,\"allocations\":0}},\"limits\":{{\"steps\":256,\"script_bytes\":1048576,\"wait_ms\":60000}}}}",
+            quote(crate::VERSION),
+            quote(std::env::consts::OS),
+            quote(std::env::consts::ARCH),
+            desktop,
+            self.browser.is_some(),
+            integrations::installed_harnesses()
+        )
+    }
+
+    pub fn resume(&mut self, id: &str, options: Options) -> Result<String, String> {
+        if options.dry_run {
+            return Err("resume consumes a human request; use human.pending to inspect it".into());
+        }
+        let queue = Queue::new()?;
+        // Validate the saved plan before claiming its single-use approval.
+        validate(&queue.continuation(id)?, options)?;
+        let source = queue.take(id)?;
+        self.execute(&source, options)
+    }
+
+    pub fn execute(&mut self, source: &str, options: Options) -> Result<String, String> {
+        if options.dry_run {
+            return check(source, options);
+        }
+        let calls = validate(source, options)?;
+        let mut results = Vec::new();
+        let mut bytes = 0;
+        for (index, call) in calls.iter().enumerate() {
+            if call.name == "human.request" {
+                let next = calls.get(index + 1).map_or(source.len(), |c| c.span.start);
+                let kind = text(call, "kind", "")?;
+                let message = text(call, "message", "")?;
+                let url = text(call, "url", "")?;
+                let window = text(call, "window", "")?;
+                let pending = Queue::new()?.request(
+                    Request {
+                        kind: &kind,
+                        message: &message,
+                        url: &url,
+                        window: &window,
+                        timeout_secs: integer(call, "timeout", 300) as u64,
+                    },
+                    &source[next..],
+                    true,
+                )?;
+                return Ok(format!(
+                    "{{\"status\":\"waiting_for_human\",\"completed\":{index},\"handoff\":{pending},\"results\":[{}]}}",
+                    results.join(",")
+                ));
+            }
+            let began = Instant::now();
+            match self.step(call) {
+                Ok(value) => {
+                    bytes += value.len();
+                    if bytes > 1024 * 1024 {
+                        return Ok(format!(
+                            "{{\"status\":\"failed\",\"failed_step\":{index},\"error\":\"result budget exhausted\",\"completed\":{},\"results\":[{}]}}",
+                            index + 1,
+                            results.join(",")
+                        ));
+                    }
+                    results.push(format!(
+                        "{{\"step\":{index},\"operation\":{},\"elapsed_us\":{},\"value\":{value}}}",
+                        quote(call.name),
+                        began.elapsed().as_micros()
+                    ));
+                }
+                Err(error) => {
+                    return Ok(format!(
+                        "{{\"status\":\"failed\",\"failed_step\":{index},\"operation\":{},\"error\":{},\"completed\":{index},\"results\":[{}]}}",
+                        quote(call.name),
+                        quote(&error),
+                        results.join(",")
+                    ));
+                }
+            }
+        }
+        Ok(format!(
+            "{{\"status\":\"completed\",\"completed\":{},\"results\":[{}]}}",
+            calls.len(),
+            results.join(",")
+        ))
+    }
+
+    fn step(&mut self, c: &Call<'_>) -> Result<String, String> {
+        let done = || Ok("{\"ok\":true}".into());
+        match c.name {
+            "system.capabilities" => Ok(self.capabilities()),
+            "mouse.position" => {
+                let (x, y) = self.desktop()?.position()?;
+                Ok(format!("{{\"x\":{x},\"y\":{y}}}"))
+            }
+            "mouse.move" => {
+                let duration = integer(c, "duration", 0) as u32;
+                let steps = integer(c, "steps", ((duration / 8) as i64).clamp(1, 4096)) as u32;
+                let curve = Curve::parse(&text(c, "curve", "smooth")?).ok_or("unknown curve")?;
+                let (x, y) = self.desktop()?.position()?;
+                let target = Point {
+                    x: integer(c, "x", 0) as f64,
+                    y: integer(c, "y", 0) as f64,
+                };
+                let motion = Motion::new(
+                    Point {
+                        x: x as f64,
+                        y: y as f64,
+                    },
+                    target,
+                    duration,
+                    steps,
+                    curve,
+                    number(c, "jitter", 0.0),
+                    integer(c, "seed", 1) as u64,
+                )
+                .map_err(|e| format!("{e:?}"))?;
+                let start = Instant::now();
+                for sample in motion {
+                    let desired = Duration::from_millis(sample.at_ms as u64);
+                    if let Some(delay) = desired.checked_sub(start.elapsed()) {
+                        std::thread::sleep(delay);
+                    }
+                    self.desktop()?
+                        .move_to(sample.point.x.round() as i32, sample.point.y.round() as i32)?;
+                }
+                Ok(format!(
+                    "{{\"x\":{},\"y\":{},\"samples\":{}}}",
+                    target.x,
+                    target.y,
+                    steps + 1
+                ))
+            }
+            "mouse.click" | "mouse.down" | "mouse.up" => {
+                let button = text(c, "button", "left")?;
+                let action = c.name.rsplit('.').next().unwrap_or("click");
+                for i in 0..integer(c, "count", 1) {
+                    if i > 0 {
+                        std::thread::sleep(
+                            Duration::from_millis(integer(c, "interval", 80) as u64),
+                        );
+                    }
+                    self.desktop()?.button(&button, action)?;
+                }
+                done()
+            }
+            "mouse.scroll" => {
+                self.desktop()?
+                    .scroll(integer(c, "dx", 0) as i32, integer(c, "dy", 0) as i32)?;
+                done()
+            }
+            "keyboard.type" => {
+                let value = text(c, "text", "")?;
+                let window = text(c, "window", "")?;
+                if window.is_empty() {
+                    self.desktop()?.type_text(&value)?;
+                } else {
+                    self.desktop()?.type_into(&window, &value)?;
+                }
+                Ok(format!("{{\"typed_bytes\":{}}}", value.len()))
+            }
+            "keyboard.key" => {
+                let key = text(c, "key", "")?;
+                let window = text(c, "window", "")?;
+                if window.is_empty() {
+                    self.desktop()?.key(&key)?;
+                } else {
+                    self.desktop()?.key_into(&window, &key)?;
+                }
+                done()
+            }
+            "window.list" | "wine.windows" => self.desktop()?.windows(),
+            "window.focus" => {
+                self.desktop()?.focus(&text(c, "id", "")?)?;
+                done()
+            }
+            "screen.capture" | "window.capture" => {
+                let window = text(
+                    c,
+                    if c.name == "window.capture" {
+                        "id"
+                    } else {
+                        "window"
+                    },
+                    "",
+                )?;
+                self.desktop()?.screenshot(
+                    Path::new(&text(c, "path", "")?),
+                    if window.is_empty() {
+                        None
+                    } else {
+                        Some(&window)
+                    },
+                )
+            }
+            "accessibility.tree" => accessibility::snapshot(
+                integer(c, "limit", 256) as usize,
+                integer(c, "depth", 8) as usize,
+            ),
+            "screen.text" => {
+                if !boolean(c, "ocr", false) {
+                    return accessibility::text(
+                        integer(c, "limit", 256) as usize,
+                        integer(c, "depth", 8) as usize,
+                    );
+                }
+                let path = std::env::temp_dir().join(format!(
+                    "zuse-ocr-{}-{}.png",
+                    std::process::id(),
+                    SystemTimeId::next()
+                ));
+                self.desktop()?.screenshot(&path, None)?;
+                let result = std::process::Command::new("tesseract")
+                    .arg(&path)
+                    .args(["stdout", "quiet"])
+                    .output()
+                    .map_err(|e| e.to_string());
+                let _ = std::fs::remove_file(&path);
+                let output = result?;
+                if !output.status.success() {
+                    return Err("tesseract could not read screenshot".into());
+                }
+                Ok(format!(
+                    "{{\"source\":\"ocr\",\"text\":{}}}",
+                    quote(&String::from_utf8_lossy(&output.stdout))
+                ))
+            }
+            "wait" => {
+                let min = integer(c, "min", integer(c, "ms", 0)) as u64;
+                let max = integer(c, "max", integer(c, "ms", min as i64)) as u64;
+                let delay = Rng::new(integer(c, "seed", 1) as u64)
+                    .range_u64(min, max)
+                    .map_err(|e| format!("{e:?}"))?;
+                std::thread::sleep(Duration::from_millis(delay));
+                Ok(format!("{{\"waited_ms\":{delay}}}"))
+            }
+            "browser.launch" => {
+                if self.browser.is_some() {
+                    return Err(
+                        "browser already connected; close it before launching another".into(),
+                    );
+                }
+                self.browser = Some(Browser::launch(boolean(c, "headless", true))?);
+                self.browser()?.tabs()
+            }
+            "browser.connect" => {
+                if self.browser.is_some() {
+                    return Err("browser already connected".into());
+                }
+                self.browser = Some(Browser::connect(&text(c, "endpoint", "")?)?);
+                self.browser()?.tabs()
+            }
+            "browser.select" => self.browser()?.select(&text(c, "id", "")?),
+            "browser.tabs" => self.browser()?.tabs(),
+            "browser.navigate" => self.browser()?.navigate(&text(c, "url", "")?),
+            "browser.snapshot" => self.browser()?.snapshot(),
+            "browser.text" => self.browser()?.text(),
+            "browser.evaluate" => self.browser()?.evaluate(&text(c, "expression", "")?),
+            "browser.click" => self.browser()?.click(&text(c, "selector", "")?),
+            "browser.fill" => self
+                .browser()?
+                .fill(&text(c, "selector", "")?, &text(c, "text", "")?),
+            "browser.key" => self.browser()?.key(&text(c, "key", "")?),
+            "browser.capture" => self.browser()?.screenshot(&text(c, "path", "")?),
+            "browser.close" => {
+                if let Some(mut browser) = self.browser.take() {
+                    browser.close()?;
+                }
+                done()
+            }
+            "human.pending" => Queue::new()?.list(),
+            "notify" => {
+                crate::human::notify_user(&text(c, "title", "zuse")?, &text(c, "message", "")?)?;
+                done()
+            }
+            "harness.list" => Ok(integrations::installed_harnesses()),
+            "process.start" => self
+                .processes
+                .start(&text(c, "program", "")?, &text(c, "args", "")?),
+            "harness.start" => {
+                let name = text(c, "name", "")?;
+                if !["codex", "claude", "pi", "opencode", "ssmcp", "aider"].contains(&name.as_str())
+                {
+                    return Err("unknown harness; use process.start for other executables".into());
+                }
+                self.processes.start(&name, &text(c, "args", "")?)
+            }
+            "process.list" => Ok(self.processes.list()),
+            "process.read" | "harness.read" => self.processes.read(integer(c, "id", 0) as u64),
+            "process.write" | "harness.send" => self
+                .processes
+                .write(integer(c, "id", 0) as u64, &text(c, "text", "")?),
+            "process.stop" | "harness.stop" => self.processes.stop(integer(c, "id", 0) as u64),
+            "ide.open" => integrations::ide_open(
+                &text(c, "path", "")?,
+                integer(c, "line", 1) as u32,
+                integer(c, "column", 1) as u32,
+            ),
+            "ide.diff" => integrations::ide_diff(&text(c, "left", "")?, &text(c, "right", "")?),
+            "ide.extensions" => integrations::ide_extensions(),
+            "omarchy.status" => integrations::omarchy_status(),
+            "omarchy.workspaces" => integrations::omarchy_workspaces(),
+            "omarchy.workspace" => integrations::omarchy_workspace(&text(c, "id", "")?),
+            "omarchy.themes" => integrations::omarchy_themes(),
+            "omarchy.theme" => integrations::omarchy_theme(&text(c, "name", "")?),
+            _ => Err(format!("unsupported operation {}", c.name)),
+        }
+    }
+}
+struct SystemTimeId;
+impl SystemTimeId {
+    fn next() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    }
+}
+pub fn failed(output: &str) -> bool {
+    json::with_value(output, |v| {
+        Ok(v.get("status")
+            .and_then(|s| s.string())
+            .is_some_and(|s| s.matches("failed")))
+    })
+    .unwrap_or(true)
+}

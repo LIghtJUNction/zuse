@@ -1,0 +1,7 @@
+/target/
+/dist/
+*.bmp
+*.png
+*.sock
+*.log
+__pycache__/
