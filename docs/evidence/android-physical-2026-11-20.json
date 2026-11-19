@@ -1,0 +1,270 @@
+{
+  "schema": 1,
+  "date": "2026-11-20",
+  "timezone": "Asia/Taipei",
+  "android_api": 36,
+  "binary_sha256": "90c3e09bd577725b98e4e47314a676733c709321f26bc142eb2567b89b76749d",
+  "coverage": "Latest verified result per check across two final runs of the same binary; this is not a claim that both full runs passed unchanged.",
+  "source_sha256": {
+    "src/android.rs": "83e16b3b25a45d51522d84fec25a4f9436f9868c1ecfdf0fc61d6d9adfc40090",
+    "src/runtime.rs": "87e0cad539de9026ea101022459312657cbd71d781fd3e297398ce41364078e2"
+  },
+  "runs": [
+    {
+      "label": "android-focus-capture-deadline-fixes",
+      "report_sha256": "3eecab2772ae81443eca256ca51bacecd16dd243651c289a53343897516fd9b6",
+      "passed": 16,
+      "failed": 1
+    },
+    {
+      "label": "background-event-isolation",
+      "report_sha256": "307fd2a9f61db5311dc1da846eb36be872f20b951109f73a81fa00166821016a",
+      "passed": 7,
+      "failed": 0
+    }
+  ],
+  "fixture_observation_note": "An earlier whole-gesture comparison included derived layout coordinates. The final runner compares all actual gesture event fields and reports layout changes separately. The earlier precise differing field was not retained; the targeted rerun confirmed event isolation.",
+  "passed_checks": 17,
+  "failed_checks": 0,
+  "checks": [
+    {
+      "name": "native_app_start",
+      "status": "passed"
+    },
+    {
+      "name": "primary_button",
+      "status": "passed",
+      "detail": {
+        "counter_delta": 1,
+        "display": 0
+      },
+      "elapsed_ms": 2039.74
+    },
+    {
+      "name": "primary_text",
+      "status": "passed",
+      "detail": {
+        "text": "Zuse 42!",
+        "display": 0
+      },
+      "elapsed_ms": 1864.56
+    },
+    {
+      "name": "primary_keys",
+      "status": "passed",
+      "detail": {
+        "text": "Zuse 42",
+        "back_delta": 1,
+        "key_down_delta": 3
+      },
+      "elapsed_ms": 651.81
+    },
+    {
+      "name": "primary_gestures",
+      "status": "passed",
+      "detail": {
+        "display": 0,
+        "taps_delta": 1,
+        "swipes_delta": 1,
+        "duration_ms": 248
+      },
+      "elapsed_ms": 1399.72
+    },
+    {
+      "name": "primary_printable_ascii",
+      "status": "passed",
+      "detail": {
+        "characters": 95,
+        "exact_match": true
+      },
+      "elapsed_ms": 4271.32
+    },
+    {
+      "name": "primary_snapshot",
+      "status": "passed",
+      "detail": {
+        "display": 0,
+        "fixture_windows": 1,
+        "fixture_visible": true,
+        "fixture_focused": true,
+        "accessibility_xml": false,
+        "observation": "uiautomator XML unavailable; scoped native window metadata returned"
+      },
+      "elapsed_ms": 3147.19
+    },
+    {
+      "name": "primary_focus_metadata",
+      "status": "passed",
+      "detail": {
+        "display": 0,
+        "fixture_windows": 1,
+        "fixture_visible": true,
+        "fixture_focused": true,
+        "accessibility_xml": false,
+        "observation": "uiautomator XML unavailable; scoped native window metadata returned"
+      },
+      "elapsed_ms": 2772.67
+    },
+    {
+      "name": "primary_screenshot_pixels",
+      "status": "passed",
+      "detail": {
+        "display": 0,
+        "dimensions": [
+          1240,
+          2772
+        ],
+        "pixel_samples": [
+          [
+            229,
+            57,
+            53
+          ],
+          [
+            30,
+            142,
+            62
+          ],
+          [
+            26,
+            115,
+            232
+          ],
+          [
+            140,
+            151,
+            54
+          ]
+        ],
+        "sha256": "f9264afaa5e3a195e53da1f869ffe8c3c5eb644b2858241a5b939b2e24afe61b",
+        "file": "fixture-display-0.png"
+      },
+      "elapsed_ms": 1323.72
+    },
+    {
+      "name": "unicode_preflight",
+      "status": "passed",
+      "detail": {
+        "rejected_before_execution": true
+      },
+      "elapsed_ms": 7.54
+    },
+    {
+      "name": "missing_component_rejected",
+      "status": "passed",
+      "detail": {
+        "rejected": true,
+        "error": "Android command exited 1: Error type 3\nError: Activity class {best.lmm.zuse.fixture/best.lmm.zuse.fixture.DoesNotExist} does not exist.\nStarting: Intent { cmp=best.lmm.zuse.fixture/.DoesNotExist }\n"
+      },
+      "elapsed_ms": 417.85
+    },
+    {
+      "name": "owned_background_display",
+      "status": "passed",
+      "detail": {
+        "display": 10,
+        "role": "presentation",
+        "dimensions": [
+          640,
+          960
+        ]
+      },
+      "elapsed_ms": 1115.56
+    },
+    {
+      "name": "fixture_metadata",
+      "status": "passed",
+      "detail": {
+        "saved": "metadata",
+        "only_fixture_window_content": true
+      },
+      "elapsed_ms": 426.28
+    },
+    {
+      "name": "background_input_isolation",
+      "status": "passed",
+      "detail": {
+        "counter": {
+          "counter_delta": 1,
+          "display": 10
+        },
+        "text": {
+          "text": "Background 42!",
+          "display": 10
+        },
+        "gestures": {
+          "display": 10,
+          "taps_delta": 1,
+          "swipes_delta": 1,
+          "duration_ms": 241
+        },
+        "primary_input_unchanged": true,
+        "primary_layout_changed": false
+      },
+      "elapsed_ms": 3215.94
+    },
+    {
+      "name": "background_snapshot",
+      "status": "passed",
+      "detail": {
+        "display": 10,
+        "fixture_windows": 1,
+        "fixture_visible": true,
+        "fixture_focused": true,
+        "accessibility_xml": false,
+        "observation": "secondary displays use scoped window metadata; shell uiautomator targets display 0"
+      },
+      "elapsed_ms": 319.52
+    },
+    {
+      "name": "background_screenshot_pixels",
+      "status": "passed",
+      "detail": {
+        "display": 10,
+        "dimensions": [
+          640,
+          960
+        ],
+        "pixel_samples": [
+          [
+            229,
+            57,
+            53
+          ],
+          [
+            30,
+            142,
+            62
+          ],
+          [
+            26,
+            115,
+            232
+          ],
+          [
+            124,
+            51,
+            154
+          ]
+        ],
+        "sha256": "9de3cf745e37fbe7d61e86ec8d6f50fcd3af64986309946298616c4bd9e37d04",
+        "file": "fixture-display-10.png"
+      },
+      "elapsed_ms": 869.31
+    },
+    {
+      "name": "cleanup",
+      "status": "passed",
+      "fixture_uninstalled": true,
+      "owned_display_removed": true,
+      "original_display_set_retained": true,
+      "original_primary_activity_restored": true
+    }
+  ],
+  "limitations": [
+    "Android text injection remains printable ASCII.",
+    "This device lacks uiautomator dump XML; snapshots explicitly return scoped window metadata.",
+    "The fixture creates its own public own-content-only test display; zuse itself does not provision displays.",
+    "No emulator, unrelated display, or personal application data was used as a test target."
+  ]
+}

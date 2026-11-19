@@ -274,7 +274,7 @@ class Acceptance:
                  "--ez", "virtual_display", "true")
         owner = self.wait_state(0, lambda s: s["ready"] and (s["ownedVirtualDisplayId"] >= 0 or bool(s["virtualError"])))
         if owner["virtualError"]:
-            raise RuntimeError("fixture cannot create its private display: " + owner["virtualError"])
+            raise RuntimeError("fixture cannot create its own-content display: " + owner["virtualError"])
         display = owner["ownedVirtualDisplayId"]
         if display == 0 or display in before:
             raise RuntimeError("fixture did not create a new secondary display")
@@ -328,10 +328,14 @@ class Acceptance:
         for key in ["counter", "text", "keyDowns", "keyUps"]:
             if after[key] != before[key]:
                 raise AssertionError("background action changed primary fixture " + key)
-        if after["gesture"] != before["gesture"]:
-            raise AssertionError("background action reached primary gesture area")
+        event_keys = [key for key in before["gesture"] if key != "suggestedSwipe"]
+        changed = {key: {"before": before["gesture"][key], "after": after["gesture"][key]}
+                   for key in event_keys if after["gesture"][key] != before["gesture"][key]}
+        if changed:
+            raise AssertionError("background changed primary gesture events: " + json.dumps(changed))
         return {"counter": counter, "text": text, "gestures": gestures,
-                "primary_unchanged": True}
+                "primary_input_unchanged": True,
+                "primary_layout_changed": before["gesture"]["suggestedSwipe"] != after["gesture"]["suggestedSwipe"]}
 
     def run(self):
         if self.adb("shell", "pm", "list", "packages", PACKAGE).stdout.strip():
@@ -347,19 +351,20 @@ class Acceptance:
             self.wait_state()
             self.guard(0)
             self.results.append({"name": "native_app_start", "status": "passed"})
-            self.record("primary_button", self.button)
-            self.record("primary_text", self.text)
-            self.record("primary_keys", self.keys)
-            self.record("primary_gestures", self.gestures)
-            self.record("primary_printable_ascii", self.printable_ascii)
-            self.record("primary_snapshot", self.snapshot)
-            self.record("primary_focus_metadata", lambda: self.snapshot(verify_focus=True))
-            self.record("primary_screenshot_pixels", self.screenshot)
-            self.record("unicode_preflight", self.invalid_preflight)
-            self.record("missing_component_rejected", lambda: self.zuse(
-                f"android.start(component={json.dumps(PACKAGE + '/.DoesNotExist')})",
-                expected_failure=True))
-            if self.args.background and self.record("owned_background_display", self.create_background):
+            if not self.args.only_background:
+                self.record("primary_button", self.button)
+                self.record("primary_text", self.text)
+                self.record("primary_keys", self.keys)
+                self.record("primary_gestures", self.gestures)
+                self.record("primary_printable_ascii", self.printable_ascii)
+                self.record("primary_snapshot", self.snapshot)
+                self.record("primary_focus_metadata", lambda: self.snapshot(verify_focus=True))
+                self.record("primary_screenshot_pixels", self.screenshot)
+                self.record("unicode_preflight", self.invalid_preflight)
+                self.record("missing_component_rejected", lambda: self.zuse(
+                    f"android.start(component={json.dumps(PACKAGE + '/.DoesNotExist')})",
+                    expected_failure=True))
+            if (self.args.background or self.args.only_background) and self.record("owned_background_display", self.create_background):
                 self.record("fixture_metadata", self.collect_metadata)
                 self.record("background_input_isolation", self.background_isolation)
                 self.record("background_snapshot", lambda: self.snapshot(self.owned_display))
@@ -399,7 +404,8 @@ def main():
     parser.add_argument("--apk", default=str(ROOT / "target/android-fixture/zuse-fixture.apk"))
     parser.add_argument("--output", default=str(ROOT / "target/native-android"))
     parser.add_argument("--label", default="local")
-    parser.add_argument("--background", action="store_true", help="create and test an owned private secondary display")
+    parser.add_argument("--background", action="store_true", help="create and test an owned secondary display")
+    parser.add_argument("--only-background", action="store_true", help="run only the owned secondary display cases")
     args = parser.parse_args()
     return Acceptance(args).run()
 

@@ -285,6 +285,9 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                     return Err("foreground Android uses display 0".into());
                 }
             }
+            "android.type" => crate::android::validate_text(&text(&call, "text", "")?)?,
+            "android.key" => crate::android::validate_key(&text(&call, "key", "")?)?,
+            "android.start" => crate::android::validate_component(&text(&call, "component", "")?)?,
             "android.tap" | "android.swipe" => {
                 for key in ["x", "y", "x1", "y1", "x2", "y2"] {
                     if call.get(key).is_some() {
@@ -757,8 +760,10 @@ impl Runtime {
             }
             "android.devices" => Android::devices(),
             "android.connect" => {
+                // A failed retarget must not leave an earlier device selected.
+                self.android = None;
                 let serial = text(c, "serial", "")?;
-                self.android = Some(Android::connect(
+                let (android, status) = Android::connect_with_status(
                     if serial.is_empty() {
                         None
                     } else {
@@ -766,8 +771,9 @@ impl Runtime {
                     },
                     &text(c, "mode", "foreground")?,
                     integer(c, "display", 0) as u32,
-                )?);
-                self.android()?.status()
+                )?;
+                self.android = Some(android);
+                Ok(status)
             }
             "android.status" => self.android()?.status(),
             "android.snapshot" => self.android()?.snapshot(),
