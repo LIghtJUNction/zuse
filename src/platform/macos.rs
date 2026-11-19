@@ -1,6 +1,6 @@
-use super::{Result, image_metadata, quote, split_chord, validate_text};
+use super::{Result, dylib::Library, image_metadata, quote, split_chord, validate_text};
 use std::{
-    ffi::{c_char, c_void},
+    ffi::{CStr, c_char, c_void},
     path::Path,
     ptr,
 };
@@ -50,7 +50,6 @@ unsafe extern "C" {
 }
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
-    fn AXIsProcessTrusted() -> bool;
     fn AXUIElementCreateApplication(pid: i32) -> Ref;
     fn AXUIElementSetAttributeValue(element: Ref, attribute: Ref, value: Ref) -> i32;
     fn AXUIElementCopyAttributeValue(element: Ref, attribute: Ref, value: *mut Ref) -> i32;
@@ -69,7 +68,6 @@ unsafe extern "C" {
     fn CGWindowListCreateImage(bounds: Rect, options: u32, window: u32, image_options: u32) -> Ref;
     fn CGImageGetWidth(image: Ref) -> usize;
     fn CGImageGetHeight(image: Ref) -> usize;
-    fn CGPreflightScreenCaptureAccess() -> bool;
     static CGRectInfinite: Rect;
     static kCGWindowNumber: Ref;
     static kCGWindowName: Ref;
@@ -294,6 +292,107 @@ fn key_code(name: &str) -> Result<u16> {
         }
     })
 }
+
+const APPLICATION_SERVICES: &CStr =
+    c"/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices";
+const CORE_GRAPHICS: &CStr = c"/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PermissionState {
+    Granted,
+    Denied,
+    Unknown,
+}
+impl PermissionState {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Granted => "granted",
+            Self::Denied => "denied",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+struct PermissionCheck {
+    state: PermissionState,
+    detail: Option<String>,
+}
+impl PermissionCheck {
+    fn granted(&self) -> bool {
+        self.state == PermissionState::Granted
+    }
+    fn error_json(&self) -> String {
+        self.detail
+            .as_deref()
+            .map(quote)
+            .unwrap_or_else(|| "null".into())
+    }
+    fn require(self, permission: &str, instruction: &str) -> Result<()> {
+        match self.state {
+            PermissionState::Granted => Ok(()),
+            PermissionState::Denied => Err(format!(
+                "macOS {permission} permission is required; {instruction}"
+            )),
+            PermissionState::Unknown => Err(format!(
+                "macOS {permission} permission status is unknown: {}",
+                self.detail
+                    .as_deref()
+                    .unwrap_or("native preflight status is unavailable")
+            )),
+        }
+    }
+}
+
+/// Resolve a synchronous status query without requesting any authorization.
+///
+/// Keep these optional functions out of the Mach-O import table: in particular,
+/// CGPreflightScreenCaptureAccess was introduced in macOS 10.15. An unavailable
+/// framework/symbol is unknown, rather than denied or a process startup failure.
+fn permission_query(
+    framework: &CStr,
+    query: impl FnOnce(&Library) -> Result<bool>,
+) -> PermissionCheck {
+    // The library owner remains alive through the complete synchronous query.
+    // Loading or symbol-resolution errors do not invoke a fallback request.
+    let result = Library::open(framework).and_then(|library| query(&library));
+    match result {
+        Ok(true) => PermissionCheck {
+            state: PermissionState::Granted,
+            detail: None,
+        },
+        Ok(false) => PermissionCheck {
+            state: PermissionState::Denied,
+            detail: None,
+        },
+        Err(error) => PermissionCheck {
+            state: PermissionState::Unknown,
+            detail: Some(error),
+        },
+    }
+}
+fn accessibility_permission() -> PermissionCheck {
+    // AXIsProcessTrusted checks the current process. Do not use the options
+    // variant with kAXTrustedCheckOptionPrompt, or launch an osascript helper.
+    permission_query(APPLICATION_SERVICES, |library| {
+        // SAFETY: Apple's C declaration returns Boolean (UInt8), not C99 bool.
+        // The fixed function takes no arguments, returns no native object and
+        // finishes before this borrowed library reference can be released.
+        let query =
+            unsafe { library.symbol::<unsafe extern "C" fn() -> u8>(c"AXIsProcessTrusted")? };
+        Ok(unsafe { query() } != 0)
+    })
+}
+fn screen_recording_permission() -> PermissionCheck {
+    // Preflight only. CGRequestScreenCaptureAccess is intentionally not called.
+    permission_query(CORE_GRAPHICS, |library| {
+        // SAFETY: the C declaration is bool CGPreflightScreenCaptureAccess(void).
+        // It is synchronous and the native image remains loaded for the call.
+        let query = unsafe {
+            library.symbol::<unsafe extern "C" fn() -> bool>(c"CGPreflightScreenCaptureAccess")?
+        };
+        Ok(unsafe { query() })
+    })
+}
+
 pub struct Desktop {
     pressed: u8,
 }
@@ -305,19 +404,26 @@ impl Desktop {
         "quartz"
     }
     pub fn capabilities(&self) -> String {
+        // Query on demand so a long-lived MCP session sees permissions granted
+        // by the user later. Reuse this snapshot for pointer and keyboard.
+        let input = accessibility_permission();
+        let capture = screen_recording_permission();
         format!(
-            "{{\"backend\":\"quartz\",\"native\":true,\"pointer\":{},\"keyboard\":{},\"windows\":true,\"capture\":{},\"backgroundInput\":\"CGEventPostToPid; application dependent\",\"permission\":\"grant Accessibility for input and Screen Recording for capture\"}}",
-            unsafe { AXIsProcessTrusted() },
-            unsafe { AXIsProcessTrusted() },
-            unsafe { CGPreflightScreenCaptureAccess() }
+            "{{\"backend\":\"quartz\",\"native\":true,\"pointer\":{},\"keyboard\":{},\"windows\":true,\"capture\":{},\"backgroundInput\":\"CGEventPostToPid; application dependent\",\"permission\":\"grant Accessibility for input and Screen Recording for capture\",\"permissions\":{{\"accessibility\":{},\"screenRecording\":{}}},\"permissionProbe\":{{\"mode\":\"preflight_only\",\"promptRequested\":false,\"scope\":\"current_process\",\"automation\":\"not_checked\",\"deniedMeans\":\"not_currently_granted\",\"errors\":{{\"accessibility\":{},\"screenRecording\":{}}}}}}}",
+            input.granted(),
+            input.granted(),
+            capture.granted(),
+            quote(input.state.name()),
+            quote(capture.state.name()),
+            input.error_json(),
+            capture.error_json()
         )
     }
     fn input_permission(&self) -> Result<()> {
-        if unsafe { AXIsProcessTrusted() } {
-            Ok(())
-        } else {
-            Err("macOS Accessibility permission is required; enable the calling application in System Settings > Privacy & Security > Accessibility".into())
-        }
+        accessibility_permission().require(
+            "Accessibility",
+            "enable the calling application in System Settings > Privacy & Security > Accessibility",
+        )
     }
     pub fn position(&self) -> Result<(i32, i32)> {
         let event = Owned::new(unsafe { CGEventCreate(ptr::null()) }, "CGEventCreate")?;
@@ -531,9 +637,10 @@ impl Desktop {
         Ok(())
     }
     pub fn screenshot(&self, path: &Path, id: Option<&str>) -> Result<String> {
-        if !unsafe { CGPreflightScreenCaptureAccess() } {
-            return Err("macOS Screen Recording permission is required; enable it in System Settings > Privacy & Security".into());
-        }
+        screen_recording_permission().require(
+            "Screen Recording",
+            "enable it in System Settings > Privacy & Security",
+        )?;
         let id = id.map(window).transpose()?.map(|w| w.id);
         let image = Owned::new(
             unsafe {
@@ -579,5 +686,68 @@ impl Desktop {
             return Err("macOS PNG encoding failed".into());
         }
         Ok(image_metadata(path, width as u32, height as u32, "quartz"))
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+
+    #[test]
+    fn absent_native_framework_is_unknown_and_input_is_not_authorized() {
+        let invoked = std::cell::Cell::new(false);
+        let check = permission_query(
+            c"/System/Library/Frameworks/ZuseMissingPermissionFixture.framework/ZuseMissingPermissionFixture",
+            |_| {
+                invoked.set(true);
+                Ok(true)
+            },
+        );
+        assert!(!invoked.get());
+        assert_eq!(check.state, PermissionState::Unknown);
+        assert!(!check.granted());
+        assert!(
+            check
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("ZuseMissingPermissionFixture")
+        );
+        assert!(
+            check
+                .require("Accessibility", "unused")
+                .unwrap_err()
+                .contains("status is unknown")
+        );
+    }
+
+    #[test]
+    fn absent_optional_symbol_is_unknown_instead_of_denied() {
+        // This never calls an actual permission query or a request API.
+        let resolved = std::cell::Cell::new(false);
+        let check = permission_query(CORE_GRAPHICS, |library| {
+            // SAFETY: this fixture only looks up an absent function symbol and
+            // never calls a native address or an authorization request.
+            let _: unsafe extern "C" fn() -> bool =
+                unsafe { library.symbol(c"zuse_missing_permission_symbol_6c76d271")? };
+            resolved.set(true);
+            Ok(true)
+        });
+        assert!(!resolved.get());
+        assert_eq!(check.state, PermissionState::Unknown);
+        assert!(!check.granted());
+        assert!(
+            check
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("zuse_missing_permission_symbol_6c76d271")
+        );
+        assert!(
+            check
+                .require("Screen Recording", "unused")
+                .unwrap_err()
+                .contains("status is unknown")
+        );
     }
 }

@@ -30,7 +30,9 @@ pub struct Browser {
     next_id: u64,
     events: VecDeque<String>,
     owned_target: bool,
+    mobile: bool,
     closed: bool,
+    close_error: Option<String>,
 }
 
 impl Browser {
@@ -119,6 +121,47 @@ impl Browser {
         };
         let socket = WebSocket::connect(&endpoint)?;
         let page_endpoint = endpoint.contains("/devtools/page/");
+        Self::from_socket(socket, page_endpoint, false)
+    }
+
+    /// Connect through an authorized local ADB server to one observed Chrome socket.
+    /// A fresh owned tab is requested with background=true. Existing tabs are never
+    /// enumerated or selected by this session, and Chrome is not started for the user.
+    pub fn connect_android(serial: &str, socket: Option<&str>) -> Result<Self> {
+        let tunnel = crate::android::DevToolsTunnel::connect(serial, socket)
+            .map_err(|error| format!("Android Chrome socket discovery: {error}"))?;
+        Self::connect_android_tunnel(tunnel)
+    }
+
+    /// Explicit-server variant for local tunnels and deterministic mock testing.
+    pub fn connect_android_at(
+        address: SocketAddr,
+        serial: &str,
+        socket: Option<&str>,
+    ) -> Result<Self> {
+        let tunnel = crate::android::DevToolsTunnel::connect_at(address, serial, socket)
+            .map_err(|error| format!("Android Chrome socket discovery: {error}"))?;
+        Self::connect_android_tunnel(tunnel)
+    }
+
+    fn connect_android_tunnel(tunnel: crate::android::DevToolsTunnel) -> Result<Self> {
+        let mut discovery = tunnel
+            .open()
+            .map_err(|error| format!("Android Chrome HTTP tunnel: {error}"))?;
+        let advertised = discover_stream(&mut discovery, "localhost")
+            .map_err(|error| format!("Android Chrome HTTP /json/version: {error}"))?;
+        let path = android_debugging_path(&advertised)
+            .map_err(|error| format!("Android Chrome discovery endpoint: {error}"))?;
+        let stream = tunnel
+            .open()
+            .map_err(|error| format!("Android Chrome WebSocket tunnel: {error}"))?;
+        let socket = WebSocket::connect_stream(stream, "localhost", &path)
+            .map_err(|error| format!("Android Chrome WebSocket handshake: {error}"))?;
+        Self::from_socket(socket, false, true)
+            .map_err(|error| format!("Android Chrome session initialization: {error}"))
+    }
+
+    fn from_socket(socket: WebSocket, page_endpoint: bool, mobile: bool) -> Result<Self> {
         let mut browser = Self {
             socket,
             child: None,
@@ -128,11 +171,17 @@ impl Browser {
             next_id: 1,
             events: VecDeque::new(),
             owned_target: false,
+            mobile,
             closed: false,
+            close_error: None,
         };
         if !page_endpoint {
-            let result =
-                browser.request("Target.createTarget", r#"{"url":"about:blank"}"#, false)?;
+            let params = if mobile {
+                r#"{"url":"about:blank","background":true}"#
+            } else {
+                r#"{"url":"about:blank"}"#
+            };
+            let result = browser.request("Target.createTarget", params, false)?;
             let target = field_string(&result, &["targetId"])?;
             browser.target = target.clone();
             browser.owned_target = true;
@@ -165,12 +214,43 @@ impl Browser {
 
     /// List all inspectable targets as CDP JSON.
     pub fn tabs(&mut self) -> Result<String> {
+        if self.mobile {
+            let response = self.request(
+                "Target.getTargetInfo",
+                &format!(r#"{{"targetId":{}}}"#, quote(&self.target)),
+                false,
+            )?;
+            if field_string(&response, &["targetInfo", "targetId"])? != self.target {
+                return Err("Chrome returned a different target for the owned mobile tab".into());
+            }
+            return with_json(&response, |root| {
+                let info = root
+                    .get("targetInfo")
+                    .ok_or("missing owned target information")?;
+                Ok(format!(
+                    r#"{{"targetInfos":[{}],"scope":"owned"}}"#,
+                    info.raw()
+                ))
+            });
+        }
         self.request("Target.getTargets", "{}", false)
     }
 
     /// Select an existing page by its exact target ID. Closing zuse does not
     /// close a selected user-owned target.
     pub fn select(&mut self, target: &str) -> Result<String> {
+        if self.mobile {
+            if self.closed {
+                return Err("browser connection is closed".into());
+            }
+            if target != self.target {
+                return Err("mobile browser sessions only select their own created tab".into());
+            }
+            return Ok(format!(
+                r#"{{"targetId":{},"scope":"owned"}}"#,
+                quote(target)
+            ));
+        }
         let result = self.request(
             "Target.getTargetInfo",
             &format!(r#"{{"targetId":{}}}"#, quote(target)),
@@ -416,19 +496,31 @@ impl Browser {
     /// Close owned resources. A connected user-owned browser is left running.
     pub fn close(&mut self) -> Result<String> {
         if self.closed {
-            return Ok(r#"{"closed":true}"#.into());
+            return match &self.close_error {
+                Some(error) => Err(error.clone()),
+                None => Ok(r#"{"closed":true}"#.into()),
+            };
         }
         let mut error = None;
-        if self.child.is_none()
-            && self.owned_target
-            && !self.target.is_empty()
-            && let Err(value) = self.request(
-                "Target.closeTarget",
-                &format!(r#"{{"targetId":{}}}"#, quote(&self.target)),
-                false,
-            )
-        {
-            error = Some(value);
+        if self.child.is_none() && self.owned_target && !self.target.is_empty() {
+            let closed = self
+                .request(
+                    "Target.closeTarget",
+                    &format!(r#"{{"targetId":{}}}"#, quote(&self.target)),
+                    false,
+                )
+                .and_then(|response| {
+                    with_json(&response, |root| match root.get("success") {
+                        Some(value) if value.raw() == "true" => Ok(()),
+                        Some(value) if value.raw() == "false" => Err(
+                            "CDP Target.closeTarget returned success=false; the owned tab may remain open".into(),
+                        ),
+                        _ => Err("CDP Target.closeTarget did not confirm closing the owned tab".into()),
+                    })
+                });
+            if let Err(value) = closed {
+                error = Some(value);
+            }
         }
         if self.child.is_some() {
             // Graceful browser shutdown also closes its renderer processes.
@@ -455,7 +547,10 @@ impl Browser {
             ));
         }
         match error {
-            Some(error) => Err(error),
+            Some(error) => {
+                self.close_error = Some(error.clone());
+                Err(error)
+            }
             None => Ok(r#"{"closed":true}"#.into()),
         }
     }
@@ -474,17 +569,22 @@ impl Browser {
         } else {
             String::new()
         };
-        self.socket.send(
-            1,
-            format!(
-                r#"{{"id":{id},"method":{},"params":{params}{session}}}"#,
-                quote(method)
+        self.socket
+            .send(
+                1,
+                format!(
+                    r#"{{"id":{id},"method":{},"params":{params}{session}}}"#,
+                    quote(method)
+                )
+                .as_bytes(),
             )
-            .as_bytes(),
-        )?;
+            .map_err(|error| format!("CDP {method} write: {error}"))?;
         let deadline = Instant::now() + TIMEOUT;
         for _ in 0..10000 {
-            let message = self.socket.read_text(deadline)?;
+            let message = self
+                .socket
+                .read_text(deadline)
+                .map_err(|error| format!("CDP {method} read: {error}"))?;
             let response = with_json(&message, |root| {
                 if root.get("id").and_then(|v| v.integer().ok()) == Some(id as i64) {
                     if let Some(error) = root.get("error") {
@@ -786,20 +886,61 @@ fn endpoint(input: &str, scheme: &str) -> Result<Endpoint> {
     })
 }
 
+fn android_debugging_path(input: &str) -> Result<String> {
+    let rest = input
+        .strip_prefix("ws://")
+        .ok_or("Android Chrome did not advertise a WebSocket debugging endpoint")?;
+    let (authority, path) = rest
+        .split_once('/')
+        .ok_or("Android Chrome debugging endpoint has no path")?;
+    // Chrome Android commonly advertises localhost without an explicit TCP port.
+    // Only the verified path is used; both HTTP and WebSocket traffic stays in the
+    // same selected device/socket tunnel, with no connection to this authority.
+    let authority = if authority.eq_ignore_ascii_case("localhost")
+        || authority == "127.0.0.1"
+        || authority == "[::1]"
+    {
+        format!("{authority}:80")
+    } else {
+        authority.to_owned()
+    };
+    let parsed = endpoint(&format!("ws://{authority}/{path}"), "ws://")?;
+    let valid = parsed.path == "/devtools/browser"
+        || parsed
+            .path
+            .strip_prefix("/devtools/browser/")
+            .is_some_and(|id| {
+                !id.is_empty()
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            });
+    if !valid {
+        return Err(
+            "Android Chrome discovery did not return a browser-level DevTools endpoint".into(),
+        );
+    }
+    Ok(parsed.path)
+}
+
 fn discover_endpoint(input: &str) -> Result<String> {
     let endpoint = endpoint(input, "http://")?;
     let mut socket = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
+    discover_stream(&mut socket, &endpoint.host)
+}
+
+fn discover_stream(socket: &mut TcpStream, host: &str) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let request = format!(
         "GET /json/version HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        endpoint.host
+        host
     );
-    write_all_deadline(&mut socket, request.as_bytes(), deadline)?;
+    write_all_deadline(socket, request.as_bytes(), deadline)?;
     let mut response = Vec::new();
     let mut buffer = [0; 4096];
     loop {
-        let count = read_some_deadline(&mut socket, &mut buffer, deadline)?;
+        let count = read_some_deadline(socket, &mut buffer, deadline)?;
         if count == 0 {
             break;
         }
@@ -824,8 +965,12 @@ struct WebSocket {
 impl WebSocket {
     fn connect(url: &str) -> Result<Self> {
         let endpoint = endpoint(url, "ws://")?;
-        let mut stream = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(5))
+        let stream = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
+        Self::connect_stream(stream, &endpoint.host, &endpoint.path)
+    }
+
+    fn connect_stream(mut stream: TcpStream, host: &str, path: &str) -> Result<Self> {
         stream.set_nodelay(true).map_err(|e| e.to_string())?;
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -839,7 +984,7 @@ impl WebSocket {
         let deadline = Instant::now() + Duration::from_secs(5);
         let request = format!(
             "GET {} HTTP/1.1\r\nHost: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
-            endpoint.path, endpoint.host, key
+            path, host, key
         );
         write_all_deadline(&mut stream, request.as_bytes(), deadline)?;
         let mut head = Vec::new();
@@ -1355,3 +1500,7 @@ mod tests {
         server.join().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/android_browser.rs"]
+mod android_browser_tests;

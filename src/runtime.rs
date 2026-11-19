@@ -3,12 +3,16 @@ use crate::{
     accessibility,
     android::Android,
     browser::Browser,
+    device_io,
     human::{Queue, Request},
     integrations::{self, ProcessManager},
+    ios::{self, Ios},
     json::{self, quote},
     language::{Call, Parser, Value},
     motion::{Curve, Motion, Point, Rng},
     platform::Desktop,
+    serial::{self, SerialPort},
+    usb::{self, UsbDevice},
 };
 use std::{
     path::Path,
@@ -114,6 +118,38 @@ static SPECS: &[Spec] = &[
     spec!("android.key",false,["key":T:true]),
     spec!("android.type",false,["text":T:true]),
     spec!("android.start",false,["component":T:true]),
+    spec!("android.browser.sockets",true,["serial":T:true]),
+    spec!("browser.connect_android",false,["serial":T:true,"socket":T:false]),
+    spec!("ios.connect",true,["endpoint":T:true,"session":T:false]),
+    spec!("ios.status", true, []),
+    spec!("ios.screen", true, []),
+    spec!("ios.snapshot", true, []),
+    spec!("ios.source",true,["format":T:false,"raw":B:false]),
+    spec!("ios.capture",true,["path":T:true]),
+    spec!("ios.session_start",false,["bundle":T:false,"replace":B:false]),
+    spec!("ios.session_end", false, []),
+    spec!("ios.tap",false,["x":N:true,"y":N:true]),
+    spec!("ios.swipe",false,["x1":N:true,"y1":N:true,"x2":N:true,"y2":N:true,"duration":I:false]),
+    spec!("ios.type",false,["text":T:true]),
+    spec!("ios.key",false,["key":T:true]),
+    spec!("ios.launch",false,["bundle":T:true]),
+    spec!("ios.open_url",false,["url":T:true]),
+    spec!("serial.ports", true, []),
+    spec!("serial.open",false,["path":T:true,"baud":I:false]),
+    spec!("serial.status", true, []),
+    spec!("serial.read",true,["length":I:false,"timeout":I:false]),
+    spec!("serial.write",false,["text":T:false,"base64":T:false,"timeout":I:false]),
+    spec!("serial.close", false, []),
+    spec!("usb.devices", true, []),
+    spec!("usb.open",false,["bus":I:true,"address":I:true,"vendor_id":I:true,"product_id":I:true,"interface":I:false]),
+    spec!("usb.status", true, []),
+    spec!("usb.bulk_read",false,["endpoint":I:true,"length":I:false,"timeout":I:false]),
+    spec!("usb.bulk_write",false,["endpoint":I:true,"base64":T:true,"timeout":I:false]),
+    spec!("usb.interrupt_read",false,["endpoint":I:true,"length":I:false,"timeout":I:false]),
+    spec!("usb.interrupt_write",false,["endpoint":I:true,"base64":T:true,"timeout":I:false]),
+    spec!("usb.control_read",false,["request_type":I:true,"request":I:true,"value":I:false,"index":I:false,"length":I:false,"timeout":I:false]),
+    spec!("usb.control_write",false,["request_type":I:true,"request":I:true,"value":I:false,"index":I:false,"base64":T:true,"timeout":I:false]),
+    spec!("usb.close", false, []),
 ];
 
 pub fn schema() -> String {
@@ -179,6 +215,25 @@ fn range(call: &Call<'_>, name: &str, default: i64, min: i64, max: i64) -> Resul
     } else {
         Ok(value)
     }
+}
+
+fn device_payload(call: &Call<'_>, allow_text: bool) -> Result<Vec<u8>, String> {
+    let has_text = call.get("text").is_some();
+    let has_base64 = call.get("base64").is_some();
+    if has_text == has_base64 || (has_text && !allow_text) {
+        return Err(
+            "device write requires exactly one of text or base64 (USB requires base64)".into(),
+        );
+    }
+    let bytes = if has_text {
+        text(call, "text", "")?.into_bytes()
+    } else {
+        device_io::decode_base64(&text(call, "base64", "")?)?
+    };
+    if bytes.len() > device_io::MAX_BYTES {
+        return Err("device payload exceeds 65536 bytes".into());
+    }
+    Ok(bytes)
 }
 
 fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, String> {
@@ -272,6 +327,94 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                 wait_budget = wait_budget.saturating_add(high as u64);
             }
 
+            "android.browser.sockets" | "browser.connect_android" => {
+                let socket = text(&call, "socket", "")?;
+                crate::android::validate_browser_options(
+                    &text(&call, "serial", "")?,
+                    call.get("socket").map(|_| socket.as_str()),
+                )?;
+            }
+            "ios.connect" => {
+                ios::validate_endpoint(&text(&call, "endpoint", "")?)?;
+                if call.get("session").is_some() {
+                    ios::validate_session(&text(&call, "session", "")?)?;
+                }
+            }
+            "ios.session_start" => {
+                if call.get("bundle").is_some() {
+                    ios::validate_bundle(&text(&call, "bundle", "")?)?;
+                }
+            }
+            "ios.launch" => ios::validate_bundle(&text(&call, "bundle", "")?)?,
+            "ios.open_url" => ios::validate_url(&text(&call, "url", "")?)?,
+            "ios.source" => ios::validate_source(
+                &text(&call, "format", "json")?,
+                boolean(&call, "raw", false),
+            )?,
+            "ios.capture" => ios::validate_output_path(Path::new(&text(&call, "path", "")?))?,
+            "ios.type" => ios::validate_text(&text(&call, "text", "")?)?,
+            "ios.key" => ios::validate_key(&text(&call, "key", "")?)?,
+            "ios.tap" => ios::validate_point(number(&call, "x", 0.0), number(&call, "y", 0.0))?,
+            "ios.swipe" => {
+                let duration = range(&call, "duration", 300, 1, 10_000)? as u64;
+                ios::validate_swipe(
+                    number(&call, "x1", 0.0),
+                    number(&call, "y1", 0.0),
+                    number(&call, "x2", 0.0),
+                    number(&call, "y2", 0.0),
+                    duration,
+                )?;
+                wait_budget = wait_budget.saturating_add(duration);
+            }
+            "serial.open" => {
+                serial::validate_path(&text(&call, "path", "")?)?;
+                serial::validate_baud(range(&call, "baud", 115200, 1, u32::MAX as i64)? as u32)?;
+            }
+            "serial.read" | "serial.write" => {
+                let timeout = range(&call, "timeout", 1000, 1, 30_000)?;
+                wait_budget = wait_budget.saturating_add(timeout as u64);
+                if call.name == "serial.read" {
+                    range(&call, "length", 4096, 1, device_io::MAX_BYTES as i64)?;
+                } else {
+                    device_payload(&call, true)?;
+                }
+            }
+            "usb.open" => {
+                range(&call, "bus", 0, 0, 255)?;
+                range(&call, "address", 0, 1, 127)?;
+                range(&call, "vendor_id", 0, 0, 65535)?;
+                range(&call, "product_id", 0, 0, 65535)?;
+                range(&call, "interface", 0, 0, 255)?;
+            }
+            "usb.bulk_read" | "usb.bulk_write" | "usb.interrupt_read" | "usb.interrupt_write" => {
+                let input = call.name.ends_with("_read");
+                let endpoint = range(&call, "endpoint", 0, 0, 255)? as u8;
+                usb::validate_endpoint(endpoint, input)?;
+                let timeout = range(&call, "timeout", 1000, 1, 30_000)?;
+                wait_budget = wait_budget.saturating_add(timeout as u64);
+                if input {
+                    range(&call, "length", 4096, 1, device_io::MAX_BYTES as i64)?;
+                } else {
+                    device_payload(&call, false)?;
+                }
+            }
+            "usb.control_read" | "usb.control_write" => {
+                let input = call.name.ends_with("_read");
+                let request_type = range(&call, "request_type", 0, 0, 255)? as u8;
+                if (request_type & 0x80 != 0) != input {
+                    return Err("USB control direction does not match the operation".into());
+                }
+                range(&call, "request", 0, 0, 255)?;
+                range(&call, "value", 0, 0, 65535)?;
+                range(&call, "index", 0, 0, 65535)?;
+                let timeout = range(&call, "timeout", 1000, 1, 30_000)?;
+                wait_budget = wait_budget.saturating_add(timeout as u64);
+                if input {
+                    range(&call, "length", 64, 0, 65535)?;
+                } else {
+                    usb::validate_control_length(device_payload(&call, false)?.len())?;
+                }
+            }
             "android.connect" => {
                 let mode = text(&call, "mode", "foreground")?;
                 let display = range(&call, "display", 0, 0, u32::MAX as i64)?;
@@ -399,6 +542,9 @@ pub struct Runtime {
     desktop: Option<Desktop>,
     browser: Option<Browser>,
     android: Option<Android>,
+    ios: Option<Ios>,
+    serial: Option<SerialPort>,
+    usb: Option<UsbDevice>,
     processes: ProcessManager,
 }
 impl Runtime {
@@ -414,9 +560,9 @@ impl Runtime {
             .ok_or_else(|| "desktop is unavailable".into())
     }
     fn browser(&mut self) -> Result<&mut Browser, String> {
-        self.browser
-            .as_mut()
-            .ok_or_else(|| "use browser.launch or browser.connect first".into())
+        self.browser.as_mut().ok_or_else(|| {
+            "use browser.launch, browser.connect or browser.connect_android first".into()
+        })
     }
 
     fn android(&self) -> Result<&Android, String> {
@@ -424,18 +570,36 @@ impl Runtime {
             .as_ref()
             .ok_or_else(|| "use android.connect first".into())
     }
+
+    fn ios(&mut self) -> Result<&mut Ios, String> {
+        self.ios
+            .as_mut()
+            .ok_or_else(|| "use ios.connect first".into())
+    }
+    fn serial(&mut self) -> Result<&mut SerialPort, String> {
+        self.serial
+            .as_mut()
+            .ok_or_else(|| "use serial.open first".into())
+    }
+    fn usb(&self) -> Result<&UsbDevice, String> {
+        self.usb.as_ref().ok_or_else(|| "use usb.open first".into())
+    }
+
     pub fn capabilities(&mut self) -> String {
         let desktop = match self.desktop() {
             Ok(d) => d.capabilities(),
             Err(e) => format!("{{\"available\":false,\"reason\":{}}}", quote(&e)),
         };
         format!(
-            "{{\"version\":{},\"platform\":{},\"architecture\":{},\"desktop\":{},\"browser_connected\":{},\"harnesses\":{},\"transports\":[\"stdio\",\"http\",\"unix-socket\"],\"core\":{{\"no_std\":true,\"allocations\":0}},\"limits\":{{\"steps\":256,\"script_bytes\":1048576,\"wait_ms\":60000}}}}",
+            "{{\"version\":{},\"platform\":{},\"architecture\":{},\"desktop\":{},\"browser_connected\":{},\"ios_connected\":{},\"serial_connected\":{},\"usb_connected\":{},\"mobile\":{{\"android_browser\":\"native ADB tunnel, owned Chrome tab in existing profile\",\"ios\":\"explicit local WebDriverAgent endpoint; real device not validated\"}},\"device_io\":{{\"serial\":\"native 8N1, bounded I/O\",\"usb\":\"system libusb; explicit VID/PID/interface; no kernel-driver detach\"}},\"harnesses\":{},\"transports\":[\"stdio\",\"http\",\"unix-socket\"],\"core\":{{\"no_std\":true,\"allocations\":0}},\"limits\":{{\"steps\":256,\"script_bytes\":1048576,\"wait_ms\":60000}}}}",
             quote(crate::VERSION),
             quote(std::env::consts::OS),
             quote(std::env::consts::ARCH),
             desktop,
             self.browser.is_some(),
+            self.ios.is_some(),
+            self.serial.is_some(),
+            self.usb.is_some(),
             integrations::installed_harnesses()
         )
     }
@@ -770,6 +934,152 @@ impl Runtime {
             "accessibility.set_text" => {
                 accessibility::set_text(&text(c, "path", "")?, &text(c, "text", "")?)
             }
+
+            "android.browser.sockets" => Android::browser_sockets(&text(c, "serial", "")?),
+            "browser.connect_android" => {
+                self.browser = None;
+                let socket = text(c, "socket", "")?;
+                self.browser = Some(Browser::connect_android(
+                    &text(c, "serial", "")?,
+                    c.get("socket").map(|_| socket.as_str()),
+                )?);
+                Ok("{\"connected\":true,\"backend\":\"adb-native-tunnel\",\"scope\":\"owned_chrome_tab\",\"isolated_profile\":false}".into())
+            }
+            "ios.connect" => {
+                self.ios = None;
+                let session = text(c, "session", "")?;
+                let (ios, status) = Ios::connect_with_status(
+                    &text(c, "endpoint", "")?,
+                    c.get("session").map(|_| session.as_str()),
+                )?;
+                self.ios = Some(ios);
+                Ok(status)
+            }
+            "ios.status" => self.ios()?.status(),
+            "ios.screen" => self.ios()?.screen(),
+            "ios.snapshot" => self.ios()?.snapshot(),
+            "ios.source" => self
+                .ios()?
+                .source_with_options(&text(c, "format", "json")?, boolean(c, "raw", false)),
+            "ios.capture" => self.ios()?.screenshot(Path::new(&text(c, "path", "")?)),
+            "ios.session_start" => {
+                let bundle = text(c, "bundle", "")?;
+                self.ios()?.session_start(
+                    c.get("bundle").map(|_| bundle.as_str()),
+                    boolean(c, "replace", false),
+                )
+            }
+            "ios.session_end" => self.ios()?.session_end(),
+            "ios.tap" => self.ios()?.tap(number(c, "x", 0.0), number(c, "y", 0.0)),
+            "ios.swipe" => self.ios()?.swipe(
+                number(c, "x1", 0.0),
+                number(c, "y1", 0.0),
+                number(c, "x2", 0.0),
+                number(c, "y2", 0.0),
+                integer(c, "duration", 300) as u64,
+            ),
+            "ios.type" => self.ios()?.type_text(&text(c, "text", "")?),
+            "ios.key" => self.ios()?.key(&text(c, "key", "")?),
+            "ios.launch" => self.ios()?.launch(&text(c, "bundle", "")?),
+            "ios.open_url" => self.ios()?.open_url(&text(c, "url", "")?),
+            "serial.ports" => serial::ports(),
+            "serial.open" => {
+                if let Some(mut previous) = self.serial.take() {
+                    previous.close()?;
+                }
+                let port =
+                    SerialPort::open(&text(c, "path", "")?, integer(c, "baud", 115200) as u32)?;
+                let status = port.status();
+                self.serial = Some(port);
+                Ok(status)
+            }
+            "serial.status" => Ok(self.serial()?.status()),
+            "serial.read" => Ok(self
+                .serial()?
+                .read(
+                    integer(c, "length", 4096) as usize,
+                    integer(c, "timeout", 1000) as u32,
+                )?
+                .json()),
+            "serial.write" => {
+                let bytes = device_payload(c, true)?;
+                let count = self
+                    .serial()?
+                    .write(&bytes, integer(c, "timeout", 1000) as u32)?;
+                Ok(format!("{{\"bytes_written\":{count},\"complete\":true}}"))
+            }
+            "serial.close" => {
+                if let Some(mut port) = self.serial.take() {
+                    port.close()?;
+                }
+                done()
+            }
+            "usb.devices" => usb::devices(),
+            "usb.open" => {
+                if let Some(previous) = self.usb.take() {
+                    previous.close()?;
+                }
+                let device = UsbDevice::open(
+                    integer(c, "bus", 0) as u8,
+                    integer(c, "address", 0) as u8,
+                    integer(c, "vendor_id", 0) as u16,
+                    integer(c, "product_id", 0) as u16,
+                    integer(c, "interface", 0) as u8,
+                )?;
+                let status = device.status();
+                self.usb = Some(device);
+                Ok(status)
+            }
+            "usb.status" => Ok(self.usb()?.status()),
+            "usb.bulk_read" | "usb.interrupt_read" => Ok(self
+                .usb()?
+                .read(
+                    integer(c, "endpoint", 0) as u8,
+                    integer(c, "length", 4096) as usize,
+                    integer(c, "timeout", 1000) as u32,
+                    c.name == "usb.interrupt_read",
+                )?
+                .json()),
+            "usb.bulk_write" | "usb.interrupt_write" => {
+                let bytes = device_payload(c, false)?;
+                let count = self.usb()?.write(
+                    integer(c, "endpoint", 0) as u8,
+                    &bytes,
+                    integer(c, "timeout", 1000) as u32,
+                    c.name == "usb.interrupt_write",
+                )?;
+                Ok(format!("{{\"bytes_written\":{count},\"complete\":true}}"))
+            }
+            "usb.control_read" => Ok(self
+                .usb()?
+                .control_read(
+                    integer(c, "request_type", 0) as u8,
+                    integer(c, "request", 0) as u8,
+                    integer(c, "value", 0) as u16,
+                    integer(c, "index", 0) as u16,
+                    integer(c, "length", 64) as usize,
+                    integer(c, "timeout", 1000) as u32,
+                )?
+                .json()),
+            "usb.control_write" => {
+                let bytes = device_payload(c, false)?;
+                let count = self.usb()?.control_write(
+                    integer(c, "request_type", 0) as u8,
+                    integer(c, "request", 0) as u8,
+                    integer(c, "value", 0) as u16,
+                    integer(c, "index", 0) as u16,
+                    &bytes,
+                    integer(c, "timeout", 1000) as u32,
+                )?;
+                Ok(format!("{{\"bytes_written\":{count},\"complete\":true}}"))
+            }
+            "usb.close" => {
+                if let Some(device) = self.usb.take() {
+                    device.close()?;
+                }
+                done()
+            }
+
             "android.devices" => Android::devices(),
             "android.connect" => {
                 // A failed retarget must not leave an earlier device selected.

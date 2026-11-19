@@ -60,8 +60,8 @@ const TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: "zuse.screenshot",
-        description: "Return a real PNG image from the desktop, a window, or the connected browser. Optional path preserves the screenshot.",
-        schema: r#"{"type":"object","properties":{"source":{"type":"string","enum":["desktop","browser"]},"window":{"type":"string"},"path":{"type":"string"}},"additionalProperties":false}"#,
+        description: "Return a real PNG image from the desktop, a window, the connected browser, or an explicitly connected Android/iOS device. Optional path preserves the screenshot.",
+        schema: r#"{"type":"object","properties":{"source":{"type":"string","enum":["desktop","browser","android","ios"]},"window":{"type":"string"},"path":{"type":"string"}},"additionalProperties":false}"#,
     },
     ToolDef {
         name: "zuse.human.pending",
@@ -438,6 +438,8 @@ impl Engine {
                                     quote(&arg(args, "window", "")?)
                                 ),
                                 "browser" => format!("browser.capture(path={})", quote(path)),
+                                "android" => format!("android.capture(path={})", quote(path)),
+                                "ios" => format!("ios.capture(path={})", quote(path)),
                                 _ => return Err("unknown screenshot source".into()),
                             };
                             let result = self.runtime.execute(&code, self.options)?;

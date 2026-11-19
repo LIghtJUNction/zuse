@@ -54,7 +54,7 @@ Programs use named calls, for example:
   human.request(kind="login", message="Please sign in in the local browser")
 
 Output is JSON. Errors and interactive prompts go to stderr.
-The shell retains browser sessions and harness processes until it exits.
+The shell retains browser/mobile sessions, device handles and harnesses until it exits.
 "#;
 
 fn read_source(path: &str) -> Result<String, String> {

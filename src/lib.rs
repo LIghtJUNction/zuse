@@ -26,4 +26,16 @@ pub mod platform;
 #[cfg(feature = "std")]
 pub mod runtime;
 
+#[cfg(feature = "std")]
+pub mod device_io;
+
+#[cfg(feature = "std")]
+pub mod ios;
+
+#[cfg(feature = "std")]
+pub mod serial;
+
+#[cfg(feature = "std")]
+pub mod usb;
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

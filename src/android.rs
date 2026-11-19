@@ -315,6 +315,24 @@ pub struct Android {
     display: u32,
 }
 impl Android {
+    /// List observed Chrome DevTools socket names for one explicitly chosen device.
+    /// Does not start Chrome, inspect tabs, create a forward, or select a display.
+    pub fn browser_sockets(serial: &str) -> Result<String> {
+        Self::browser_sockets_at(endpoint()?, serial)
+    }
+
+    pub fn browser_sockets_at(address: SocketAddr, serial: &str) -> Result<String> {
+        let sockets = browser_sockets_until(address, serial, Deadline::operation())?;
+        Ok(format!(
+            r#"{{"backend":"adb-native-tunnel","sockets":[{}],"scope":"chrome","existingTabsRead":false}}"#,
+            sockets
+                .iter()
+                .map(|socket| quote(socket))
+                .collect::<Vec<_>>()
+                .join(",")
+        ))
+    }
+
     pub fn devices() -> Result<String> {
         Self::devices_at(endpoint()?)
     }
@@ -812,6 +830,149 @@ fn surface_for(line: &str, displays: &str, surfaces: &str) -> Result<u64> {
     }
     matched.ok_or("selected virtual display has no unambiguous SurfaceFlinger capture ID".into())
 }
+/// Validate explicit mobile-browser arguments without connecting to a device.
+pub(crate) fn validate_browser_options(serial: &str, socket: Option<&str>) -> Result<()> {
+    if serial.is_empty()
+        || serial.len() > 256
+        || !serial.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return Err(
+            "Android browser requires an explicit nonempty serial of at most 256 ASCII bytes"
+                .into(),
+        );
+    }
+    if socket.is_some_and(|name| !chrome_socket_name(name)) {
+        return Err("Android browser socket must be a Chrome DevTools abstract socket name".into());
+    }
+    Ok(())
+}
+
+fn chrome_socket_name(name: &str) -> bool {
+    if name == "chrome_devtools_remote" {
+        return true;
+    }
+    name.len() <= 107
+        && name
+            .strip_prefix("chrome_devtools_remote_")
+            .is_some_and(|suffix| {
+                !suffix.is_empty()
+                    && suffix.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
+                    })
+            })
+}
+
+/// Observe listening Chrome sockets only; no page target is enumerated.
+/// ADB's documented transport/localabstract services carry the later tunnel:
+/// https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/docs/dev/services.md
+fn browser_sockets_until(
+    address: SocketAddr,
+    serial: &str,
+    deadline: Deadline,
+) -> Result<Vec<String>> {
+    validate_browser_options(serial, None)?;
+    let selected = inventory(address, deadline)?
+        .into_iter()
+        .find(|device| device.serial == serial)
+        .ok_or("requested Android serial is not connected")?;
+    if selected.state != "device" {
+        return Err(format!("Android device state is {}", selected.state));
+    }
+    let bytes = shell(address, serial, "cat /proc/net/unix", deadline)?.success()?;
+    if bytes.len() > 1024 * 1024 {
+        return Err("Android socket inventory exceeds 1 MiB".into());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| "Android socket inventory is not UTF-8")?;
+    let mut sockets = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        // /proc/net/unix: Num RefCount Protocol Flags Type St Inode Path.
+        // Only listening SOCK_STREAM abstract sockets are eligible.
+        if fields.len() != 8
+            || u32::from_str_radix(fields[3], 16)
+                .ok()
+                .is_none_or(|flags| flags & 0x10000 == 0)
+            || fields[4] != "0001"
+            || fields[5] != "01"
+        {
+            continue;
+        }
+        let Some(name) = fields[7].strip_prefix('@') else {
+            continue;
+        };
+        if chrome_socket_name(name) && !sockets.iter().any(|other| other == name) {
+            if sockets.len() == 64 {
+                return Err("Android Chrome socket inventory exceeds 64 candidates".into());
+            }
+            sockets.push(name.to_owned());
+        }
+    }
+    sockets.sort();
+    deadline.check()?;
+    Ok(sockets)
+}
+
+/// A selected device/socket, without an ADB forward or a listening host port.
+/// Every opened stream belongs to the caller and closes with that caller.
+pub(crate) struct DevToolsTunnel {
+    address: SocketAddr,
+    serial: String,
+    socket: String,
+}
+
+impl DevToolsTunnel {
+    pub(crate) fn connect(serial: &str, socket: Option<&str>) -> Result<Self> {
+        Self::connect_at(endpoint()?, serial, socket)
+    }
+
+    pub(crate) fn connect_at(
+        address: SocketAddr,
+        serial: &str,
+        socket: Option<&str>,
+    ) -> Result<Self> {
+        validate_browser_options(serial, socket)?;
+        let sockets = browser_sockets_until(address, serial, Deadline::operation())?;
+        let selected = if let Some(socket) = socket {
+            sockets
+                .into_iter()
+                .find(|candidate| candidate == socket)
+                .ok_or("requested Chrome DevTools socket was not observed on the selected device")?
+        } else {
+            if sockets.is_empty() {
+                return Err("no Chrome DevTools socket on the selected device; Chrome must already be running; WebView-only debugging is unsupported".into());
+            }
+            if sockets.len() != 1 {
+                return Err("multiple Chrome DevTools sockets; select socket explicitly".into());
+            }
+            sockets
+                .into_iter()
+                .next()
+                .ok_or("missing Chrome DevTools socket")?
+        };
+        Ok(Self {
+            address,
+            serial: serial.to_owned(),
+            socket: selected,
+        })
+    }
+
+    pub(crate) fn open(&self) -> Result<TcpStream> {
+        let deadline = Deadline::operation();
+        let mut stream = connect_socket(self.address, deadline)?;
+        request(
+            &mut stream,
+            &format!("host:transport:{}", self.serial),
+            deadline,
+        )?;
+        request(
+            &mut stream,
+            &format!("localabstract:{}", self.socket),
+            deadline,
+        )?;
+        Ok(stream)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
