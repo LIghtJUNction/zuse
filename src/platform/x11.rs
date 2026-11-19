@@ -1,3 +1,4 @@
+use super::super::dylib::Library;
 use super::super::{Result, image_metadata, quote, split_chord, validate_text};
 use std::{
     ffi::{CStr, CString, c_char, c_int, c_uint, c_ulong, c_void},
@@ -8,42 +9,6 @@ use std::{
 type Dpy = *mut c_void;
 type Window = c_ulong;
 type Atom = c_ulong;
-unsafe extern "C" {
-    fn dlopen(name: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
-    fn dlclose(handle: *mut c_void) -> c_int;
-}
-struct Library(*mut c_void);
-impl Library {
-    fn open(name: &CStr) -> Result<Self> {
-        // SAFETY: name is NUL-terminated and flags are RTLD_NOW | RTLD_LOCAL.
-        let p = unsafe { dlopen(name.as_ptr(), 2) };
-        if p.is_null() {
-            Err(format!(
-                "native library {} is unavailable",
-                name.to_string_lossy()
-            ))
-        } else {
-            Ok(Self(p))
-        }
-    }
-    unsafe fn symbol<T: Copy>(&self, name: &CStr) -> Result<T> {
-        // SAFETY: caller declares the exact documented symbol signature.
-        let p = unsafe { dlsym(self.0, name.as_ptr()) };
-        if p.is_null() {
-            Err(format!("missing native symbol {}", name.to_string_lossy()))
-        } else {
-            Ok(unsafe { std::mem::transmute_copy(&p) })
-        }
-    }
-}
-impl Drop for Library {
-    fn drop(&mut self) {
-        unsafe {
-            dlclose(self.0);
-        }
-    }
-}
 macro_rules! api {
     ($($name:ident($($arg:ty),*)->$ret:ty;)+) => {
         #[allow(non_snake_case)]

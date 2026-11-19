@@ -102,6 +102,10 @@ def main():
         (p / "fixture.c").write_text(FIXTURE)
         subprocess.run(["gcc", str(p / "fixture.c"), "-o", str(p / "fixture"), "-lX11"], check=True)
         subprocess.run(["cargo", "build", "--manifest-path", str(p / "Cargo.toml"), "--offline"], check=True)
+        metadata = json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--manifest-path", str(p / "Cargo.toml"),
+             "--no-deps", "--format-version", "1", "--offline"], text=True))
+        harness = pathlib.Path(metadata["target_directory"]) / "debug/native-check"
         fixture = None
         xvfb = subprocess.Popen(
             ["Xvfb", "-displayfd", "1", "-screen", "0", "640x480x24", "-nolisten", "tcp"],
@@ -124,7 +128,7 @@ def main():
                 window_id = lines[0].split("=")[1]
                 time.sleep(0.05)
                 subprocess.run(
-                    [str(p / "target/debug/native-check"), window_id, str(p)],
+                    [str(harness), window_id, str(p)],
                     env=env, check=True, timeout=30)
                 time.sleep(0.1)
                 events = (p / "events.log").read_text()

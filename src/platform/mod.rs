@@ -1,5 +1,7 @@
 //! Operating-system desktop adapters.
 use std::path::Path;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) mod dylib;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

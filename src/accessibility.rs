@@ -80,6 +80,7 @@ fn validate_path(path: &str) -> Result<()> {
 #[cfg(target_os = "linux")]
 mod native {
     use super::*;
+    use crate::platform::dylib::Library;
     use core::ffi::{c_char, c_int, c_void};
     use std::{
         ffi::{CStr, CString},
@@ -100,11 +101,6 @@ mod native {
         y: c_int,
         width: c_int,
         height: c_int,
-    }
-    #[link(name = "dl")]
-    unsafe extern "C" {
-        fn dlopen(name: *const c_char, flags: c_int) -> Obj;
-        fn dlsym(handle: Obj, name: *const c_char) -> Obj;
     }
     // AT-SPI owns process-global D-Bus state; its library stays loaded.
     // Every call from this module is serialized by ACCESS.
@@ -140,54 +136,46 @@ mod native {
     }
     impl Api {
         fn open() -> Result<Self> {
-            // SAFETY: static NUL-terminated soname, RTLD_NOW. Keep the handle loaded.
-            let handle = unsafe { dlopen(c"libatspi.so.0".as_ptr(), 2) };
-            if handle.is_null() {
-                return Err("AT-SPI unavailable; install at-spi2-core and enable the session accessibility bus".into());
-            }
-            unsafe fn symbol<T: Copy>(handle: Obj, name: &CStr) -> Result<T> {
-                // SAFETY: every T used below matches this symbol's public C ABI.
-                let pointer = unsafe { dlsym(handle, name.as_ptr()) };
-                if pointer.is_null() {
-                    return Err(format!("AT-SPI symbol missing: {}", name.to_string_lossy()));
-                }
-                if core::mem::size_of::<T>() != core::mem::size_of::<Obj>() {
-                    return Err("unsupported function pointer ABI".into());
-                }
-                Ok(unsafe { core::mem::transmute_copy(&pointer) })
-            }
-            // SAFETY: signatures follow the libatspi public C headers.
+            let library = Library::open(c"libatspi.so.0").map_err(|error| {
+                format!("AT-SPI unavailable; install at-spi2-core and enable the session accessibility bus: {error}")
+            })?;
+            // SAFETY: signatures follow the libatspi public C headers. Resolve
+            // every export before initializing its process-global D-Bus state.
             unsafe {
-                let init: unsafe extern "C" fn() -> c_int = symbol(handle, c"atspi_init")?;
+                let init: unsafe extern "C" fn() -> c_int = library.symbol(c"atspi_init")?;
                 let set_timeout: unsafe extern "C" fn(c_int, c_int) =
-                    symbol(handle, c"atspi_set_timeout")?;
+                    library.symbol(c"atspi_set_timeout")?;
+                let api = Self {
+                    desktop: library.symbol(c"atspi_get_desktop")?,
+                    name: library.symbol(c"atspi_accessible_get_name")?,
+                    role: library.symbol(c"atspi_accessible_get_role_name")?,
+                    count: library.symbol(c"atspi_accessible_get_child_count")?,
+                    child: library.symbol(c"atspi_accessible_get_child_at_index")?,
+                    text_iface: library.symbol(c"atspi_accessible_get_text_iface")?,
+                    text_count: library.symbol(c"atspi_text_get_character_count")?,
+                    text: library.symbol(c"atspi_text_get_text")?,
+                    action_iface: library.symbol(c"atspi_accessible_get_action_iface")?,
+                    actions_count: library.symbol(c"atspi_action_get_n_actions")?,
+                    action_name: library.symbol(c"atspi_action_get_action_name")?,
+                    do_action: library.symbol(c"atspi_action_do_action")?,
+                    component_iface: library.symbol(c"atspi_accessible_get_component_iface")?,
+                    extents: library.symbol(c"atspi_component_get_extents")?,
+                    grab_focus: library.symbol(c"atspi_component_grab_focus")?,
+                    editable_iface: library.symbol(c"atspi_accessible_get_editable_text_iface")?,
+                    set_contents: library.symbol(c"atspi_editable_text_set_text_contents")?,
+                    free: library.symbol(c"g_free")?,
+                    unref: library.symbol(c"g_object_unref")?,
+                    error_free: library.symbol(c"g_error_free")?,
+                };
+                // atspi_init can create process-global state even on failure.
+                // Pin before invoking it so callbacks never outlive the image.
+                library.pin();
                 let status = init();
                 if status != 0 && status != 1 {
                     return Err(format!("AT-SPI initialization failed ({status})"));
                 }
                 set_timeout(500, 1000);
-                Ok(Self {
-                    desktop: symbol(handle, c"atspi_get_desktop")?,
-                    name: symbol(handle, c"atspi_accessible_get_name")?,
-                    role: symbol(handle, c"atspi_accessible_get_role_name")?,
-                    count: symbol(handle, c"atspi_accessible_get_child_count")?,
-                    child: symbol(handle, c"atspi_accessible_get_child_at_index")?,
-                    text_iface: symbol(handle, c"atspi_accessible_get_text_iface")?,
-                    text_count: symbol(handle, c"atspi_text_get_character_count")?,
-                    text: symbol(handle, c"atspi_text_get_text")?,
-                    action_iface: symbol(handle, c"atspi_accessible_get_action_iface")?,
-                    actions_count: symbol(handle, c"atspi_action_get_n_actions")?,
-                    action_name: symbol(handle, c"atspi_action_get_action_name")?,
-                    do_action: symbol(handle, c"atspi_action_do_action")?,
-                    component_iface: symbol(handle, c"atspi_accessible_get_component_iface")?,
-                    extents: symbol(handle, c"atspi_component_get_extents")?,
-                    grab_focus: symbol(handle, c"atspi_component_grab_focus")?,
-                    editable_iface: symbol(handle, c"atspi_accessible_get_editable_text_iface")?,
-                    set_contents: symbol(handle, c"atspi_editable_text_set_text_contents")?,
-                    free: symbol(handle, c"g_free")?,
-                    unref: symbol(handle, c"g_object_unref")?,
-                    error_free: symbol(handle, c"g_error_free")?,
-                })
+                Ok(api)
             }
         }
         fn error(&self, error: ErrPtr) -> Result<()> {

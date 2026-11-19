@@ -17,12 +17,13 @@ path = "src/lib.rs"
 
 [features]
 default = ["std"]
-std = ["dep:zmcpio", "dep:zclap", "dep:z64"]
+std = ["dep:zmcpio", "dep:zclap", "dep:z64", "dep:zsys"]
 
 [dependencies]
 zmcpio = { version = "=0.4.0", default-features = false, features = ["std"], optional = true }
 zclap = { version = "=0.1.4", default-features = false, optional = true }
 z64 = { version = "=0.1.2", default-features = false, optional = true }
+zsys = { version = "=0.1.1", default-features = false, features = ["dylib"], optional = true }
 
 [[bin]]
 name = "zuse"
