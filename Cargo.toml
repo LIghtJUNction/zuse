@@ -1,6 +1,6 @@
 [package]
 name = "zuse-computer"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.100"
 description = "Agent-native computer use shell, native desktop control and MCP server"
