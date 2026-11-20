@@ -1,0 +1,557 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-20T00:46:41.691221+00:00",
+  "final_source_acceptance_commit": "a6dc1b0a47de4327aa6407a0881da547811c41eb",
+  "production_source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+  "production_and_completed_fixture_inputs_unchanged": true,
+  "unchanged_paths": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "src",
+    "tests/native_x11_utf8.py",
+    "tests/native_x11_utf8_fixture.c",
+    "tests/native_serial.py",
+    "tests/native_usb.py"
+  ],
+  "all_final_required_gates_passed": true,
+  "final_results": [
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "name": "format",
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.249,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "name": "rust-default",
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "test",
+        "--locked",
+        "-j",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 40.083,
+      "stdout": "\nrunning 98 tests\ntest accessibility::tests::paths_and_bounds_are_checked_before_native_calls ... ok\ntest android::tests::capture_mapping_is_display_specific ... ok\ntest android::tests::modes_do_not_fall_back ... ok\ntest android::tests::focus_is_scoped_by_display_and_window_token ... ok\ntest android::tests::missing_or_ambiguous_focus_is_unknown ... ok\ntest android::tests::rejects_remote_adb_server ... ok\ntest android::tests::virtual_capture_rejects_ambiguous_and_prefix_names ... ok\ntest android::tests::zero_exit_does_not_hide_command_errors ... ok\ntest android::tests::quote_shell_arguments ... ok\ntest browser::android_browser_tests::android_browser_discovery_accepts_only_browser_paths_on_loopback ... ok\ntest android::tests::adb_shell_protocol_and_targeting ... ok\ntest android::tests::unavailable_peer_still_requires_explicit_serial ... ok\ntest browser::android_browser_tests::android_browser_requires_explicit_valid_arguments_before_io ... ok\ntest browser::tests::endpoint_is_loopback_only ... ok\ntest browser::tests::quoted_selector_stays_data ... ok\ntest browser::tests::frames_allow_fragmented_text_and_ping ... ok\ntest browser::tests::websocket_accept_vector ... ok\ntest integrations::tests::arguments_are_literal_and_quotes_are_bounded ... ok\ntest integrations::tests::configuration_values_reject_invalid_input_before_execution ... ok\ntest integrations::tests::incremental_output_preserves_split_utf8 ... ok\ntest browser::tests::frame_size_is_rejected_before_allocation ... ok\ntest browser::tests::base64_round_trip_and_padding ... ok\ntest ios::tests::chunked_http_and_prefix_endpoints_are_decoded_without_waiting_for_eof ... ok\ntest ios::tests::browser_url_authority_validation_rejects_invalid_targets_and_preserves_valid_urls ... ok\ntest browser::android_browser_tests::android_browser_rejects_unauthorized_device_before_socket_access ... ok\ntest integrations::tests::tail_is_bounded_and_reports_loss ... ok\ntest browser::android_browser_tests::android_browser_lists_listening_chrome_sockets_without_tabs ... ok\ntest browser::android_browser_tests::android_browser_rejects_external_discovery_before_websocket_or_tab_creation ... ok\ntest ios::tests::attached_external_session_is_never_deleted_by_end_or_drop ... ok\ntest ios::tests::pure_validation_rejects_ambiguous_targets_and_preserves_unicode ... ok\ntest integrations::tests::manager_drop_reaps_its_child ... ok\ntest ios::tests::malformed_action_response_is_not_success_or_an_automatic_retry ... ok\ntest ios::tests::source_redaction_rejects_ambiguous_roles_and_malformed_node_structure ... ok\ntest browser::android_browser_tests::android_browser_discovery_retains_bounded_eof_fallback_without_length ... ok\ntest browser::android_browser_tests::android_browser_drop_closes_only_its_created_tab ... ok\ntest browser::android_browser_tests::android_browser_failed_creation_never_closes_unknown_tabs ... ok\ntest browser::android_browser_tests::android_browser_rejects_ambiguous_absent_and_webview_targets ... ok\ntest browser::android_browser_tests::android_browser_rejects_mismatched_owned_tab_information ... ok\ntest browser::android_browser_tests::android_browser_close_refusal_is_error_and_never_touches_other_targets ... ok\ntest platform::dylib::tests::missing_library_errors_include_the_requested_image ... ok\ntest browser::android_browser_tests::android_browser_discovery_uses_length_without_waiting_for_adb_eof ... ok\ntest platform::dylib::tests::symbols_validate_pointer_size_and_explicit_close_is_idempotent ... ok\ntest platform::linux::wayland::keymap::tests::accepts_unicode_and_the_three_text_controls ... ok\ntest platform::linux::wayland::keymap::tests::batch_limit_counts_unicode_characters_not_bytes ... ok\ntest platform::linux::wayland::keymap::tests::distinct_limit_uses_entire_xkb_code_range_without_dropping_next_char ... ok\ntest platform::linux::wayland::keymap::tests::empty_input_has_no_batches_and_iteration_is_fused ... ok\ntest platform::linux::wayland::keymap::tests::rejects_every_other_c0_c1_control_and_reports_late_errors ... ok\ntest platform::linux::wayland::keymap::tests::repeats_keep_codes_and_source_order ... ok\ntest platform::linux::wayland::keymap::tests::repeats_after_distinct_limit_still_fit_until_the_next_new_character ... ok\ntest platform::linux::wayland::state_tests::rejects_known_nonzero_or_unknown_states ... ok\ntest ios::tests::invalid_browser_url_is_rejected_before_an_earlier_connect_sends_a_request ... ok\ntest browser::android_browser_tests::android_browser_failed_attach_still_closes_created_tab ... ok\ntest ios::tests::source_text_is_valid_json_and_invalid_parameters_do_not_send_requests ... ok\ntest platform::linux::x11::tests::existing_unicode_symbols_need_no_mapping_change ... ok\ntest platform::linux::x11::tests::native_plan_requires_every_character_before_dispatch ... ok\ntest platform::linux::x11::tests::xkb_state_layout_matches_the_public_header ... ok\ntest platform::macos_focus::tests::focuses_only_the_first_matching_window_in_native_order ... ok\ntest ios::tests::mcp_ios_screenshot_returns_real_png_and_removes_its_temporary_output ... ok\ntest platform::macos_focus::tests::missing_target_and_empty_window_list_are_errors ... ok\ntest platform::macos_focus::tests::frontmost_failure_stops_before_enumerating_windows ... ok\ntest platform::macos_focus::tests::raise_failure_is_returned_without_trying_a_second_window ... ok\ntest platform::macos_focus::tests::unmatched_window_with_title_error_returns_the_native_error ... ok\ntest platform::macos_focus::tests::unreadable_unrelated_window_does_not_hide_a_later_match ... ok\ntest ios::tests::failed_session_creation_invalidates_the_previous_input_target ... ok\ntest platform::macos_focus::tests::window_owner_lives_through_raise_and_is_released_on_all_exits ... ok\ntest platform::macos_focus::tests::windows_query_failure_is_returned_without_querying_or_raising ... ok\ntest platform::png::tests::known_crc ... ok\ntest platform::windows_keyboard::tests::alt_shortcut_uses_system_messages_and_normal_final_alt_release ... ok\ntest browser::android_browser_tests::android_browser_owns_one_tab_and_never_requests_all_targets_or_forwards ... ok\ntest platform::windows_keyboard::tests::control_alt_chord_uses_nonsystem_messages_with_zero_context ... ok\ntest platform::windows_keyboard::tests::control_pressed_after_alt_uses_system_keyup_before_alt_release ... ok\ntest platform::linux::wayland::xkb::tests::resolves_exact_map_codes_and_rejects_missing_before_dispatch ... ok\ntest platform::windows_keyboard::tests::f10_is_a_system_key_without_alt ... ok\ntest platform::windows_keyboard::tests::alt_alone_clears_context_on_system_key_release ... ok\ntest platform::windows_keyboard::tests::foreground_key_parser_keeps_existing_alias_and_duplicate_behavior ... ok\ntest platform::windows_keyboard::tests::invalid_chords_are_rejected_before_native_mapping ... ok\ntest platform::windows_keyboard::tests::plain_chord_preserves_press_order_and_releases_in_reverse ... ok\ntest platform::windows_keyboard::tests::navigation_and_windows_keys_preserve_the_e0_extended_flag ... ok\ntest platform::windows_keyboard::tests::scan_mapping_is_snapshotted_once_and_invalid_maps_return_no_plan ... ok\ntest serial::tests::windows_serial_paths_reject_signed_malformed_and_out_of_range_names ... ok\ntest platform::windows_keyboard::tests::nonsystem_context_and_reserved_bits_are_zero_for_modifier_orders ... ok\ntest ios::tests::later_external_session_is_not_deleted_by_owned_cleanup ... ok\ntest ios::tests::read_only_connection_does_not_adopt_or_create_an_existing_session ... ok\ntest ios::tests::screenshot_requires_png_structure_and_failed_capture_preserves_the_destination ... ok\ntest serial::tests::windows_serial_paths_accept_decimal_ports_and_device_prefix ... ok\ntest ios::tests::unknown_active_session_requires_explicit_replacement ... ok\ntest ios::tests::explicit_replacement_and_owned_cleanup_follow_real_wda_routes ... ok\ntest ios::tests::structured_observations_redact_native_secure_fields_and_descendants ... ok\ntest ios::tests::wda_error_payload_is_failure_even_when_http_status_is_200 ... ok\ntest integrations::tests::managed_cat_round_trip_and_stop ... ok\ntest ios::tests::ambiguous_overlimit_and_truncated_http_responses_are_rejected ... ok\ntest ios::tests::unicode_touch_buttons_apps_and_urls_use_the_verified_protocol ... ok\ntest platform::linux::wayland::keymap::tests::byte_limit_is_checked_before_any_batches_are_executed ... ok\ntest browser::android_browser_tests::android_browser_discovery_rejects_short_or_ambiguous_http_framing ... ok\ntest integrations::tests::utility_deadline_cancels_owned_process ... ok\ntest browser::tests::partial_frame_reads_cannot_extend_deadline ... ok\ntest ios::tests::absolute_deadline_stops_trickled_action_responses_without_replay ... ok\ntest android::tests::deadline_includes_handshake_and_partial_payload_reads ... ok\n\ntest result: ok. 98 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 1 test\ntest native_atspi_observe_edit_action_and_redaction ... ignored, run through python3 tests/run_accessibility_native.py for an isolated fixture\n\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 3 tests\ntest printable_ascii_aliases_and_components_pass_preflight ... ok\ntest android_argument_errors_reject_the_complete_program ... ok\ntest failed_retarget_clears_the_previous_device ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\n\nrunning 1 test\ntest native_chromium_isolated_profile ... ignored, requires a local sandboxed Chromium; run explicitly with --ignored\n\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 17 tests\ntest motion_has_exact_endpoints_and_monotonic_timestamps ... ok\ntest malformed_escapes_and_surrogates_are_rejected_during_parse ... ok\ntest duplicate_arguments_and_positional_values_are_rejected ... ok\ntest immediate_motion_and_size_hint_are_consistent ... ok\ntest diagnostics_count_unicode_columns_and_crlf_lines ... ok\ntest motion_jitter_is_seeded_and_stays_within_envelope ... ok\ntest quotes_comments_and_semicolons_inside_values_stay_literal ... ok\ntest random_delay_bounds_seed_and_full_width_ranges ... ok\ntest motion_rejects_nonfinite_and_unbounded_work ... ok\ntest text_decode_capacity_is_transactional ... ok\ntest parse_named_calls_and_comments ... ok\ntest nonlinear_curves_change_velocity_and_bezier_changes_path ... ok\ntest syntax_rejects_trailing_garbage_and_fuses_after_error ... ok\ntest multiline_calls_accept_comments_and_a_trailing_comma ... ok\ntest text_decoding_preserves_unicode_and_escaped_controls ... ok\ntest numbers_are_strict_and_integer_spelling_is_preserved ... ok\ntest argument_and_input_limits_are_enforced ... ok\n\ntest result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n\nrunning 9 tests\ntest json_roundtrip_preserves_control_and_unicode ... ok\ntest read_only_denies_mutation_even_in_dry_run ... ok\ntest human_denial_cannot_resume_and_paths_are_bounded ... ok\ntest semantic_errors_are_caught_before_execution ... ok\ntest validates_whole_program_before_any_side_effect ... ok\ntest legacy_mcp_negotiates_and_rejects_invalid_tools ... ok\ntest human_handoff_requires_approval_and_is_consumed_once ... ok\ntest modern_mcp_lists_tools_and_executes_checks ... ok\ntest budgets_are_aggregate_and_explicit ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 6 tests\ntest android_swipes_spend_the_wait_budget ... ok\ntest dry_run_results_omit_text_payloads ... ok\ntest platform_argument_errors_fail_preflight ... ok\ntest password_target_is_checked_before_opening_a_prompt ... ok\ntest handoff_preserves_execution_limits_and_read_only ... ok\ntest operator_cli_respects_read_only_and_dry_run ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n\nrunning 1 test\ntest input ... ignored, run python3 tests/native_x11_utf8.py\n\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+      "stderr": "   Compiling zuse-computer v0.2.0 (<checkout>)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.32s\n     Running unittests src/lib.rs (target/debug/build/zuse-computer/c8647c61cbb1c30e/out/zuse-c8647c61cbb1c30e)\n     Running unittests src/main.rs (target/debug/build/zuse-computer/1645079d5d09563d/out/zuse-1645079d5d09563d)\n     Running tests/accessibility_native.rs (target/debug/build/zuse-computer/4e81abc430398867/out/accessibility_native-4e81abc430398867)\n     Running tests/android_review.rs (target/debug/build/zuse-computer/d1eacf9a47ee835c/out/android_review-d1eacf9a47ee835c)\n     Running tests/browser_native.rs (target/debug/build/zuse-computer/268151651471b0df/out/browser_native-268151651471b0df)\n     Running tests/core.rs (target/debug/build/zuse-computer/fdd2ef961b385348/out/core-fdd2ef961b385348)\n     Running tests/runtime.rs (target/debug/build/zuse-computer/66e2eedb8533dd51/out/runtime-66e2eedb8533dd51)\n     Running tests/runtime_review.rs (target/debug/build/zuse-computer/a7050dd9b00b00d5/out/runtime_review-a7050dd9b00b00d5)\n     Running tests/x11_utf8_native.rs (target/debug/build/zuse-computer/d2ab5a59ce3641fa/out/x11_utf8_native-d2ab5a59ce3641fa)\n   Doc-tests zuse\n",
+      "counts": {
+        "passed": 133,
+        "failed": 0,
+        "ignored": 3
+      }
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "name": "no-std-native",
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "check",
+        "--locked",
+        "--no-default-features",
+        "--lib",
+        "-j",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.09,
+      "stdout": "",
+      "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s\n"
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "name": "no-std-wasm",
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "check",
+        "--locked",
+        "--no-default-features",
+        "--lib",
+        "--target",
+        "wasm32-unknown-unknown",
+        "-j",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.183,
+      "stdout": "",
+      "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s\n"
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "name": "clippy",
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "-j",
+        "1",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 2.257,
+      "stdout": "",
+      "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.21s\n"
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "name": "x86_64-pc-windows-gnu",
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--target",
+        "x86_64-pc-windows-gnu",
+        "-j",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 1.826,
+      "stdout": "",
+      "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.81s\n"
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "name": "aarch64-apple-darwin",
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--target",
+        "aarch64-apple-darwin",
+        "-j",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 1.876,
+      "stdout": "",
+      "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.86s\n"
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "name": "x86_64-apple-darwin",
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--target",
+        "x86_64-apple-darwin",
+        "-j",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 2.976,
+      "stdout": "",
+      "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.96s\n"
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "name": "build-cli",
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "zuse",
+        "-j",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.056,
+      "stdout": "",
+      "stderr": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s\n"
+    },
+    {
+      "source_commit": "a6dc1b0a47de4327aa6407a0881da547811c41eb",
+      "name": "native-x11",
+      "command": [
+        "python3",
+        "tests/native_x11.py"
+      ],
+      "exit_code": 0,
+      "seconds": 13.699,
+      "stdout": "{\n  \"native_x11\": \"pass\",\n  \"pointer\": [\n    123,\n    234\n  ],\n  \"foreground_and_background_text\": \"pass\",\n  \"screen_png\": {\n    \"width\": 640,\n    \"height\": 480,\n    \"bytes\": 922218\n  },\n  \"window_png\": {\n    \"width\": 400,\n    \"height\": 240,\n    \"bytes\": 288328\n  }\n}\n",
+      "stderr": "     Locking 7 packages to highest Rust 1.100.0 compatible versions\n   Compiling zconv v0.4.0\n   Compiling zcall v0.3.0\n   Compiling zmcpio v0.4.0\n   Compiling zsys v0.1.1\n   Compiling z64 v0.1.2\n   Compiling zclap v0.1.4\n   Compiling zuse-computer v0.2.0 (<checkout>)\n   Compiling zuse-native-check v0.0.0 (/tmp/zuse-native-x11-dr2j_nte)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.81s\n"
+    },
+    {
+      "source_commit": "a6dc1b0a47de4327aa6407a0881da547811c41eb",
+      "name": "native-accessibility",
+      "command": [
+        "python3",
+        "tests/run_accessibility_native.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.626,
+      "stdout": "\nrunning 1 test\ntest native_atspi_observe_edit_action_and_redaction ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n",
+      "stderr": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s\n     Running tests/accessibility_native.rs (target/debug/build/zuse-computer/4e81abc430398867/out/accessibility_native-4e81abc430398867)\n"
+    },
+    {
+      "source_commit": "a6dc1b0a47de4327aa6407a0881da547811c41eb",
+      "name": "mcp-transports",
+      "command": [
+        "python3",
+        "tests/transports.py",
+        "--binary",
+        "target/debug/zuse"
+      ],
+      "exit_code": 0,
+      "seconds": 0.315,
+      "stdout": "",
+      "stderr": "test_dry_run_has_no_human_side_effect (__main__.Transports.test_dry_run_has_no_human_side_effect) ... ok\ntest_errors_preserve_stream_and_request_ids (__main__.Transports.test_errors_preserve_stream_and_request_ids) ... ok\ntest_frame_limit_is_bounded (__main__.Transports.test_frame_limit_is_bounded) ... ok\ntest_http_metadata_origin_host_and_json_errors (__main__.Transports.test_http_metadata_origin_host_and_json_errors) ... ok\ntest_http_token_and_name_binding (__main__.Transports.test_http_token_and_name_binding) ... ok\ntest_human_retry_integrity_and_single_use (__main__.Transports.test_human_retry_integrity_and_single_use) ... ok\ntest_inline_screenshot_is_a_real_isolated_png (__main__.Transports.test_inline_screenshot_is_a_real_isolated_png) ... ok\ntest_legacy_handshake_and_tool_call (__main__.Transports.test_legacy_handshake_and_tool_call) ... ok\ntest_modern_stdio_and_argument_contract (__main__.Transports.test_modern_stdio_and_argument_contract) ... ok\ntest_password_stays_local_and_url_only_client_gets_local_handoff (__main__.Transports.test_password_stays_local_and_url_only_client_gets_local_handoff) ... ok\ntest_server_read_only_cannot_be_weakened (__main__.Transports.test_server_read_only_cannot_be_weakened) ... ok\ntest_unix_socket_permissions_and_jsonl (__main__.Transports.test_unix_socket_permissions_and_jsonl) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.196s\n\nOK\n"
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "groups_passed": 5,
+      "name": "serial",
+      "command": [
+        "python3",
+        "tests/native_serial.py",
+        "--binary",
+        "target/debug/zuse",
+        "--output",
+        "target/acceptance-0.2.1/serial"
+      ],
+      "exit_code": 0,
+      "seconds": 0.346,
+      "stdout": "{\"name\": \"all_256_bytes_bidirectional_and_termios_restore\", \"status\": \"passed\", \"detail\": {\"bytes_each_direction\": 256, \"raw_8n1\": true, \"kernel_baud\": 115200, \"complete_configuration_restored\": true}}\n{\"name\": \"read_timeout\", \"status\": \"passed\", \"detail\": {\"requested_timeout_ms\": 80, \"elapsed_ms\": 81, \"configuration_restored\": true}}\n{\"name\": \"implicit_drop_restores_configuration\", \"status\": \"passed\", \"detail\": {\"explicit_close\": false, \"configuration_restored\": true}}\n{\"name\": \"partial_write_timeout_stops_and_restores\", \"status\": \"passed\", \"detail\": {\"requested_bytes\": 32768, \"bytes_before_timeout\": 15360, \"later_step_stopped\": true, \"configuration_restored\": true}}\n{\"name\": \"whole_program_preflight_has_no_prior_effects\", \"status\": \"passed\", \"detail\": {\"invalid_cases\": 7, \"prior_effects\": 0}}\n",
+      "stderr": ""
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "groups_passed": 11,
+      "name": "usb",
+      "command": [
+        "python3",
+        "tests/native_usb.py",
+        "--binary",
+        "target/debug/zuse",
+        "--output",
+        "target/acceptance-0.2.1/usb"
+      ],
+      "exit_code": 0,
+      "seconds": 0.557,
+      "stdout": "{\"name\": \"enumeration_only_proves_fake_library_selection\", \"status\": \"passed\", \"detail\": {\"devices\": 2, \"handles_opened\": 0, \"fixture_selected\": true}}\n{\"name\": \"bus_address_and_vid_pid_locked_before_open\", \"status\": \"passed\", \"detail\": {\"mismatched_vendor_product_address_cases\": 3, \"handles_opened\": 0}}\n{\"name\": \"busy_interface_does_not_detach\", \"status\": \"passed\", \"detail\": {\"automatic_detach\": false, \"released_unclaimed_interface\": false}}\n{\"name\": \"bulk_interrupt_control_ffi_payloads\", \"status\": \"passed\", \"detail\": {\"bulk_bytes_each_direction\": 256, \"interrupt_bytes_each_direction\": 256, \"control_bytes_each_direction\": 32, \"argument_abi_verified\": true}}\n{\"name\": \"partial_writes_not_retried_and_stop_following_steps\", \"status\": \"passed\", \"detail\": {\"short_or_timed_out_write_cases\": 4, \"transfer_calls_per_failure\": 1, \"later_steps_executed\": 0}}\n{\"name\": \"read_timeout_preserves_partial_bytes\", \"status\": \"passed\", \"detail\": {\"partial_bytes\": 17, \"timed_out\": true, \"transfer_calls\": 1}}\n{\"name\": \"invalid_native_count_is_rejected\", \"status\": \"passed\", \"detail\": {\"impossible_count_rejected\": true, \"later_step_stopped\": true}}\n{\"name\": \"control_timeout_completion_unknown\", \"status\": \"passed\", \"detail\": {\"read_and_write_timeout_cases\": 2, \"completion_reported_unknown\": true}}\n{\"name\": \"release_failure_still_closes_handle_context_library\", \"status\": \"passed\", \"detail\": {\"release_failure_reported\": true, \"handle_context_and_library_closed\": true}}\n{\"name\": \"implicit_drop_releases_all_resources\", \"status\": \"passed\", \"detail\": {\"explicit_close\": false, \"release_close_exit_unload\": true}}\n{\"name\": \"whole_program_preflight_has_no_prior_effects\", \"status\": \"passed\", \"detail\": {\"invalid_cases\": 11, \"libraries_loaded\": 0, \"prior_transfers\": 0}}\n",
+      "stderr": ""
+    },
+    {
+      "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+      "command": [
+        "python3",
+        "tests/native_x11_utf8.py",
+        "--binary",
+        "target/debug/zuse",
+        "--output",
+        "target/acceptance-0.2.1/cli-first"
+      ],
+      "exit_code": 0,
+      "cases": 17,
+      "success": 9,
+      "expected_errors": 8,
+      "binary_sha256": "ba171c507503ba48c60026a7648fc904fc0d27ac63b1851bde4843f7bab82562",
+      "reported_versions": [
+        "0.2.0"
+      ],
+      "receipt": "x11-cli-0.2.1.json"
+    }
+  ],
+  "initial_source_attempt": {
+    "phase": "source",
+    "source_commit": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+    "source_tree": "d74aec7f549b7a66b7e88d5b864c69ffee9d2cac",
+    "gates": [
+      {
+        "name": "format",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.249,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "name": "rust-default",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "cargo",
+          "test",
+          "--locked",
+          "-j",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 40.083,
+        "stdout": "\nrunning 98 tests\ntest accessibility::tests::paths_and_bounds_are_checked_before_native_calls ... ok\ntest android::tests::capture_mapping_is_display_specific ... ok\ntest android::tests::modes_do_not_fall_back ... ok\ntest android::tests::focus_is_scoped_by_display_and_window_token ... ok\ntest android::tests::missing_or_ambiguous_focus_is_unknown ... ok\ntest android::tests::rejects_remote_adb_server ... ok\ntest android::tests::virtual_capture_rejects_ambiguous_and_prefix_names ... ok\ntest android::tests::zero_exit_does_not_hide_command_errors ... ok\ntest android::tests::quote_shell_arguments ... ok\ntest browser::android_browser_tests::android_browser_discovery_accepts_only_browser_paths_on_loopback ... ok\ntest android::tests::adb_shell_protocol_and_targeting ... ok\ntest android::tests::unavailable_peer_still_requires_explicit_serial ... ok\ntest browser::android_browser_tests::android_browser_requires_explicit_valid_arguments_before_io ... ok\ntest browser::tests::endpoint_is_loopback_only ... ok\ntest browser::tests::quoted_selector_stays_data ... ok\ntest browser::tests::frames_allow_fragmented_text_and_ping ... ok\ntest browser::tests::websocket_accept_vector ... ok\ntest integrations::tests::arguments_are_literal_and_quotes_are_bounded ... ok\ntest integrations::tests::configuration_values_reject_invalid_input_before_execution ... ok\ntest integrations::tests::incremental_output_preserves_split_utf8 ... ok\ntest browser::tests::frame_size_is_rejected_before_allocation ... ok\ntest browser::tests::base64_round_trip_and_padding ... ok\ntest ios::tests::chunked_http_and_prefix_endpoints_are_decoded_without_waiting_for_eof ... ok\ntest ios::tests::browser_url_authority_validation_rejects_invalid_targets_and_preserves_valid_urls ... ok\ntest browser::android_browser_tests::android_browser_rejects_unauthorized_device_before_socket_access ... ok\ntest integrations::tests::tail_is_bounded_and_reports_loss ... ok\ntest browser::android_browser_tests::android_browser_lists_listening_chrome_sockets_without_tabs ... ok\ntest browser::android_browser_tests::android_browser_rejects_external_discovery_before_websocket_or_tab_creation ... ok\ntest ios::tests::attached_external_session_is_never_deleted_by_end_or_drop ... ok\ntest ios::tests::pure_validation_rejects_ambiguous_targets_and_preserves_unicode ... ok\ntest integrations::tests::manager_drop_reaps_its_child ... ok\ntest ios::tests::malformed_action_response_is_not_success_or_an_automatic_retry ... ok\ntest ios::tests::source_redaction_rejects_ambiguous_roles_and_malformed_node_structure ... ok\ntest browser::android_browser_tests::android_browser_discovery_retains_bounded_eof_fallback_without_length ... ok\ntest browser::android_browser_tests::android_browser_drop_closes_only_its_created_tab ... ok\ntest browser::android_browser_tests::android_browser_failed_creation_never_closes_unknown_tabs ... ok\ntest browser::android_browser_tests::android_browser_rejects_ambiguous_absent_and_webview_targets ... ok\ntest browser::android_browser_tests::android_browser_rejects_mismatched_owned_tab_information ... ok\ntest browser::android_browser_tests::android_browser_close_refusal_is_error_and_never_touches_other_targets ... ok\ntest platform::dylib::tests::missing_library_errors_include_the_requested_image ... ok\ntest browser::android_browser_tests::android_browser_discovery_uses_length_without_waiting_for_adb_eof ... ok\ntest platform::dylib::tests::symbols_validate_pointer_size_and_explicit_close_is_idempotent ... ok\ntest platform::linux::wayland::keymap::tests::accepts_unicode_and_the_three_text_controls ... ok\ntest platform::linux::wayland::keymap::tests::batch_limit_counts_unicode_characters_not_bytes ... ok\ntest platform::linux::wayland::keymap::tests::distinct_limit_uses_entire_xkb_code_range_without_dropping_next_char ... ok\ntest platform::linux::wayland::keymap::tests::empty_input_has_no_batches_and_iteration_is_fused ... ok\ntest platform::linux::wayland::keymap::tests::rejects_every_other_c0_c1_control_and_reports_late_errors ... ok\ntest platform::linux::wayland::keymap::tests::repeats_keep_codes_and_source_order ... ok\ntest platform::linux::wayland::keymap::tests::repeats_after_distinct_limit_still_fit_until_the_next_new_character ... ok\ntest platform::linux::wayland::state_tests::rejects_known_nonzero_or_unknown_states ... ok\ntest ios::tests::invalid_browser_url_is_rejected_before_an_earlier_connect_sends_a_request ... ok\ntest browser::android_browser_tests::android_browser_failed_attach_still_closes_created_tab ... ok\ntest ios::tests::source_text_is_valid_json_and_invalid_parameters_do_not_send_requests ... ok\ntest platform::linux::x11::tests::existing_unicode_symbols_need_no_mapping_change ... ok\ntest platform::linux::x11::tests::native_plan_requires_every_character_before_dispatch ... ok\ntest platform::linux::x11::tests::xkb_state_layout_matches_the_public_header ... ok\ntest platform::macos_focus::tests::focuses_only_the_first_matching_window_in_native_order ... ok\ntest ios::tests::mcp_ios_screenshot_returns_real_png_and_removes_its_temporary_output ... ok\ntest platform::macos_focus::tests::missing_target_and_empty_window_list_are_errors ... ok\ntest platform::macos_focus::tests::frontmost_failure_stops_before_enumerating_windows ... ok\ntest platform::macos_focus::tests::raise_failure_is_returned_without_trying_a_second_window ... ok\ntest platform::macos_focus::tests::unmatched_window_with_title_error_returns_the_native_error ... ok\ntest platform::macos_focus::tests::unreadable_unrelated_window_does_not_hide_a_later_match ... ok\ntest ios::tests::failed_session_creation_invalidates_the_previous_input_target ... ok\ntest platform::macos_focus::tests::window_owner_lives_through_raise_and_is_released_on_all_exits ... ok\ntest platform::macos_focus::tests::windows_query_failure_is_returned_without_querying_or_raising ... ok\ntest platform::png::tests::known_crc ... ok\ntest platform::windows_keyboard::tests::alt_shortcut_uses_system_messages_and_normal_final_alt_release ... ok\ntest browser::android_browser_tests::android_browser_owns_one_tab_and_never_requests_all_targets_or_forwards ... ok\ntest platform::windows_keyboard::tests::control_alt_chord_uses_nonsystem_messages_with_zero_context ... ok\ntest platform::windows_keyboard::tests::control_pressed_after_alt_uses_system_keyup_before_alt_release ... ok\ntest platform::linux::wayland::xkb::tests::resolves_exact_map_codes_and_rejects_missing_before_dispatch ... ok\ntest platform::windows_keyboard::tests::f10_is_a_system_key_without_alt ... ok\ntest platform::windows_keyboard::tests::alt_alone_clears_context_on_system_key_release ... ok\ntest platform::windows_keyboard::tests::foreground_key_parser_keeps_existing_alias_and_duplicate_behavior ... ok\ntest platform::windows_keyboard::tests::invalid_chords_are_rejected_before_native_mapping ... ok\ntest platform::windows_keyboard::tests::plain_chord_preserves_press_order_and_releases_in_reverse ... ok\ntest platform::windows_keyboard::tests::navigation_and_windows_keys_preserve_the_e0_extended_flag ... ok\ntest platform::windows_keyboard::tests::scan_mapping_is_snapshotted_once_and_invalid_maps_return_no_plan ... ok\ntest serial::tests::windows_serial_paths_reject_signed_malformed_and_out_of_range_names ... ok\ntest platform::windows_keyboard::tests::nonsystem_context_and_reserved_bits_are_zero_for_modifier_orders ... ok\ntest ios::tests::later_external_session_is_not_deleted_by_owned_cleanup ... ok\ntest ios::tests::read_only_connection_does_not_adopt_or_create_an_existing_session ... ok\ntest ios::tests::screenshot_requires_png_structure_and_failed_capture_preserves_the_destination ... ok\ntest serial::tests::windows_serial_paths_accept_decimal_ports_and_device_prefix ... ok\ntest ios::tests::unknown_active_session_requires_explicit_replacement ... ok\ntest ios::tests::explicit_replacement_and_owned_cleanup_follow_real_wda_routes ... ok\ntest ios::tests::structured_observations_redact_native_secure_fields_and_descendants ... ok\ntest ios::tests::wda_error_payload_is_failure_even_when_http_status_is_200 ... ok\ntest integrations::tests::managed_cat_round_trip_and_stop ... ok\ntest ios::tests::ambiguous_overlimit_and_truncated_http_responses_are_rejected ... ok\ntest ios::tests::unicode_touch_buttons_apps_and_urls_use_the_verified_protocol ... ok\ntest platform::linux::wayland::keymap::tests::byte_limit_is_checked_before_any_batches_are_executed ... ok\ntest browser::android_browser_tests::android_browser_discovery_rejects_short_or_ambiguous_http_framing ... ok\ntest integrations::tests::utility_deadline_cancels_owned_process ... ok\ntest browser::tests::partial_frame_reads_cannot_extend_deadline ... ok\ntest ios::tests::absolute_deadline_stops_trickled_action_responses_without_replay ... ok\ntest android::tests::deadline_includes_handshake_and_partial_payload_reads ... ok\n\ntest result: ok. 98 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 1 test\ntest native_atspi_observe_edit_action_and_redaction ... ignored, run through python3 tests/run_accessibility_native.py for an isolated fixture\n\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 3 tests\ntest printable_ascii_aliases_and_components_pass_preflight ... ok\ntest android_argument_errors_reject_the_complete_program ... ok\ntest failed_retarget_clears_the_previous_device ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\n\nrunning 1 test\ntest native_chromium_isolated_profile ... ignored, requires a local sandboxed Chromium; run explicitly with --ignored\n\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 17 tests\ntest motion_has_exact_endpoints_and_monotonic_timestamps ... ok\ntest malformed_escapes_and_surrogates_are_rejected_during_parse ... ok\ntest duplicate_arguments_and_positional_values_are_rejected ... ok\ntest immediate_motion_and_size_hint_are_consistent ... ok\ntest diagnostics_count_unicode_columns_and_crlf_lines ... ok\ntest motion_jitter_is_seeded_and_stays_within_envelope ... ok\ntest quotes_comments_and_semicolons_inside_values_stay_literal ... ok\ntest random_delay_bounds_seed_and_full_width_ranges ... ok\ntest motion_rejects_nonfinite_and_unbounded_work ... ok\ntest text_decode_capacity_is_transactional ... ok\ntest parse_named_calls_and_comments ... ok\ntest nonlinear_curves_change_velocity_and_bezier_changes_path ... ok\ntest syntax_rejects_trailing_garbage_and_fuses_after_error ... ok\ntest multiline_calls_accept_comments_and_a_trailing_comma ... ok\ntest text_decoding_preserves_unicode_and_escaped_controls ... ok\ntest numbers_are_strict_and_integer_spelling_is_preserved ... ok\ntest argument_and_input_limits_are_enforced ... ok\n\ntest result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n\nrunning 9 tests\ntest json_roundtrip_preserves_control_and_unicode ... ok\ntest read_only_denies_mutation_even_in_dry_run ... ok\ntest human_denial_cannot_resume_and_paths_are_bounded ... ok\ntest semantic_errors_are_caught_before_execution ... ok\ntest validates_whole_program_before_any_side_effect ... ok\ntest legacy_mcp_negotiates_and_rejects_invalid_tools ... ok\ntest human_handoff_requires_approval_and_is_consumed_once ... ok\ntest modern_mcp_lists_tools_and_executes_checks ... ok\ntest budgets_are_aggregate_and_explicit ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 6 tests\ntest android_swipes_spend_the_wait_budget ... ok\ntest dry_run_results_omit_text_payloads ... ok\ntest platform_argument_errors_fail_preflight ... ok\ntest password_target_is_checked_before_opening_a_prompt ... ok\ntest handoff_preserves_execution_limits_and_read_only ... ok\ntest operator_cli_respects_read_only_and_dry_run ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n\nrunning 1 test\ntest input ... ignored, run python3 tests/native_x11_utf8.py\n\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+        "stderr": "   Compiling zuse-computer v0.2.0 (<checkout>)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.32s\n     Running unittests src/lib.rs (target/debug/build/zuse-computer/c8647c61cbb1c30e/out/zuse-c8647c61cbb1c30e)\n     Running unittests src/main.rs (target/debug/build/zuse-computer/1645079d5d09563d/out/zuse-1645079d5d09563d)\n     Running tests/accessibility_native.rs (target/debug/build/zuse-computer/4e81abc430398867/out/accessibility_native-4e81abc430398867)\n     Running tests/android_review.rs (target/debug/build/zuse-computer/d1eacf9a47ee835c/out/android_review-d1eacf9a47ee835c)\n     Running tests/browser_native.rs (target/debug/build/zuse-computer/268151651471b0df/out/browser_native-268151651471b0df)\n     Running tests/core.rs (target/debug/build/zuse-computer/fdd2ef961b385348/out/core-fdd2ef961b385348)\n     Running tests/runtime.rs (target/debug/build/zuse-computer/66e2eedb8533dd51/out/runtime-66e2eedb8533dd51)\n     Running tests/runtime_review.rs (target/debug/build/zuse-computer/a7050dd9b00b00d5/out/runtime_review-a7050dd9b00b00d5)\n     Running tests/x11_utf8_native.rs (target/debug/build/zuse-computer/d2ab5a59ce3641fa/out/x11_utf8_native-d2ab5a59ce3641fa)\n   Doc-tests zuse\n",
+        "counts": {
+          "passed": 133,
+          "failed": 0,
+          "ignored": 3
+        }
+      },
+      {
+        "name": "no-std-native",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "cargo",
+          "check",
+          "--locked",
+          "--no-default-features",
+          "--lib",
+          "-j",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 0.09,
+        "stdout": "",
+        "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s\n"
+      },
+      {
+        "name": "no-std-wasm",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "cargo",
+          "check",
+          "--locked",
+          "--no-default-features",
+          "--lib",
+          "--target",
+          "wasm32-unknown-unknown",
+          "-j",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 0.183,
+        "stdout": "",
+        "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s\n"
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "cargo",
+          "clippy",
+          "--locked",
+          "--all-targets",
+          "-j",
+          "1",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 2.257,
+        "stdout": "",
+        "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.21s\n"
+      },
+      {
+        "name": "x86_64-pc-windows-gnu",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "cargo",
+          "check",
+          "--locked",
+          "--all-targets",
+          "--target",
+          "x86_64-pc-windows-gnu",
+          "-j",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 1.826,
+        "stdout": "",
+        "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.81s\n"
+      },
+      {
+        "name": "aarch64-apple-darwin",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "cargo",
+          "check",
+          "--locked",
+          "--all-targets",
+          "--target",
+          "aarch64-apple-darwin",
+          "-j",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 1.876,
+        "stdout": "",
+        "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.86s\n"
+      },
+      {
+        "name": "x86_64-apple-darwin",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "cargo",
+          "check",
+          "--locked",
+          "--all-targets",
+          "--target",
+          "x86_64-apple-darwin",
+          "-j",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 2.976,
+        "stdout": "",
+        "stderr": "    Checking zuse-computer v0.2.0 (<checkout>)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.96s\n"
+      },
+      {
+        "name": "build-cli",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "cargo",
+          "build",
+          "--locked",
+          "--bin",
+          "zuse",
+          "-j",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 0.056,
+        "stdout": "",
+        "stderr": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s\n"
+      },
+      {
+        "name": "native-x11",
+        "command": [
+          "python3",
+          "tests/native_x11.py"
+        ],
+        "exit_code": 1,
+        "seconds": 8.073,
+        "stdout": "",
+        "stderr": "     Locking 7 packages to highest Rust 1.100.0 compatible versions\n   Compiling zconv v0.4.0\n   Compiling zcall v0.3.0\n   Compiling zmcpio v0.4.0\n   Compiling zclap v0.1.4\n   Compiling zsys v0.1.1\n   Compiling z64 v0.1.2\n   Compiling zuse-computer v0.2.0 (<checkout>)\n   Compiling zuse-native-check v0.0.0 (/tmp/zuse-native-x11-u35y7gqi)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.77s\nTraceback (most recent call last):\n  File \"<checkout>/tests/private_xvfb.py\", line 26, in verify_private_xvfb\n    owner = Path(f\"/tmp/.X{number}-lock\").read_text().strip()\n            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"/usr/lib/python3.14/pathlib/__init__.py\", line 787, in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:\n         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.14/pathlib/__init__.py\", line 771, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/.X25218-lock'\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"<checkout>/tests/native_x11.py\", line 161, in <module>\n    main()\n    ~~~~^^\n  File \"<checkout>/tests/native_x11.py\", line 120, in main\n    display = verify_private_xvfb(xvfb, display_number, ready)\n  File \"<checkout>/tests/private_xvfb.py\", line 28, in verify_private_xvfb\n    raise RuntimeError(\"private X display has no readable server lock\") from error\nRuntimeError: private X display has no readable server lock\n"
+      }
+    ],
+    "started_at": "2026-11-20T00:32:31.088549+00:00",
+    "compile_jobs": 1,
+    "incremental": false
+  },
+  "native_followup": {
+    "source_commit": "a6dc1b0a47de4327aa6407a0881da547811c41eb",
+    "unchanged_from": "52c4cdb0a90f8cccddad47090c3eb0e3b9a8ab29",
+    "unchanged_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src",
+      "tests/native_x11_utf8.py",
+      "tests/native_x11_utf8_fixture.c",
+      "tests/native_serial.py",
+      "tests/native_usb.py"
+    ],
+    "unchanged_verified": true,
+    "gates": [
+      {
+        "name": "native-x11",
+        "command": [
+          "python3",
+          "tests/native_x11.py"
+        ],
+        "exit_code": 0,
+        "seconds": 13.699,
+        "stdout": "{\n  \"native_x11\": \"pass\",\n  \"pointer\": [\n    123,\n    234\n  ],\n  \"foreground_and_background_text\": \"pass\",\n  \"screen_png\": {\n    \"width\": 640,\n    \"height\": 480,\n    \"bytes\": 922218\n  },\n  \"window_png\": {\n    \"width\": 400,\n    \"height\": 240,\n    \"bytes\": 288328\n  }\n}\n",
+        "stderr": "     Locking 7 packages to highest Rust 1.100.0 compatible versions\n   Compiling zconv v0.4.0\n   Compiling zcall v0.3.0\n   Compiling zmcpio v0.4.0\n   Compiling zsys v0.1.1\n   Compiling z64 v0.1.2\n   Compiling zclap v0.1.4\n   Compiling zuse-computer v0.2.0 (<checkout>)\n   Compiling zuse-native-check v0.0.0 (/tmp/zuse-native-x11-dr2j_nte)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.81s\n"
+      },
+      {
+        "name": "native-accessibility",
+        "command": [
+          "python3",
+          "tests/run_accessibility_native.py"
+        ],
+        "exit_code": 0,
+        "seconds": 0.626,
+        "stdout": "\nrunning 1 test\ntest native_atspi_observe_edit_action_and_redaction ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n",
+        "stderr": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s\n     Running tests/accessibility_native.rs (target/debug/build/zuse-computer/4e81abc430398867/out/accessibility_native-4e81abc430398867)\n"
+      },
+      {
+        "name": "mcp-transports",
+        "command": [
+          "python3",
+          "tests/transports.py",
+          "--binary",
+          "target/debug/zuse"
+        ],
+        "exit_code": 0,
+        "seconds": 0.315,
+        "stdout": "",
+        "stderr": "test_dry_run_has_no_human_side_effect (__main__.Transports.test_dry_run_has_no_human_side_effect) ... ok\ntest_errors_preserve_stream_and_request_ids (__main__.Transports.test_errors_preserve_stream_and_request_ids) ... ok\ntest_frame_limit_is_bounded (__main__.Transports.test_frame_limit_is_bounded) ... ok\ntest_http_metadata_origin_host_and_json_errors (__main__.Transports.test_http_metadata_origin_host_and_json_errors) ... ok\ntest_http_token_and_name_binding (__main__.Transports.test_http_token_and_name_binding) ... ok\ntest_human_retry_integrity_and_single_use (__main__.Transports.test_human_retry_integrity_and_single_use) ... ok\ntest_inline_screenshot_is_a_real_isolated_png (__main__.Transports.test_inline_screenshot_is_a_real_isolated_png) ... ok\ntest_legacy_handshake_and_tool_call (__main__.Transports.test_legacy_handshake_and_tool_call) ... ok\ntest_modern_stdio_and_argument_contract (__main__.Transports.test_modern_stdio_and_argument_contract) ... ok\ntest_password_stays_local_and_url_only_client_gets_local_handoff (__main__.Transports.test_password_stays_local_and_url_only_client_gets_local_handoff) ... ok\ntest_server_read_only_cannot_be_weakened (__main__.Transports.test_server_read_only_cannot_be_weakened) ... ok\ntest_unix_socket_permissions_and_jsonl (__main__.Transports.test_unix_socket_permissions_and_jsonl) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.196s\n\nOK\n"
+      }
+    ],
+    "all_passed": true
+  },
+  "notes": [
+    "The initial native-X11 helper required an optional X server lock file; its failure is retained above. The helper was fixed and only affected native gates were repeated.",
+    "The 133 default Rust passes include 21 new portable simulations, 20 iOS tests and 15 Android-browser tests; these subsets must not be added again.",
+    "Windows/macOS native input APIs were simulated and cross-compiled, not executed on physical desktops. USB transfers used an isolated C ABI fixture; serial transfers used owned Linux PTYs.",
+    "This local debug CLI reports 0.2.0 before the formal release bump. Published artifact identity and download validation are recorded separately."
+  ]
+}
