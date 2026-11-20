@@ -20,6 +20,8 @@ import threading
 import time
 import unittest
 
+from private_xvfb import private_xvfb_command, verify_private_xvfb
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION = "2026-07-28"
 BINARY = None
@@ -149,8 +151,14 @@ class Transports(unittest.TestCase):
         cls.display = None
         cls.xvfb = None
         if os.name == "posix" and shutil.which("Xvfb"):
-            cls.xvfb = Child(["Xvfb", "-displayfd", "1", "-screen", "0", "64x48x24", "-nolisten", "tcp", "-ac"], os.environ.copy())
-            cls.display = ":" + cls.xvfb.line().decode().strip()
+            xvfb_command, display_number = private_xvfb_command("64x48x24", extra=("-ac",))
+            cls.xvfb = Child(xvfb_command, os.environ.copy())
+            try:
+                cls.display = verify_private_xvfb(cls.xvfb.process, display_number, cls.xvfb.line())
+            except BaseException:
+                cls.xvfb.close()
+                cls.workspace.cleanup()
+                raise
 
     @classmethod
     def tearDownClass(cls):

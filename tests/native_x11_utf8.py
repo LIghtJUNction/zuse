@@ -2,7 +2,10 @@
 """Actual UTF-8 receipt with private Xvfb, GTK and AT-SPI; no host input.
 
 Requires a C compiler, GTK3 development files, XTest, Xvfb, dbus-run-session,
-gdbus and at-spi2-core. Builds only this crate's small ignored process driver.
+gdbus and at-spi2-core. By default builds this crate's ignored process driver;
+--driver reuses it, while --binary exercises an actual zuse CLI without Cargo.
+The CLI's persistent shell acknowledges focus before the input statement, so
+the receiver-stop case retains the driver's pre-input barrier in one process.
 Use a private CARGO_TARGET_DIR/CARGO_HOME and CARGO_BUILD_JOBS=1 as appropriate.
 The receiver's pause is deliberate test input, not an implementation delay.
 """
@@ -60,11 +63,35 @@ def reserve_display():
     raise RuntimeError("could not reserve a private high-number display")
 
 
+def cli_reply(output, operation):
+    """Accept one actual Runtime result, never stderr or a process failure."""
+    try:
+        reply = json.loads(output)
+    except (ValueError, UnicodeError) as error:
+        raise RuntimeError(f"CLI returned no single JSON result for {operation}: {output!r}") from error
+    if not isinstance(reply, dict):
+        raise RuntimeError(f"CLI result for {operation} is not an object: {reply!r}")
+    results = reply.get("results")
+    if reply.get("status") == "completed":
+        if reply.get("completed") != 1 or not isinstance(results, list) or len(results) != 1:
+            raise RuntimeError(f"CLI did not complete exactly one {operation}: {reply!r}")
+        if not isinstance(results[0], dict) or results[0].get("step") != 0 or results[0].get("operation") != operation:
+            raise RuntimeError(f"CLI completed the wrong operation: {reply!r}")
+    elif reply.get("status") == "failed":
+        if reply.get("failed_step") != 0 or reply.get("completed") != 0 or results != [] or reply.get("operation") != operation or not isinstance(reply.get("error"), str) or not reply["error"]:
+            raise RuntimeError(f"CLI failure does not identify {operation}: {reply!r}")
+    else:
+        raise RuntimeError(f"unexpected CLI status for {operation}: {reply!r}")
+    return reply
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--inside", action="store_true")
     parser.add_argument("--output", type=Path, default=ROOT / "target/x11-utf8-proof")
-    parser.add_argument("--driver", type=Path, help="reuse an already compiled ignored test binary")
+    sender = parser.add_mutually_exclusive_group()
+    sender.add_argument("--driver", type=Path, help="reuse an already compiled ignored test binary")
+    sender.add_argument("--binary", type=Path, help="test an actual zuse CLI, including a release artifact")
     args = parser.parse_args()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -72,13 +99,20 @@ def main():
         command = ["dbus-run-session", "--", sys.executable, str(Path(__file__).resolve()), "--inside", "--output", str(args.output)]
         if args.driver:
             command += ["--driver", str(args.driver.resolve())]
+        if args.binary:
+            command += ["--binary", str(args.binary.resolve())]
         return subprocess.call(command)
-    report = {"cases": [], "payload": PAYLOAD, "transport": "local X11 + confirmed AT-SPI UTF-8"}
+    report = {"cases": [], "payload": PAYLOAD, "transport": "local X11 + confirmed AT-SPI UTF-8", "sender": "cli-shell" if args.binary else "ignored-test-driver"}
     fixture = bus = registry = xvfb = None
     logs = []
     display_lease = None
     try:
-        if args.driver:
+        binary = args.binary.resolve() if args.binary else None
+        if binary:
+            report["binary"] = str(binary)
+            report["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+            report["cli_calls"] = []
+        elif args.driver:
             driver = args.driver.resolve()
         else:
             build = subprocess.run(["cargo", "test", "--locked", "--offline", "--test", "x11_utf8_native", "--no-run", "--message-format=json"], cwd=ROOT, capture_output=True, text=True, timeout=180)
@@ -89,8 +123,9 @@ def main():
             if len(binaries) != 1:
                 raise RuntimeError(f"expected one native driver, got {binaries}")
             driver = Path(binaries[0])
-        report["driver"] = str(driver)
-        report["driver_sha256"] = hashlib.sha256(driver.read_bytes()).hexdigest()
+        if not binary:
+            report["driver"] = str(driver)
+            report["driver_sha256"] = hashlib.sha256(driver.read_bytes()).hexdigest()
         fixture_binary = args.output / "receiver"
         flags = subprocess.check_output(["pkg-config", "--cflags", "--libs", "gtk+-3.0", "xtst"], text=True).split()
         subprocess.run(["cc", "-O1", "-Wall", "-Wextra", "-Werror", str(ROOT / "tests/native_x11_utf8_fixture.c"), "-o", str(fixture_binary), *flags, "-lX11"], check=True, timeout=60)
@@ -169,6 +204,8 @@ def main():
             return {"mapping": hashlib.sha256(base64.b64decode(parts[4])).hexdigest(), "keys": parts[5], "keyboard": parts[6], "clipboard_owner": parts[7], "primary_owner": parts[8]}
 
         def invoke(value, action="type", window=target, pause_before=0):
+            if binary:
+                return invoke_binary(value, action, window, pause_before)
             result_path = args.output / "last-result.txt"
             result_path.unlink(missing_ok=True)
             local = dict(env, ZUSE_X11_UTF8_TARGET=window, ZUSE_X11_UTF8_VALUE=value, ZUSE_X11_UTF8_ACTION=action, ZUSE_X11_UTF8_RESULT=str(result_path), ZUSE_X11_UTF8_BARRIER="1" if pause_before else "0")
@@ -190,6 +227,64 @@ def main():
                 if child.returncode:
                     raise RuntimeError(f"driver failed: {out!r} {err!r}")
                 return result_path.read_text(), time.monotonic() - started
+            finally:
+                if timer:
+                    timer.join(timeout=2)
+                    os.kill(fixture.pid, signal.SIGCONT)
+                stop(child)
+
+        def invoke_binary(value, action, window, pause_before):
+            quote = lambda text: json.dumps(text, ensure_ascii=False)
+            if action in ("type", "background"):
+                operation = "keyboard.type"
+                code = f"keyboard.type(text={quote(value)}"
+                if action == "background":
+                    code += f",window={quote(window)}"
+                code += ")"
+            elif action == "key":
+                operation = "keyboard.key"
+                code = f"keyboard.key(key={quote(value)})"
+            else:
+                raise RuntimeError(f"unknown CLI fixture action: {action}")
+            if pause_before and action != "type":
+                raise RuntimeError("the pre-input barrier only applies to foreground typing")
+            record = {"action": action, "operation": operation, "pause_before": pause_before}
+            report["cli_calls"].append(record)
+            started = time.monotonic()
+            child = subprocess.Popen([str(binary), "shell"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            timer = None
+            try:
+                setup = [("system.capabilities", "system.capabilities()")]
+                if action != "background":
+                    setup.append(("window.focus", f"window.focus(id={quote(window)})"))
+                for setup_operation, source in setup:
+                    child.stdin.write((source + "\n").encode())
+                    child.stdin.flush()
+                    reply = cli_reply(line(child), setup_operation)
+                    if reply["status"] != "completed":
+                        raise RuntimeError(f"CLI setup failed before input: {reply!r}")
+                    if setup_operation == "system.capabilities":
+                        capabilities = reply["results"][0]["value"]
+                        record["backend"] = capabilities.get("desktop", {}).get("backend")
+                        record["version"] = capabilities.get("version")
+                        if record["backend"] != "x11":
+                            raise RuntimeError(f"CLI fixture did not use X11: {record['backend']!r}")
+                    else:
+                        record["focus_reply"] = reply
+                if pause_before:
+                    # The shell is waiting for its next line after confirmed
+                    # focus, with the same live Runtime/Desktop as the driver.
+                    os.kill(fixture.pid, signal.SIGSTOP)
+                    timer = threading.Timer(pause_before, lambda: os.kill(fixture.pid, signal.SIGCONT))
+                    timer.start()
+                out, err = child.communicate((code + "\n").encode(), timeout=10)
+                record.update(exit_code=child.returncode, stdout=out.decode("utf-8", errors="replace"), stderr=err.decode("utf-8", errors="replace"))
+                reply = cli_reply(out, operation)
+                expected_exit = 0 if reply["status"] == "completed" else 1
+                if child.returncode != expected_exit:
+                    raise RuntimeError(f"CLI exit code disagrees with its result: {record!r}")
+                result = "ok" if expected_exit == 0 else "error: " + reply["error"]
+                return result, time.monotonic() - started
             finally:
                 if timer:
                     timer.join(timeout=2)

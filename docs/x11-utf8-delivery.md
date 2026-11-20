@@ -111,6 +111,19 @@ resend text. Text and a binary clipboard format are checked after the run.
 - [AT-SPI cache invalidation](https://gnome.pages.gitlab.gnome.org/at-spi2-core/libatspi/method.Accessible.clear_cache_single.html): requesting a live state snapshot without changing the application's cache policy.
 - [Extended Window Manager Hints](https://specifications.freedesktop.org/wm-spec/latest/ar01s05.html): client process and frame-extents properties.
 
+## Validate an installed CLI
+
+Pass `--binary /absolute/path/to/zuse` to run the same 17 cases through an
+installed or downloaded CLI without building the Rust test driver. Its
+persistent shell confirms the X11 backend and focus before the input statement,
+including the receiver-stop case. Each operation's JSON result and process exit
+code must agree. The report records `sender: cli-shell`, the binary SHA-256 and
+the CLI version separately from an ignored test driver's fingerprint.
+
+The default source-driver mode and explicit `--driver` mode remain available.
+A successful driver run does not identify or validate a published CLI artifact;
+record the downloaded binary's own result when checking a release.
+
 ## Consumer check
 
 The actual ztype panel commits from its Enter key-press handler. An explicit

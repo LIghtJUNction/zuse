@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 
+from private_xvfb import private_xvfb_command, verify_private_xvfb
+
 FIXTURE = """
 import gi
 gi.require_version('Gtk', '3.0')
@@ -44,19 +46,19 @@ def main():
         if args.manifest_path: command += ['--manifest-path', args.manifest_path]
         return subprocess.call(command)
     read_fd, write_fd = os.pipe()
-    xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(write_fd), '-screen', '0', '800x600x24', '-nolisten', 'tcp'], pass_fds=(write_fd,), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    xvfb_command, display_number = private_xvfb_command('800x600x24', write_fd)
+    xvfb = subprocess.Popen(xvfb_command, pass_fds=(write_fd,), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     os.close(write_fd)
     fixture = None
     accessibility_bus = None
     registry = None
     try:
         with os.fdopen(read_fd) as output:
-            display = output.readline().strip()
-        if not display.isdigit(): raise RuntimeError('Xvfb did not allocate an isolated display')
+            display = verify_private_xvfb(xvfb, display_number, output.readline())
         accessibility_bus = subprocess.Popen(['dbus-daemon', '--config-file=/usr/share/defaults/at-spi2/accessibility.conf', '--nofork', '--print-address=1'], stdout=subprocess.PIPE, text=True)
         address = accessibility_bus.stdout.readline().strip()
         if not address.startswith('unix:'): raise RuntimeError('isolated accessibility bus did not start')
-        env = dict(os.environ, DISPLAY=':' + display, GDK_BACKEND='x11', NO_AT_BRIDGE='0', ZUSE_ATSPI_FIXTURE='1', AT_SPI_BUS_ADDRESS=address, GIO_USE_VFS='local')
+        env = dict(os.environ, DISPLAY=display, GDK_BACKEND='x11', NO_AT_BRIDGE='0', ZUSE_ATSPI_FIXTURE='1', AT_SPI_BUS_ADDRESS=address, GIO_USE_VFS='local')
         env.pop('WAYLAND_DISPLAY', None)
         registry = subprocess.Popen(['/usr/lib/at-spi2-registryd'], env=env, stdout=subprocess.DEVNULL)
         for _ in range(50):

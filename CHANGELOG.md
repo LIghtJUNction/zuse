@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — 2026-11-20
+
+- Fixed X11 Unicode delivery by inserting and confirming complete UTF-8 through the focused AT-SPI editable control instead of temporarily remapping global keycodes.
+- Routed foreground text through the same confirmed path when held keys, modifiers or layout make native key emission unsafe; the user's keys remain held and input is not retried.
+- Preserved callback edits to a displaced selection and distinguished errors before input from uncertain results after text has changed.
+- Fixed Windows background key messages for extended keys and Alt/Ctrl/F10 combinations, with complete validation before sending the first message.
+- Propagated macOS window-query, missing-target and AXRaise failures while keeping native objects alive through the operation.
+- Rejected signed, malformed and out-of-range Windows COM names before execution.
+- Added 21 portable production-logic simulations, 17 isolated GTK scenarios and a CLI entry point for checking downloaded release binaries.
+- Kept native X11 and MCP fixtures on explicit high display numbers with startup ownership checks.
+
 ## 0.2.0 — 2026-11-20
 
 - Added native Android Chrome over ADB with an owned tab, Unicode/selector input, AX/text and viewport screenshots; 13 physical-device checks passed.

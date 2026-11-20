@@ -12,6 +12,8 @@ import tempfile
 import time
 import zlib
 
+from private_xvfb import private_xvfb_command, verify_private_xvfb
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURE = r"""
 #include <X11/Xlib.h>
@@ -107,13 +109,15 @@ def main():
              "--no-deps", "--format-version", "1", "--offline"], text=True))
         harness = pathlib.Path(metadata["target_directory"]) / "debug/native-check"
         fixture = None
+        xvfb_command, display_number = private_xvfb_command("640x480x24")
         xvfb = subprocess.Popen(
-            ["Xvfb", "-displayfd", "1", "-screen", "0", "640x480x24", "-nolisten", "tcp"],
+            xvfb_command,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
-            display = ":" + xvfb.stdout.readline().strip()
-            if display == ":":
+            ready = xvfb.stdout.readline().strip()
+            if not ready:
                 raise RuntimeError("Xvfb failed: " + xvfb.stderr.read())
+            display = verify_private_xvfb(xvfb, display_number, ready)
             env = os.environ.copy()
             env.update(DISPLAY=display, ZUSE_BACKEND="x11")
             with (p / "events.log").open("w") as log:
