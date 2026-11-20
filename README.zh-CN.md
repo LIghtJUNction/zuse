@@ -4,7 +4,7 @@
 
 zuse 执行一小段可检查的代码，完成观察窗口、移动鼠标、输入文字、读取无障碍树、控制后台浏览器、Android 显示目标与手机 Chrome、iOS，以及串口和 USB 设备。遇到密码、安全密钥或账号登录时，程序可以暂停，请人类处理，再从剩余步骤继续。
 
-[English](README.md) · [语法](docs/language.md) · [平台能力](docs/platforms.md)
+[English](README.md) · [语法](docs/language.md) · [文本定位与轨迹](docs/target-motion.md) · [平台能力](docs/platforms.md)
 
 ## 安装与使用
 
@@ -26,19 +26,29 @@ wait(min=80, max=160, seed=42)
 screen.capture(path="desktop.png")
 ~~~
 
-连续轨迹只需调用一次，由本机调度。以下示例只检查执行计划，不移动鼠标：
-
-`zuse eval 'mouse.circle(x=320,y=220,radius=100,duration=1600,speed_variation=0.25,jitter=0.7,seed=42)' --dry-run`
-
-Rust 可用 `motion::FunctionalMotion` 传入 `FnMut(f64) -> Point` 和 `PathOptions` 定义曲线。支持缓动、带种子的变速和可选平滑抖动，起点和终点不抖动。采样器不会授予桌面输入权限。
-
 `zuse check 文件.zuse` 或 `--dry-run` 返回执行计划；`--read-only` 拒绝输入、程序启动、JavaScript 执行和设置修改。运行时先检查整个程序，再执行第一步；执行失败时返回已完成步骤并停止。
+
+## 移动到文本或按钮
+
+`mouse.move_to` 一次完成定位和移动：先读取目标的无障碍信息，再获取当前鼠标位置，沿指定轨迹移动到目标中心加偏移的位置。默认耗时 350 毫秒，只移动鼠标。
+
+~~~sh
+zuse eval 'mouse.move_to(text="保存",role="button",duration=650,curve="bezier",jitter=1.2,speed_variation=0.25,seed=42,offset_x=4,offset_y=-3)' --dry-run
+zuse eval 'mouse.move_to(text="继续",role="button",speed=600,via="320,180;480,220")' --dry-run
+cargo run --example target_motion
+~~~
+
+`duration` 指定移动时长，`speed` 按完整采样轨迹的平均速度计算时长，两者互斥。`via` 使用绝对屏幕坐标；`jitter` 与 `speed_variation` 调整途中扰动和进度变化；相同 `seed` 可复现路径。默认精确、区分大小写地匹配文本，同名目标需用 `scope` 或 `index` 明确选择。
+
+定位使用系统原生无障碍树，无需 OCR 或视觉模型。应用需要提供文本及其屏幕区域，纯图片或未暴露无障碍信息的画布文本不在定位范围内。`--dry-run` 只校验参数；Rust 示例默认只生成轨迹，明确传入 `--execute` 才移动真实鼠标。程序可用 `Runtime::move_to_with` 提供接收进度、实际起点和最终落点的 Rust 回调，也可用 `MovePlan` 先取得所有采样点。详见[参数、坐标与 Rust 接口](docs/target-motion.md)。
 
 ## Project Z 结构
 
 语法解析器和鼠标轨迹核心支持 `no_std`，不分配堆内存、零依赖。桌面运行时使用标准库，Rust 依赖树只有 Project Z 自有的 zmcpio、zcall、zconv、zclap、z64、zsys。系统动态库加载复用 zsys 0.1.1；CLI 和 MCP 共用执行器。
 
 鼠标路径包含线性、平滑、缓入缓出和贝塞尔轨迹，支持种子固定的抖动与随机等待。轨迹首尾坐标准确，使用绝对时间安排采样。
+
+`motion::FunctionalMotion` 在 `no_std` 核心中接收自定义路径函数；`mouse.circle` 将完整圆周轨迹安排在一次调用中。定位与桌面事件执行属于启用 `std` 的运行时。
 
 ## MCP
 

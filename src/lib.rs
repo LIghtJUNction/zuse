@@ -27,6 +27,11 @@ pub mod platform;
 pub mod runtime;
 
 #[cfg(feature = "std")]
+pub mod pointer;
+#[cfg(feature = "std")]
+pub mod target;
+
+#[cfg(feature = "std")]
 pub mod device_io;
 
 #[cfg(feature = "std")]

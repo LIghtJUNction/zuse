@@ -193,7 +193,7 @@ if($operation -eq 'snapshot') {
             $rect=$current.BoundingRectangle
             $bounds=$null
             if(-not $rect.IsEmpty){$bounds=@{x=$rect.X;y=$rect.Y;width=$rect.Width;height=$rect.Height}}
-            $item=[ordered]@{path=$address;role=$role;name=$name;text=$text;children=$null;bounds=$bounds;actions=(Get-Actions $node);automationId=$current.AutomationId}
+            $item=[ordered]@{path=$address;role=$role;name=$name;text=$text;children=$null;bounds=$bounds;visible=(-not $current.IsOffscreen);actions=(Get-Actions $node);automationId=$current.AutomationId}
             $encoded=ConvertTo-Json -InputObject $item -Depth 6 -Compress
             $size=[System.Text.Encoding]::UTF8.GetByteCount($encoded)
             if($script:bytes+$size -gt 2097152){$script:truncated=$true;$script:exhausted=$true;return}
@@ -267,7 +267,9 @@ function main(){
                 var name=node===null?'Desktop':scalar(node.name()),text='',bounds=null;
                 if(secure(node))text='[redacted]';else if(node!==null){try{text=scalar(node.value());}catch(e){}}
                 if(node!==null){try{var p=node.position(),s=node.size();bounds={x:p[0],y:p[1],width:s[0],height:s[1]};}catch(e){}}
-                var item={path:address,role:role(node),name:name,text:text,children:null,bounds:bounds,actions:actions(node)};
+                var visible=null;
+                if(node!==null){try{var value=node.visible();if(typeof value==='boolean')visible=value;}catch(e){}}
+                var item={path:address,role:role(node),name:name,text:text,children:null,bounds:bounds,visible:visible,actions:actions(node)};
                 var size=unescape(encodeURIComponent(JSON.stringify(item))).length;
                 if(bytes+size>2097152){truncated=true;exhausted=true;return;}
                 bytes+=size;nodes.push(item);

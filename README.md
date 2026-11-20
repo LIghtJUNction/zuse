@@ -4,13 +4,13 @@
 
 zuse turns small programs into desktop observations and actions. The same executor drives native windows, an isolated Chromium browser, accessibility trees, Android displays and Chrome tabs, iOS through WebDriverAgent, serial/USB devices, IDE entry points, and managed harness processes. Human assistance pauses a program and gives it an explicit continuation.
 
-[中文](README.zh-CN.md) · [Language](docs/language.md) · [Platforms](docs/platforms.md) · [Architecture](docs/architecture.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
+[中文](README.zh-CN.md) · [Language](docs/language.md) · [Target motion](docs/target-motion.md) · [Platforms](docs/platforms.md) · [Architecture](docs/architecture.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
 
 ## Small core, explicit effects
 
 The parser and pointer-motion kernel compile with `no_std`, use no allocator, and have no dependencies. The optional host runtime uses Rust's standard library and six Project Z crates across its dependency tree: zmcpio, zcall, zconv, zclap, z64, and zsys. Native dynamic-library loading reuses zsys 0.1.1. There is no embedded JavaScript engine or browser automation framework.
 
-The runtime checks the entire program before its first effect. Unknown operations, wrong argument types, duplicate arguments, malformed strings, excessive steps, and excess wait budgets fail before execution. Runtime errors return completed steps and stop the remaining program. Execution records omit keyboard input contents.
+The runtime checks the entire program before its first effect. Unknown operations, wrong argument types, duplicate arguments, malformed strings, excessive steps, and excess fixed-duration wait budgets fail before execution. Speed-based target movement is charged to the remaining wait budget after its path is resolved, before sending its first pointer event. Runtime errors return completed steps and stop the remaining program. Execution records omit keyboard input contents.
 
 ## Install
 
@@ -55,15 +55,23 @@ wait(min=80, max=160, seed=42)
 screen.capture(path="desktop.png")
 ~~~
 
-For a continuous, closed trajectory, the local runtime schedules all samples from one call. Inspect the plan without moving the cursor:
-
-`zuse eval 'mouse.circle(x=320,y=220,radius=100,duration=1600,speed_variation=0.25,jitter=0.7,seed=42)' --dry-run`
-
-Rust callers can pass `FnMut(f64) -> Point` and `PathOptions` to `motion::FunctionalMotion`. It supports easing, seeded speed variation, and optional smoothed jitter that preserves endpoints. Sampling does not grant desktop input access.
-
 `zuse check FILE` validates without executing. `--read-only` permits observation operations, including screenshot artifacts, and rejects input, evaluation, process launches, and settings changes. `zuse schema` prints every supported operation and its arguments.
 
 Motion supports linear, smoothstep, cubic ease-in/out, and curved Bezier paths. Seeded jitter tapers to zero at the endpoints. Samples use absolute time offsets so scheduling delays do not accumulate across the path.
+
+## Move to text or a button
+
+`mouse.move_to` resolves an accessible name or text, reads the current pointer position, and moves to the target's center plus an optional offset. One call controls the whole movement; its default duration is 350 ms and it only moves the pointer.
+
+~~~sh
+zuse eval 'mouse.move_to(text="Save",role="button",duration=650,curve="bezier",jitter=1.2,speed_variation=0.25,seed=42,offset_x=4,offset_y=-3)' --dry-run
+zuse eval 'mouse.move_to(text="Continue",role="button",speed=600,via="320,180;480,220")' --dry-run
+cargo run --example target_motion
+~~~
+
+`--dry-run` validates arguments without reading the desktop. The Rust example generates a complete path using supplied coordinates; it requires an explicit `--execute` argument to move a real pointer. Targets come from native accessibility, so image-only or canvas text must be exposed by the application before this operation can locate it. Matching is exact and case-sensitive by default; ambiguous matches require a scope or explicit index.
+
+Use `MovePlan` to inspect a path or `Runtime::move_to_with` to supply a Rust callback receiving progress, the live start, and the offset-adjusted target. `motion::FunctionalMotion` provides the allocation-free `no_std` sampler. `mouse.circle` also schedules a closed circular trajectory in one call. See [target selection, motion parameters, and Rust examples](docs/target-motion.md).
 
 ## Background browser
 

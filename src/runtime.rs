@@ -11,7 +11,9 @@ use crate::{
     language::{Call, Parser, Value},
     motion::{Curve, FunctionalMotion, MAX_COORDINATE, Motion, PathOptions, Point, Rng},
     platform::Desktop,
+    pointer::{MoveOptions, MovePlan},
     serial::{self, SerialPort},
+    target::{self, LocatedTarget, TargetQuery},
     usb::{self, UsbDevice},
 };
 use std::{
@@ -56,6 +58,7 @@ static SPECS: &[Spec] = &[
     spec!("system.capabilities", true, []),
     spec!("mouse.position", true, []),
     spec!("mouse.move",false,["x":I:true,"y":I:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"seed":I:false]),
+    spec!("mouse.move_to",false,["text":T:true,"role":T:false,"scope":T:false,"exact":B:false,"case_sensitive":B:false,"index":I:false,"duration":I:false,"speed":N:false,"steps":I:false,"curve":T:false,"jitter":N:false,"speed_variation":N:false,"seed":I:false,"offset_x":N:false,"offset_y":N:false,"via":T:false]),
     spec!("mouse.circle",false,["x":I:true,"y":I:true,"radius":N:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"speed_variation":N:false,"seed":I:false]),
     spec!("mouse.click",false,["button":T:false,"count":I:false,"interval":I:false]),
     spec!("mouse.down",false,["button":T:false]),
@@ -251,6 +254,92 @@ fn range(call: &Call<'_>, name: &str, default: i64, min: i64, max: i64) -> Resul
     }
 }
 
+struct TargetArgs {
+    text: String,
+    role: Option<String>,
+    scope: Option<String>,
+    exact: bool,
+    case_sensitive: bool,
+    index: Option<usize>,
+}
+
+impl TargetArgs {
+    fn query(&self) -> TargetQuery<'_> {
+        TargetQuery {
+            text: &self.text,
+            role: self.role.as_deref(),
+            scope: self.scope.as_deref(),
+            exact: self.exact,
+            case_sensitive: self.case_sensitive,
+            index: self.index,
+        }
+    }
+}
+
+fn target_args(c: &Call<'_>) -> Result<TargetArgs, String> {
+    let args = TargetArgs {
+        text: text(c, "text", "")?,
+        role: c.get("role").map(|_| text(c, "role", "")).transpose()?,
+        scope: c.get("scope").map(|_| text(c, "scope", "")).transpose()?,
+        exact: boolean(c, "exact", true),
+        case_sensitive: boolean(c, "case_sensitive", true),
+        index: c
+            .get("index")
+            .map(|_| range(c, "index", 0, 0, 4095).map(|i| i as usize))
+            .transpose()?,
+    };
+    target::validate_query(&args.query())?;
+    Ok(args)
+}
+
+fn move_options(c: &Call<'_>) -> Result<MoveOptions, String> {
+    let via = text(c, "via", "")?;
+    let via = if via.trim().is_empty() {
+        Vec::new()
+    } else {
+        if via.split(';').count() > 64 {
+            return Err("mouse.move_to: via accepts at most 64 points".into());
+        }
+        via.split(';')
+            .map(|pair| {
+                let (x, y) = pair
+                    .split_once(',')
+                    .ok_or("mouse.move_to: via must contain x,y pairs separated by semicolons")?;
+                Ok(Point {
+                    x: x.trim()
+                        .parse::<f64>()
+                        .map_err(|_| "invalid via x coordinate")?,
+                    y: y.trim()
+                        .parse::<f64>()
+                        .map_err(|_| "invalid via y coordinate")?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?
+    };
+    let options = MoveOptions {
+        duration_ms: c
+            .get("duration")
+            .map(|_| range(c, "duration", 350, 0, 60_000).map(|v| v as u32))
+            .transpose()?,
+        speed: c.get("speed").map(|_| number(c, "speed", 0.0)),
+        steps: c
+            .get("steps")
+            .map(|_| range(c, "steps", 1, 1, 4096).map(|v| v as u32))
+            .transpose()?,
+        curve: Curve::parse(&text(c, "curve", "smooth")?).ok_or("unknown motion curve")?,
+        jitter: number(c, "jitter", 0.0),
+        speed_variation: number(c, "speed_variation", 0.0),
+        seed: integer(c, "seed", 1) as u64,
+        offset: Point {
+            x: number(c, "offset_x", 0.0),
+            y: number(c, "offset_y", 0.0),
+        },
+        via,
+    };
+    options.validate()?;
+    Ok(options)
+}
+
 fn device_payload(call: &Call<'_>, allow_text: bool) -> Result<Vec<u8>, String> {
     let has_text = call.get("text").is_some();
     let has_base64 = call.get("base64").is_some();
@@ -270,7 +359,7 @@ fn device_payload(call: &Call<'_>, allow_text: bool) -> Result<Vec<u8>, String> 
     Ok(bytes)
 }
 
-fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, String> {
+fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64), String> {
     let mut calls = Vec::new();
     let mut wait_budget = 0u64;
     for parsed in Parser::new(source) {
@@ -316,6 +405,11 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
             }
         }
         match call.name {
+            "mouse.move_to" => {
+                target_args(&call)?;
+                wait_budget = wait_budget
+                    .saturating_add(u64::from(move_options(&call)?.scheduled_duration_ms()));
+            }
             "mouse.move" => {
                 range(&call, "x", 0, i32::MIN as i64, i32::MAX as i64)?;
                 range(&call, "y", 0, i32::MIN as i64, i32::MAX as i64)?;
@@ -556,11 +650,11 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
         }
         calls.push(call);
     }
-    Ok(calls)
+    Ok((calls, wait_budget))
 }
 
 pub fn check(source: &str, options: Options) -> Result<String, String> {
-    let calls = validate(source, options)?;
+    let (calls, _) = validate(source, options)?;
     let list: Vec<_> = calls
         .iter()
         .map(|c| {
@@ -578,6 +672,51 @@ pub fn check(source: &str, options: Options) -> Result<String, String> {
     ))
 }
 
+/// The resolved target and submitted pointer path for one completed movement.
+#[derive(Clone, Debug)]
+pub struct MoveReceipt {
+    pub target: LocatedTarget,
+    pub from: Point,
+    pub to: Point,
+    pub duration_ms: u32,
+    pub elapsed_ms: u128,
+    pub samples: usize,
+    pub path_length: f64,
+}
+
+fn target_center(target: &LocatedTarget) -> Point {
+    Point {
+        x: target.bounds.x + target.bounds.width / 2.0,
+        y: target.bounds.y + target.bounds.height / 2.0,
+    }
+}
+
+impl MoveReceipt {
+    pub fn to_json(&self) -> String {
+        let b = self.target.bounds;
+        format!(
+            "{{\"target\":{{\"path\":{},\"role\":{},\"name\":{},\"bounds\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}}}},\"from\":{{\"x\":{},\"y\":{}}},\"to\":{{\"x\":{},\"y\":{}}},\"x\":{},\"y\":{},\"duration_ms\":{},\"elapsed_ms\":{},\"samples\":{},\"path_length\":{},\"delivery\":\"submitted\"}}",
+            quote(&self.target.path),
+            quote(&self.target.role),
+            quote(&self.target.name),
+            b.x,
+            b.y,
+            b.width,
+            b.height,
+            self.from.x,
+            self.from.y,
+            self.to.x,
+            self.to.y,
+            self.to.x.round() as i32,
+            self.to.y.round() as i32,
+            self.duration_ms,
+            self.elapsed_ms,
+            self.samples,
+            self.path_length,
+        )
+    }
+}
+
 #[derive(Default)]
 pub struct Runtime {
     desktop: Option<Desktop>,
@@ -592,6 +731,84 @@ impl Runtime {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Locate an accessible target and move from the live pointer position.
+    /// Coordinates and offsets use the selected native backend's screen units.
+    pub fn move_to(
+        &mut self,
+        query: &TargetQuery<'_>,
+        options: &MoveOptions,
+    ) -> Result<MoveReceipt, String> {
+        let (target, plan) = self.prepare_move_to(query, options)?;
+        self.perform_move(target, plan)
+    }
+
+    /// Execute a caller-defined path from the current pointer to a located
+    /// target. The callback receives progress, start and offset-adjusted end.
+    /// All samples are validated before the first native input event.
+    pub fn move_to_with<F: FnMut(f64, Point, Point) -> Point>(
+        &mut self,
+        query: &TargetQuery<'_>,
+        options: &MoveOptions,
+        path: F,
+    ) -> Result<MoveReceipt, String> {
+        options.validate()?;
+        let target = target::locate(query)?;
+        let (x, y) = self.desktop()?.position()?;
+        let from = Point {
+            x: f64::from(x),
+            y: f64::from(y),
+        };
+        let center = target_center(&target);
+        let plan = MovePlan::with_path(from, center, options, path)?;
+        self.perform_move(target, plan)
+    }
+
+    fn prepare_move_to(
+        &mut self,
+        query: &TargetQuery<'_>,
+        options: &MoveOptions,
+    ) -> Result<(LocatedTarget, MovePlan), String> {
+        options.validate()?;
+        let target = target::locate(query)?;
+        let (x, y) = self.desktop()?.position()?;
+        let from = Point {
+            x: f64::from(x),
+            y: f64::from(y),
+        };
+        let plan = MovePlan::new(from, target_center(&target), options)?;
+        Ok((target, plan))
+    }
+
+    fn perform_move(
+        &mut self,
+        target: LocatedTarget,
+        plan: MovePlan,
+    ) -> Result<MoveReceipt, String> {
+        let desktop = self.desktop()?;
+        let start = Instant::now();
+        for (index, sample) in plan.samples().iter().enumerate() {
+            let due = Duration::from_millis(u64::from(sample.at_ms));
+            if let Some(delay) = due.checked_sub(start.elapsed()) {
+                std::thread::sleep(delay);
+            }
+            desktop
+                .move_to(sample.point.x.round() as i32, sample.point.y.round() as i32)
+                .map_err(|error| {
+                    format!("pointer movement stopped after {index} samples: {error}")
+                })?;
+        }
+        Ok(MoveReceipt {
+            target,
+            from: plan.from(),
+            to: plan.to(),
+            duration_ms: plan.duration_ms(),
+            elapsed_ms: start.elapsed().as_millis(),
+            samples: plan.samples().len(),
+            path_length: plan.length(),
+        })
+    }
+
     fn desktop(&mut self) -> Result<&mut Desktop, String> {
         if self.desktop.is_none() {
             self.desktop = Some(Desktop::connect()?);
@@ -667,7 +884,11 @@ impl Runtime {
         if options.dry_run {
             return check(source, options);
         }
-        let calls = validate(source, options)?;
+        let (calls, scheduled_wait_ms) = validate(source, options)?;
+        // Speeds need the live start/target/path before their duration is known.
+        // Reserve every static wait first, then debit each resolved speed plan
+        // before sending its first event.
+        let mut dynamic_wait_ms = options.max_wait_ms - scheduled_wait_ms;
         let mut results = Vec::new();
         let mut bytes = 0;
         for (index, call) in calls.iter().enumerate() {
@@ -695,7 +916,7 @@ impl Runtime {
                 ));
             }
             let began = Instant::now();
-            match self.step(call) {
+            match self.step(call, &mut dynamic_wait_ms) {
                 Ok(value) => {
                     bytes += value.len();
                     if bytes > 1024 * 1024 {
@@ -736,13 +957,30 @@ impl Runtime {
         ))
     }
 
-    fn step(&mut self, c: &Call<'_>) -> Result<String, String> {
+    fn step(&mut self, c: &Call<'_>, dynamic_wait_ms: &mut u64) -> Result<String, String> {
         let done = || Ok("{\"ok\":true}".into());
         match c.name {
             "system.capabilities" => Ok(self.capabilities()),
             "mouse.position" => {
                 let (x, y) = self.desktop()?.position()?;
                 Ok(format!("{{\"x\":{x},\"y\":{y}}}"))
+            }
+            "mouse.move_to" => {
+                let args = target_args(c)?;
+                let options = move_options(c)?;
+                let (target, plan) = self.prepare_move_to(&args.query(), &options)?;
+                if options.speed.is_some() {
+                    let required = u64::from(plan.duration_ms());
+                    if required > *dynamic_wait_ms {
+                        return Err(format!(
+                            "mouse.move_to: resolved movement needs {required}ms but only {}ms of wait budget remains",
+                            *dynamic_wait_ms
+                        ));
+                    }
+                    *dynamic_wait_ms -= required;
+                }
+                self.perform_move(target, plan)
+                    .map(|receipt| receipt.to_json())
             }
             "mouse.move" => {
                 let duration = integer(c, "duration", 0) as u32;

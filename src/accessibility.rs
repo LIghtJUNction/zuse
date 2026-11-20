@@ -358,6 +358,16 @@ mod native {
                 self.errors += 1;
                 0
             });
+            let (visible, showing) =
+                match self.api.object(unsafe { (self.api.state_set)(object.ptr) }) {
+                    Ok(states) => {
+                        // AtspiStateType: VISIBLE == 30, SHOWING == 25.
+                        let visible = unsafe { (self.api.state_contains)(states.ptr, 30) != 0 };
+                        let showing = unsafe { (self.api.state_contains)(states.ptr, 25) != 0 };
+                        (visible.to_string(), showing.to_string())
+                    }
+                    Err(_) => ("null".into(), "null".into()),
+                };
             let password = role.to_ascii_lowercase().contains("password");
             let mut text = if password {
                 "[redacted]".into()
@@ -433,7 +443,7 @@ mod native {
                 }
             }
             let node = format!(
-                r#"{{"path":{},"role":{},"name":{},"text":{},"children":{count},"bounds":{bounds},"actions":[{}]}}"#,
+                r#"{{"path":{},"role":{},"name":{},"text":{},"children":{count},"bounds":{bounds},"visible":{visible},"showing":{showing},"actions":[{}]}}"#,
                 quote(&path),
                 quote(&role),
                 quote(&name),

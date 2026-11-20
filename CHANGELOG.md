@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add `mouse.move_to` to locate an accessible text or button target and move from the live pointer position in one CLI, shell or MCP operation.
+- Support absolute waypoints, seeded smooth jitter and speed variation, easing, target offsets, duration or sampled-path average speed, and explicit selection of duplicate targets.
+- Expose typed target queries, complete pointer plans, `Runtime::move_to` and `Runtime::move_to_with` for custom Rust paths validated before native input.
+- Add allocation-free `FunctionalMotion` sampling and timed `mouse.circle` paths.
+- Include native visibility in desktop accessibility snapshots; preserve exact movement endpoints and enforce the cumulative wait budget before speed-based input.
+
 ## 0.2.2 — 2026-11-20
 
 - Preserve the current browser page and session when selecting it again; prepare another page before releasing the previous selection.

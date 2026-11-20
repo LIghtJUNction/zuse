@@ -49,6 +49,7 @@ OPTIONS
   -V, --version                 Show version
 
 Programs use named calls, for example:
+  mouse.move_to(text="Save", role="button", duration=450, jitter=0.8, seed=42)
   mouse.move(x=400, y=240, duration=300, curve="bezier", jitter=1, seed=42)
   keyboard.type(text="Hello")
   human.request(kind="login", message="Please sign in in the local browser")
