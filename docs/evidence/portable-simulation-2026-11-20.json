@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "scope": "Portable production-logic simulations executed on a Linux host; cross-target checks do not execute native APIs.",
+  "code_commits": {
+    "serial": "4bce4ff186eef807e39421f1b919a2ac6c849c37",
+    "windows_and_macos": "4102ed007b3b618d2b8e13e14312a2ba69153c40"
+  },
+  "new_host_tests": {
+    "windows_serial_path": 2,
+    "windows_key_message_plan": 11,
+    "macos_focus_flow": 8,
+    "total": 21
+  },
+  "serial_red_green": {
+    "before": {
+      "exit_code": 101,
+      "stdout": "\nrunning 2 tests\ntest serial::tests::windows_serial_paths_reject_signed_malformed_and_out_of_range_names ... FAILED\ntest serial::tests::windows_serial_paths_accept_decimal_ports_and_device_prefix ... ok\n\nfailures:\n\n---- serial::tests::windows_serial_paths_reject_signed_malformed_and_out_of_range_names stdout ----\n\nthread 'serial::tests::windows_serial_paths_reject_signed_malformed_and_out_of_range_names' panicked at src/serial.rs:679:13:\n\"COM+1\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    serial::tests::windows_serial_paths_reject_signed_malformed_and_out_of_range_names\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.00s\n\n"
+    },
+    "after": {
+      "exit_code": 0,
+      "stdout": "{\"command\": [\"cargo\", \"fmt\", \"--all\"]}\n{\"exit\": 0}\n{\"command\": [\"nice\", \"-n\", \"10\", \"cargo\", \"test\", \"--locked\", \"--lib\", \"serial::tests\", \"-j\", \"1\"]}\n\nrunning 2 tests\ntest serial::tests::windows_serial_paths_reject_signed_malformed_and_out_of_range_names ... ok\ntest serial::tests::windows_serial_paths_accept_decimal_ports_and_device_prefix ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.00s\n\n{\"exit\": 0}\n"
+    }
+  },
+  "gates": [
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all"
+      ],
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "platform::windows_keyboard",
+        "-j",
+        "1"
+      ],
+      "exit": 0,
+      "stdout": "\nrunning 11 tests\ntest platform::windows_keyboard::tests::control_pressed_after_alt_uses_system_keyup_before_alt_release ... ok\ntest platform::windows_keyboard::tests::invalid_chords_are_rejected_before_native_mapping ... ok\ntest platform::windows_keyboard::tests::navigation_and_windows_keys_preserve_the_e0_extended_flag ... ok\ntest platform::windows_keyboard::tests::alt_alone_clears_context_on_system_key_release ... ok\ntest platform::windows_keyboard::tests::alt_shortcut_uses_system_messages_and_normal_final_alt_release ... ok\ntest platform::windows_keyboard::tests::f10_is_a_system_key_without_alt ... ok\ntest platform::windows_keyboard::tests::foreground_key_parser_keeps_existing_alias_and_duplicate_behavior ... ok\ntest platform::windows_keyboard::tests::control_alt_chord_uses_nonsystem_messages_with_zero_context ... ok\ntest platform::windows_keyboard::tests::plain_chord_preserves_press_order_and_releases_in_reverse ... ok\ntest platform::windows_keyboard::tests::scan_mapping_is_snapshotted_once_and_invalid_maps_return_no_plan ... ok\ntest platform::windows_keyboard::tests::nonsystem_context_and_reserved_bits_are_zero_for_modifier_orders ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 84 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "command": [
+        "nice",
+        "-n",
+        "10",
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "platform::macos_focus",
+        "-j",
+        "1"
+      ],
+      "exit": 0,
+      "stdout": "\nrunning 8 tests\ntest platform::macos_focus::tests::focuses_only_the_first_matching_window_in_native_order ... ok\ntest platform::macos_focus::tests::frontmost_failure_stops_before_enumerating_windows ... ok\ntest platform::macos_focus::tests::missing_target_and_empty_window_list_are_errors ... ok\ntest platform::macos_focus::tests::unmatched_window_with_title_error_returns_the_native_error ... ok\ntest platform::macos_focus::tests::raise_failure_is_returned_without_trying_a_second_window ... ok\ntest platform::macos_focus::tests::window_owner_lives_through_raise_and_is_released_on_all_exits ... ok\ntest platform::macos_focus::tests::unreadable_unrelated_window_does_not_hide_a_later_match ... ok\ntest platform::macos_focus::tests::windows_query_failure_is_returned_without_querying_or_raising ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 87 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "-j",
+        "1",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--target",
+        "x86_64-pc-windows-gnu",
+        "-j",
+        "1"
+      ],
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--target",
+        "aarch64-apple-darwin",
+        "-j",
+        "1"
+      ],
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--target",
+        "x86_64-apple-darwin",
+        "-j",
+        "1"
+      ],
+      "exit": 0,
+      "stdout": ""
+    }
+  ],
+  "limits": [
+    "No native Windows PostMessage or macOS Accessibility runtime was exercised.",
+    "No physical serial device was opened by these simulations.",
+    "Windows-only runtime regression was compiled with all-targets, not executed."
+  ],
+  "serial_path_cases": {
+    "valid": 8194,
+    "invalid": 60,
+    "validation_only": true
+  }
+}
