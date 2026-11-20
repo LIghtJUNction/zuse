@@ -1,0 +1,152 @@
+{
+  "schema": "zuse.consumer.acceptance.v1",
+  "consumer": "LIghtJUNction/ssmcp",
+  "baseline": "785e6b00440b048d00d9da626a33defa99108afe",
+  "candidate": "bfe5f25ffab718f100b11d2ce55c8dc839cbad71",
+  "branch": "deps/zuse-0.2.2-20261120",
+  "tree": "f533297e9d5ca0e27e0152d8f986c6093138b54b",
+  "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/bfe5f25ffab718f100b11d2ce55c8dc839cbad71",
+  "zuse": {
+    "version": "0.2.2",
+    "source": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a"
+  },
+  "diff": [
+    {
+      "path": "Cargo.toml",
+      "before": "zuse-computer =0.2.1 (path dependency)",
+      "after": "zuse-computer =0.2.2 (path dependency)",
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "path": "Cargo.lock",
+      "before": "zuse-computer 0.2.1",
+      "after": "zuse-computer 0.2.2",
+      "additions": 1,
+      "deletions": 1,
+      "generation": "cargo update --offline -p zuse-computer --precise 0.2.2"
+    },
+    {
+      "path": "crates/zuse",
+      "mode": "160000",
+      "before": "d930769005d307c42639e8abedc81ab039427e40",
+      "after": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a",
+      "additions": 1,
+      "deletions": 1
+    }
+  ],
+  "verification": {
+    "checkout_clean": true,
+    "github_tree_matches_local_write_tree": true,
+    "commands": [
+      {
+        "name": "consumer-build",
+        "command": [
+          "cargo",
+          "build",
+          "--offline",
+          "--locked",
+          "--bin",
+          "ssmcp"
+        ],
+        "exit_code": 0,
+        "duration_seconds": 124.597
+      },
+      {
+        "name": "zuse-backend-tests",
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--lib",
+          "computer::zuse_backend",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "duration_seconds": 130.204
+      },
+      {
+        "name": "native-worker",
+        "command": [
+          "python3",
+          "scripts/e2e_zuse_worker.py",
+          "--binary",
+          "target/debug/ssmcp",
+          "--evidence-dir",
+          "../evidence/native",
+          "--report",
+          "../evidence/native-worker.json"
+        ],
+        "exit_code": 0,
+        "duration_seconds": 2.092
+      }
+    ],
+    "command_path_note": "Commands are relative to the SSMCP checkout; absolute task-specific output paths were normalized.",
+    "backend_tests": {
+      "passed": 12,
+      "failed": 0,
+      "ignored": 2,
+      "ignored_entries": [
+        "computer::zuse_backend::tests::subprocess_worker",
+        "computer::zuse_backend::wayland_tests::wayland_preflight_recovery_fixture"
+      ],
+      "ignored_note": "Dedicated subprocess fixture entry points are ignored in the top-level harness and selected explicitly by their parent tests.",
+      "scope": "Existing computer::zuse_backend contract filter; not the complete SSMCP test suite."
+    },
+    "native_worker": {
+      "status": "passed",
+      "assertions": 28,
+      "assertion_count_note": "28 counts runtime assertions, including repeated worker-readiness and cleanup observations plus the enclosing GTK acceptance; it is not 28 independent scenarios.",
+      "gtk_cases": [
+        {
+          "name": "whole-string rejection for wrong machine",
+          "status": "passed"
+        },
+        {
+          "name": "fresh worker after corrected machine",
+          "status": "passed"
+        },
+        {
+          "name": "whole-string rejection for wrong pid",
+          "status": "passed"
+        },
+        {
+          "name": "fresh worker after corrected pid",
+          "status": "passed"
+        },
+        {
+          "name": "whole UTF-8 replaces a character selection",
+          "status": "passed"
+        },
+        {
+          "name": "cancel after native dispatch does not resend or roll back",
+          "status": "passed"
+        }
+      ],
+      "gtk_case_count": 6,
+      "gtk_count_note": "The six GTK cases are included by the native worker acceptance and must not be added again to its assertion count.",
+      "owned_process_cleanup": "passed",
+      "environment": "Owned Xvfb displays and private accessibility bus; no operator desktop input.",
+      "binary_matches_build_and_gtk_report": true
+    }
+  },
+  "artifact": {
+    "kind": "Linux x86_64 dev SSMCP binary",
+    "binary_sha256": "5a34bdd5ec623a676ea4a378213b015488b70078e7cb0be8d5ea9c271e95fe9a",
+    "tracked_files_sha256": {
+      "Cargo.toml": "d243d8b4a75124f5229514d6fc3d4656311a9bf23429348fcc6111826aeabab5",
+      "Cargo.lock": "0f52fa7b6f9c882e62c77c491f0593a16c64515962437e50e951a5a2932f18e0"
+    }
+  },
+  "scope": {
+    "candidate_branch_published": true,
+    "application_main_updated": false,
+    "application_release_started": false,
+    "application_installed_or_deployed": false,
+    "non_linux_device_execution": false,
+    "handoff": "The existing SSMCP maintainer owns integration with current application changes, final acceptance, release and installation."
+  },
+  "verified_at_utc": "2026-11-20T05:41:31.028682+00:00"
+}

@@ -1,0 +1,146 @@
+{
+  "schema": "zuse.release-acceptance.v1",
+  "recorded_at": "2026-11-20T05:41:09.992Z",
+  "version": "0.2.2",
+  "tag": "v0.2.2",
+  "source_commit": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a",
+  "release_url": "https://github.com/LIghtJUNction/zuse/releases/tag/v0.2.2",
+  "published_at": "2026-11-20T05:31:07Z",
+  "workflow": {
+    "run_id": 44681321724,
+    "name": "Bump and release",
+    "url": "https://github.com/LIghtJUNction/zuse/actions/runs/44681321724",
+    "status": "completed",
+    "conclusion": "success",
+    "trigger_commit": "7bae6e26d050053d04c3c7a6a7d30334a11306cd",
+    "released_source_commit": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a",
+    "metadata_source": "GitHub Actions run API"
+  },
+  "assets": [
+    {
+      "name": "zuse-v0.2.2-aarch64-apple-darwin.tar.gz",
+      "bytes": 617970,
+      "sha256": "5facfd1b5e7377327fb722e1632ebc64ced6f2c8dd8c756f22029c6792a0aca9",
+      "url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.2/zuse-v0.2.2-aarch64-apple-darwin.tar.gz",
+      "state": "uploaded"
+    },
+    {
+      "name": "zuse-v0.2.2-aarch64-unknown-linux-gnu.tar.gz",
+      "bytes": 689729,
+      "sha256": "04d9c6f0eb3b088693149744930fab97d121fe75a273684c6e17f438e675608b",
+      "url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.2/zuse-v0.2.2-aarch64-unknown-linux-gnu.tar.gz",
+      "state": "uploaded"
+    },
+    {
+      "name": "zuse-v0.2.2-x86_64-apple-darwin.tar.gz",
+      "bytes": 658560,
+      "sha256": "89038ed1003c8a9929f1d6f39369dcb089de7f095dd68ac5b1338447c7722d2c",
+      "url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.2/zuse-v0.2.2-x86_64-apple-darwin.tar.gz",
+      "state": "uploaded"
+    },
+    {
+      "name": "zuse-v0.2.2-x86_64-pc-windows-msvc.zip",
+      "bytes": 625117,
+      "sha256": "4004e024b0dd427d128a81d2cd8ce366be223255fa48e4c0907eaf1dedec402f",
+      "url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.2/zuse-v0.2.2-x86_64-pc-windows-msvc.zip",
+      "state": "uploaded"
+    },
+    {
+      "name": "zuse-v0.2.2-x86_64-unknown-linux-gnu.tar.gz",
+      "bytes": 729270,
+      "sha256": "db531b29615417646964b6ed68c810af7cc0cfc94193cdab94a5dcf715013956",
+      "url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.2/zuse-v0.2.2-x86_64-unknown-linux-gnu.tar.gz",
+      "state": "uploaded"
+    }
+  ],
+  "asset_metadata_source": "GitHub releases/tags/v0.2.2 API",
+  "downloaded_linux_x86_64": {
+    "archive_name": "zuse-v0.2.2-x86_64-unknown-linux-gnu.tar.gz",
+    "archive_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.2/zuse-v0.2.2-x86_64-unknown-linux-gnu.tar.gz",
+    "archive_bytes": 729270,
+    "archive_sha256": "db531b29615417646964b6ed68c810af7cc0cfc94193cdab94a5dcf715013956",
+    "binary_bytes": 1378256,
+    "binary_sha256": "0fc5bc80c991b754e4b864560eaf52105e99d9433fa219f021d13d27ab34fcdf",
+    "version_output": "zuse 0.2.2",
+    "archive_size_and_digest_match_github": true,
+    "tested_binary_digest_matches_download_receipt": true,
+    "source_receipt": "download.json"
+  },
+  "published_cli_browser_selection": {
+    "source_receipt": "browser-selection/result.json",
+    "runner": "tests/release_browser_selection.py",
+    "started_at": "2026-11-20T05:32:39.328053+00:00",
+    "platform": "x86_64-unknown-linux-gnu",
+    "transport": "MCP stdio",
+    "browser": "self-owned isolated headless Chromium",
+    "page_source": "local data URL fixture",
+    "passed": true,
+    "passed_count": 7,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "cases": [
+      {
+        "name": "mcp_stdio_handshake",
+        "passed": true
+      },
+      {
+        "name": "isolated_headless_fixture",
+        "passed": true
+      },
+      {
+        "name": "reselect_current_page_twice_preserves_dom_and_utf8",
+        "passed": true
+      },
+      {
+        "name": "unknown_target_is_rejected",
+        "passed": true
+      },
+      {
+        "name": "original_page_usable_after_failed_selection",
+        "passed": true
+      },
+      {
+        "name": "close_removes_owned_profile_and_endpoint",
+        "passed": true
+      },
+      {
+        "name": "closed_browser_rejects_further_operations",
+        "passed": true
+      }
+    ],
+    "server_exit_code": 0,
+    "remaining_profile_count": 0,
+    "owned_profile_removed": true,
+    "owned_debugging_endpoint_closed": true
+  },
+  "crate": {
+    "name": "zuse-computer",
+    "version": "0.2.2",
+    "api_url": "https://crates.io/api/v1/crates/zuse-computer/0.2.2",
+    "archive_url": "https://static.crates.io/crates/zuse-computer/zuse-computer-0.2.2.crate",
+    "archive_sha256": "16d3bf8c73bf64721672bf0483899b796967c8d3b53fa0ea934b3e705d6e2fde",
+    "archive_bytes": 387761,
+    "published_at": "2026-11-20T05:31:30.307923Z",
+    "yanked": false,
+    "source_commit": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a",
+    "vcs_source_matches": true,
+    "manifest_version_matches": true,
+    "source_files_verified": 32,
+    "all_source_files_match_release_commit": true,
+    "cargo_cached_archive_checksum_matches": true,
+    "cargo_cache_source_matches_release": true,
+    "verification_provenance": {
+      "verifier": "dependency_map",
+      "consumer": "LIghtJUNction/ztype",
+      "receipt_url": "https://github.com/LIghtJUNction/ztype/blob/12e8a458d69b222a001a9e479823b65da840db6b/docs/evidence/zuse-0.2.2-registry.json",
+      "receipt_schema": "ztype.zuse-registry.v1",
+      "checked_at": "2026-11-20T05:32:20.109369+00:00",
+      "method": "Independent official registry/archive and actual Cargo cache verification; this summary reads the existing verifier receipt."
+    }
+  },
+  "verification_scope": {
+    "executed_release_asset": "Linux x86_64 CLI browser selection through MCP stdio",
+    "other_release_assets": "Publication metadata is recorded; this receipt contains no desktop execution results for those platforms.",
+    "crate_verification": "Reported by the independent consumer verifier; no crate or CLI tests were rerun to compose this record."
+  }
+}

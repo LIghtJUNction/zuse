@@ -29,6 +29,9 @@ does not end at the upstream release boundary.
 
 ## Current release records
 
+- [0.2.2 delivery and dependency status](delivery-0.2.2.zh-CN.md)
+- [0.2.2 release integrity](evidence/release-0.2.2.json)
+- [0.2.2 source validation](validation-0.2.2.md)
 - [0.2.0 release integrity](evidence/release-0.2.0.json)
 - [0.2.0 native validation](validation-0.2.0.md)
 
