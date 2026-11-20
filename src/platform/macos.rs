@@ -1,4 +1,10 @@
-use super::{Result, dylib::Library, image_metadata, quote, split_chord, validate_text};
+use super::{
+    Result,
+    dylib::Library,
+    image_metadata,
+    macos_focus::{ax_status, focus_window},
+    quote, split_chord, validate_text,
+};
 use std::{
     ffi::{CStr, c_char, c_void},
     path::Path,
@@ -84,6 +90,9 @@ unsafe extern "C" {
 }
 struct Owned(Ref);
 impl Owned {
+    fn as_ref(&self) -> Ref {
+        self.0
+    }
     fn new(value: Ref, what: &str) -> Result<Self> {
         if value.is_null() {
             Err(format!(
@@ -100,6 +109,15 @@ impl Drop for Owned {
             CFRelease(self.0);
         }
     }
+}
+fn copy_attribute(element: Ref, attribute: Ref, name: &str) -> Result<Owned> {
+    let mut value = ptr::null();
+    let status = unsafe { AXUIElementCopyAttributeValue(element, attribute, &mut value) };
+    // Retain ownership before checking the status so any returned object is
+    // released even when the native operation also reports an error.
+    let object = Owned::new(value, name);
+    ax_status(status, name)?;
+    object
 }
 fn cf_string(s: &str) -> Result<Owned> {
     Owned::new(
@@ -606,36 +624,33 @@ impl Desktop {
             "AXUIElementCreateApplication",
         )?;
         let front = cf_string("AXFrontmost")?;
-        let status = unsafe { AXUIElementSetAttributeValue(app.0, front.0, kCFBooleanTrue) };
-        if status != 0 {
-            return Err(format!("AXFrontmost failed with error {status}"));
-        }
         let attr = cf_string("AXWindows")?;
-        let mut value = ptr::null();
-        if unsafe { AXUIElementCopyAttributeValue(app.0, attr.0, &mut value) } == 0
-            && !value.is_null()
-        {
-            let array = Owned(value);
-            let title = cf_string("AXTitle")?;
-            let raise = cf_string("AXRaise")?;
-            for index in 0..unsafe { CFArrayGetCount(array.0) }.clamp(0, 4096) {
-                let win = unsafe { CFArrayGetValueAtIndex(array.0, index) };
-                let mut value = ptr::null();
-                if unsafe { AXUIElementCopyAttributeValue(win, title.0, &mut value) } == 0
-                    && !value.is_null()
-                {
-                    let t = Owned(value);
-                    if string(t.0) == w.title {
-                        unsafe {
-                            AXUIElementPerformAction(win, raise.0);
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-        Ok(())
+        let title = cf_string("AXTitle")?;
+        let raise = cf_string("AXRaise")?;
+        focus_window(
+            &w.title,
+            || {
+                ax_status(
+                    unsafe { AXUIElementSetAttributeValue(app.0, front.0, kCFBooleanTrue) },
+                    "AXFrontmost",
+                )
+            },
+            || {
+                let array = copy_attribute(app.0, attr.0, "AXWindows")?;
+                let count = unsafe { CFArrayGetCount(array.0) }.clamp(0, 4096);
+                // Moving the owner into the iterator keeps the borrowed AX
+                // window objects alive throughout title lookup and AXRaise.
+                Ok((0..count)
+                    .map(move |index| unsafe { CFArrayGetValueAtIndex(array.as_ref(), index) }))
+            },
+            |win| {
+                let value = copy_attribute(win, title.0, "AXTitle")?;
+                Ok(string(value.0))
+            },
+            |win| ax_status(unsafe { AXUIElementPerformAction(win, raise.0) }, "AXRaise"),
+        )
     }
+
     pub fn screenshot(&self, path: &Path, id: Option<&str>) -> Result<String> {
         screen_recording_permission().require(
             "Screen Recording",

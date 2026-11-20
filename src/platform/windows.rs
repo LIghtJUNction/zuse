@@ -1,4 +1,7 @@
-use super::{Result, image_metadata, quote, split_chord, validate_text};
+use super::{
+    Result, image_metadata, quote, validate_text,
+    windows_keyboard::{keys, window_key_messages},
+};
 use std::{ffi::c_void, path::Path, ptr};
 type Hwnd = *mut c_void;
 type Hdc = *mut c_void;
@@ -180,53 +183,6 @@ fn mouse_event(data: u32, flags: u32) -> Input {
         },
     }
 }
-fn key_code(name: &str) -> Result<u16> {
-    let lower = name.to_ascii_lowercase();
-    let code = match lower.as_str() {
-        "ctrl" | "control" => 0x11,
-        "shift" => 0x10,
-        "alt" => 0x12,
-        "super" | "meta" | "win" | "cmd" => 0x5b,
-        "enter" | "return" => 0x0d,
-        "esc" | "escape" => 0x1b,
-        "tab" => 0x09,
-        "backspace" => 0x08,
-        "space" => 0x20,
-        "delete" | "del" => 0x2e,
-        "insert" => 0x2d,
-        "home" => 0x24,
-        "end" => 0x23,
-        "pageup" => 0x21,
-        "pagedown" => 0x22,
-        "left" => 0x25,
-        "up" => 0x26,
-        "right" => 0x27,
-        "down" => 0x28,
-        "capslock" => 0x14,
-        "plus" | "equal" => 0xbb,
-        "minus" => 0xbd,
-        "comma" => 0xbc,
-        "period" => 0xbe,
-        "slash" => 0xbf,
-        _ if lower.len() == 1 && lower.as_bytes()[0].is_ascii_alphanumeric() => {
-            lower.as_bytes()[0].to_ascii_uppercase() as u16
-        }
-        _ if lower.starts_with('f') => {
-            let n: u16 = lower[1..]
-                .parse()
-                .map_err(|_| format!("unknown key {name}"))?;
-            if !(1..=24).contains(&n) {
-                return Err("function key must be F1..F24".into());
-            }
-            0x6f + n
-        }
-        _ => return Err(format!("unknown key {name}")),
-    };
-    Ok(code)
-}
-fn keys(chord: &str) -> Result<Vec<u16>> {
-    split_chord(chord)?.into_iter().map(key_code).collect()
-}
 fn window(id: &str) -> Result<Hwnd> {
     let w = if id == "active" {
         unsafe { GetForegroundWindow() }
@@ -355,27 +311,21 @@ impl Desktop {
         Ok(())
     }
     pub fn key_into(&mut self, id: &str, chord: &str) -> Result<()> {
+        // Complete parsing and mapping before posting the first key-down.
+        // MAPVK_VK_TO_VSC_EX preserves the E0 prefix for extended keys.
+        let events = window_key_messages(chord, |vk| unsafe { MapVirtualKeyW(u32::from(vk), 4) })?;
         let w = window(id)?;
-        let keys = keys(chord)?;
-        for &vk in &keys {
-            let scan = unsafe { MapVirtualKeyW(u32::from(vk), 0) };
-            if unsafe { PostMessageW(w, 0x100, usize::from(vk), (1 | (scan << 16)) as isize) } == 0
-            {
-                return Err(os_error("PostMessageW WM_KEYDOWN"));
-            }
-        }
-        for &vk in keys.iter().rev() {
-            let scan = unsafe { MapVirtualKeyW(u32::from(vk), 0) };
+        for event in events {
             if unsafe {
                 PostMessageW(
                     w,
-                    0x101,
-                    usize::from(vk),
-                    (0xc0000001u32 | (scan << 16)) as isize,
+                    event.message,
+                    usize::from(event.vk),
+                    event.lparam as isize,
                 )
             } == 0
             {
-                return Err(os_error("PostMessageW WM_KEYUP"));
+                return Err(os_error("PostMessageW keyboard message"));
             }
         }
         Ok(())

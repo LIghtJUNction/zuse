@@ -6,10 +6,14 @@ pub(crate) mod dylib;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod macos_focus;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod png;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(any(target_os = "windows", test))]
+mod windows_keyboard;
 #[cfg(target_os = "linux")]
 pub use linux::Desktop;
 #[cfg(target_os = "macos")]
