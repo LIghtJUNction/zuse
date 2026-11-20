@@ -10,11 +10,9 @@
 //! Actions are never automatically replayed after an uncertain transport error.
 use crate::json::{quote, text};
 use std::{
-    fs::{self, OpenOptions},
     io::{Read, Write},
     net::{IpAddr, SocketAddr, TcpStream},
     path::Path,
-    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 use zmcpio::json::{Document, Kind, Limits, Token, Value};
@@ -26,7 +24,6 @@ const MAX_JSON: usize = 2 * 1024 * 1024;
 const MAX_SCREENSHOT_JSON: usize = 24 * 1024 * 1024;
 const MAX_IMAGE: usize = 16 * 1024 * 1024;
 const MAX_TEXT: usize = 16 * 1024;
-static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 struct Endpoint {
@@ -200,9 +197,11 @@ impl Ios {
         let length = z64::decode(encoded.as_bytes(), &mut bytes, z64::Mode::Standard)
             .map_err(|error| format!("iOS screenshot base64: {error}"))?;
         bytes.truncate(length);
-        let (width, height) = png_dimensions(&bytes)?;
+        let (width, height) = crate::screenshot::png_dimensions(&bytes, 65535)
+            .map_err(|error| format!("iOS WDA {error}"))?;
         remaining(deadline)?;
-        write_image(path, &bytes, deadline)?;
+        crate::screenshot::write_image(path, &bytes, || remaining(deadline).map(|_| ()))
+            .map_err(|error| format!("iOS {error}"))?;
         Ok(format!(
             r#"{{"backend":"ios-wda","path":{},"mimeType":"image/png","width":{width},"height":{height},"bytes":{length},"coordinateSpace":"pixels","inputCoordinateSpace":"points"}}"#,
             quote(&path.to_string_lossy())
@@ -620,13 +619,7 @@ fn key_value(name: &str) -> Result<Key> {
 }
 
 pub(crate) fn validate_output_path(path: &Path) -> Result<()> {
-    if path.file_name().is_none()
-        || path.as_os_str().is_empty()
-        || path.as_os_str().as_encoded_bytes().contains(&0)
-    {
-        return Err("iOS screenshot needs an output filename".into());
-    }
-    Ok(())
+    crate::screenshot::validate_output_path(path).map_err(|error| format!("iOS {error}"))
 }
 
 fn parse_endpoint(input: &str) -> Result<Endpoint> {
@@ -1195,79 +1188,6 @@ fn http_request(
             error
         }
     })
-}
-
-fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
-    if bytes.len() < 45
-        || !bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-        || bytes[8..12] != 13u32.to_be_bytes()
-        || &bytes[12..16] != b"IHDR"
-    {
-        return Err("iOS WDA screenshot is not a complete PNG".into());
-    }
-    let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
-    let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
-    if width == 0 || height == 0 || width > 65535 || height > 65535 {
-        return Err("iOS WDA screenshot dimensions are invalid".into());
-    }
-    let mut offset = 8;
-    let mut image_data = false;
-    while offset + 12 <= bytes.len() {
-        let length = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-        let end = offset
-            .checked_add(length)
-            .and_then(|v| v.checked_add(12))
-            .filter(|&end| end <= bytes.len())
-            .ok_or("iOS WDA PNG chunk is truncated")?;
-        let kind = &bytes[offset + 4..offset + 8];
-        if kind == b"IDAT" {
-            image_data = true;
-        }
-        if kind == b"IEND" {
-            if length != 0 || end != bytes.len() || !image_data {
-                return Err("iOS WDA PNG terminator is invalid".into());
-            }
-            return Ok((width, height));
-        }
-        offset = end;
-    }
-    Err("iOS WDA PNG has no complete image terminator".into())
-}
-
-fn write_image(path: &Path, bytes: &[u8], deadline: Instant) -> Result<()> {
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let temporary = parent.join(format!(
-        ".zuse-ios-{}-{}.png",
-        std::process::id(),
-        TEMP_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&temporary)
-        .map_err(|e| format!("iOS screenshot output: {e}"))?;
-    let result = (|| {
-        file.write_all(bytes)
-            .map_err(|e| format!("iOS screenshot write: {e}"))?;
-        file.flush()
-            .map_err(|e| format!("iOS screenshot flush: {e}"))?;
-        remaining(deadline)?;
-        drop(file);
-        fs::rename(&temporary, path).map_err(|e| format!("iOS screenshot replace: {e}"))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
 }
 
 #[cfg(test)]

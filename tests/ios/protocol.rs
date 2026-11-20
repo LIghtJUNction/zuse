@@ -1,9 +1,15 @@
 use super::*;
 use std::{
+    fs,
     net::TcpListener,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     thread::{self, JoinHandle},
 };
+
+static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
 struct Request {

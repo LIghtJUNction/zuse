@@ -39,3 +39,6 @@ pub mod serial;
 pub mod usb;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(feature = "std")]
+mod screenshot;

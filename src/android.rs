@@ -563,6 +563,7 @@ impl Android {
     /// Captures the matching SurfaceFlinger display, whose ID is distinct from
     /// the logical ID used by input and activity launch.
     pub fn screenshot(&self, path: &Path) -> Result<String> {
+        crate::screenshot::validate_output_path(path)?;
         let deadline = Deadline::operation();
         self.ensure_display_until(deadline)?;
         let displays = self.text_until("cmd display get-displays", deadline)?;
@@ -582,18 +583,11 @@ impl Android {
         )?
         .success()?;
         deadline.check()?;
-        if png.len() < 24 || png[..8] != *b"\x89PNG\r\n\x1a\n" {
-            return Err("Android capture did not return PNG for the selected display".into());
-        }
-        let width = u32::from_be_bytes(png[16..20].try_into().map_err(|_| "PNG width")?);
-        let height = u32::from_be_bytes(png[20..24].try_into().map_err(|_| "PNG height")?);
-        if width == 0 || height == 0 || width > 16_384 || height > 16_384 {
-            return Err("Android PNG dimensions exceed limits".into());
-        }
+        let (width, height) = crate::screenshot::png_dimensions(&png, 16_384)
+            .map_err(|error| format!("Android {error}"))?;
         deadline.check()?;
-        std::fs::write(path, &png).map_err(|e| format!("write Android screenshot: {e}"))?;
-        // A late filesystem completion is reported without deleting the caller's file.
-        deadline.check()?;
+        crate::screenshot::write_image(path, &png, || deadline.check())
+            .map_err(|error| format!("Android {error}"))?;
         Ok(format!(
             "{{\"path\":{},\"mimeType\":\"image/png\",\"width\":{width},\"height\":{height},\"display\":{},\"surfaceDisplay\":{},\"mode\":{}}}",
             quote(&path.to_string_lossy()),

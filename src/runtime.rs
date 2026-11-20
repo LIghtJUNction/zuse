@@ -352,6 +352,9 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                 boolean(&call, "raw", false),
             )?,
             "ios.capture" => ios::validate_output_path(Path::new(&text(&call, "path", "")?))?,
+            "android.capture" => {
+                crate::screenshot::validate_output_path(Path::new(&text(&call, "path", "")?))?
+            }
             "ios.type" => ios::validate_text(&text(&call, "text", "")?)?,
             "ios.key" => ios::validate_key(&text(&call, "key", "")?)?,
             "ios.tap" => ios::validate_point(number(&call, "x", 0.0), number(&call, "y", 0.0))?,
