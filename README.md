@@ -220,6 +220,8 @@ limits, timeouts and cleanup semantics.
 
 Backend dependencies and tested coverage are listed in [Platforms](docs/platforms.md). Wine windows use their host window protocol; this release does not embed Wine. Interactive harnesses need a supported pipe/protocol mode.
 
+X11 text outside the keyboard layout requires a confirmed local AT-SPI editable target. The whole string is checked before input; unsupported targets fail without a keyboard-map or clipboard workaround. See [X11 text delivery](docs/x11-utf8-delivery.md) for focus binding, selection/caret semantics and the isolated native regression.
+
 ## Embed
 
 ~~~toml

@@ -43,7 +43,9 @@ api! {
     XKeysymToKeycode(Dpy,c_ulong)->u8;
     XDisplayKeycodes(Dpy,*mut c_int,*mut c_int)->c_int;
     XGetKeyboardMapping(Dpy,u8,c_int,*mut c_int)->*mut c_ulong;
-    XChangeKeyboardMapping(Dpy,c_int,c_int,*const c_ulong,c_int)->c_int;
+    XDisplayString(Dpy)->*const c_char;
+    XQueryKeymap(Dpy,*mut c_char)->c_int;
+    XkbGetState(Dpy,c_uint,*mut KeyboardState)->c_int;
     XFree(*mut c_void)->c_int;
     XSendEvent(Dpy,Window,c_int,std::ffi::c_long,*mut c_void)->c_int;
     XSetErrorHandler(Option<unsafe extern "C" fn(Dpy,*mut c_void)->c_int>)->Option<unsafe extern "C" fn(Dpy,*mut c_void)->c_int>;
@@ -52,6 +54,52 @@ api! {
 struct ClassHint {
     name: *mut c_char,
     class: *mut c_char,
+}
+#[repr(C)]
+#[derive(Default)]
+struct KeyboardState {
+    group: u8,
+    locked_group: u8,
+    base_group: u16,
+    latched_group: u16,
+    mods: u8,
+    base_mods: u8,
+    latched_mods: u8,
+    locked_mods: u8,
+    compat_state: u8,
+    grab_mods: u8,
+    compat_grab_mods: u8,
+    lookup_mods: u8,
+    compat_lookup_mods: u8,
+    ptr_buttons: u16,
+}
+
+/// Plan the whole string before dispatch: a missing symbol must never leave an
+/// ASCII prefix in the receiver. Only the two unmodified-group levels are used.
+fn key_plan(mapping: &[c_ulong], min: u8, per: usize, text: &str) -> Option<Vec<(u8, bool)>> {
+    text.chars()
+        .map(|ch| {
+            let sym = match ch {
+                '\n' | '\r' => 0xff0d,
+                '\t' => 0xff09,
+                '\u{8}' => 0xff08,
+                c if (c as u32) <= 255 => c as c_ulong,
+                c => 0x01000000 | c as c_ulong,
+            };
+            mapping
+                .chunks_exact(per)
+                .enumerate()
+                .find_map(|(index, row)| {
+                    if row[0] == sym {
+                        Some((min + index as u8, false))
+                    } else if per > 1 && row[1] == sym {
+                        Some((min + index as u8, true))
+                    } else {
+                        None
+                    }
+                })
+        })
+        .collect()
 }
 #[repr(C)]
 struct XImage {
@@ -324,9 +372,6 @@ impl X11 {
         if text.is_empty() {
             return Ok(());
         }
-        if window.is_none() && self.test.is_none() {
-            return Err("XTest extension library unavailable".into());
-        }
         let (mut min, mut max, mut per) = (0, 0, 0);
         // Read the active keyboard map once; existing symbols never change the map.
         let mapping = unsafe {
@@ -336,15 +381,36 @@ impl X11 {
             }
             let saved =
                 (self.api.XGetKeyboardMapping)(self.display, min as u8, max - min + 1, &mut per);
-            if saved.is_null() || per <= 0 || per > 64 {
+            if saved.is_null() {
                 return Err("could not read X11 keyboard mapping".into());
+            }
+            if per <= 0 || per > 64 {
+                (self.api.XFree)(saved.cast());
+                return Err("invalid X11 keyboard mapping width".into());
             }
             let values =
                 std::slice::from_raw_parts(saved, ((max - min + 1) * per) as usize).to_vec();
             (self.api.XFree)(saved.cast());
             values
         };
+        let Some(plan) = key_plan(&mapping, min as u8, per as usize, text) else {
+            return self.type_utf8(window, text);
+        };
+        if window.is_none() {
+            if self.test.is_none() {
+                return Err("XTest extension library unavailable".into());
+            }
+            // A GUI can commit while Enter (or another user key) is still down.
+            // Choose the confirmed whole-string path before emitting any key;
+            // never release user keys or apply this plan through another layout.
+            if self.quiescent_keyboard().is_err() {
+                return self.type_utf8(window, text);
+            }
+        }
         let shift_code = unsafe { (self.api.XKeysymToKeycode)(self.display, 0xffe1) };
+        if shift_code == 0 && plan.iter().any(|&(_, shift)| shift) {
+            return Err("Shift is absent from the X11 keyboard map".into());
+        }
         let emit = |code: u8, shift: bool| unsafe {
             if let Some(w) = window {
                 self.send_key(w, code, true, u32::from(shift));
@@ -361,46 +427,152 @@ impl X11 {
             }
             (self.api.XSync)(self.display, 0);
         };
-        for ch in text.chars() {
-            let sym = match ch {
-                '\n' | '\r' => 0xff0d,
-                '\t' => 0xff09,
-                '\u{8}' => 0xff08,
-                c if (c as u32) <= 255 => c as c_ulong,
-                c => 0x01000000 | c as c_ulong,
-            };
-            let mut found = None;
-            for (index, row) in mapping.chunks_exact(per as usize).enumerate() {
-                if row[0] == sym {
-                    found = Some(((min as usize + index) as u8, false));
-                    break;
-                }
-                if per > 1 && row[1] == sym {
-                    found = Some(((min as usize + index) as u8, true));
-                    break;
-                }
-            }
-            if let Some((code, shift)) = found {
-                emit(code, shift);
-                continue;
-            }
-            // Unicode symbols absent from the map use one temporary row. X11
-            // clients receive MappingNotify and must refresh their XKB/Xlib map.
-            let original = &mapping[((max - min) * per) as usize..];
-            let row = vec![sym; per as usize];
-            unsafe {
-                (self.api.XChangeKeyboardMapping)(self.display, max, per, row.as_ptr(), 1);
-                (self.api.XSync)(self.display, 0);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            emit(max as u8, false);
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            unsafe {
-                (self.api.XChangeKeyboardMapping)(self.display, max, per, original.as_ptr(), 1);
-                (self.api.XSync)(self.display, 0);
-            }
+        for (code, shift) in plan {
+            emit(code, shift);
         }
         Ok(())
+    }
+    fn quiescent_keyboard(&self) -> Result<()> {
+        let mut keys = [0 as c_char; 32];
+        let mut state = KeyboardState::default();
+        // SAFETY: buffers match XQueryKeymap and XkbStateRec from Xlib/XKB.
+        let status = unsafe {
+            (self.api.XQueryKeymap)(self.display, keys.as_mut_ptr());
+            (self.api.XkbGetState)(self.display, 0x100, &mut state)
+        };
+        if status != 0
+            || keys.iter().any(|&key| key != 0)
+            || state.group != 0
+            || state.base_group != 0
+            || state.latched_group != 0
+            || state.locked_group != 0
+            || state.mods != 0
+            || state.base_mods != 0
+            || state.latched_mods != 0
+            || state.locked_mods != 0
+        {
+            return Err("X11 text keys require released keys, no locked/latched modifiers, and layout group zero; no input was sent".into());
+        }
+        Ok(())
+    }
+    fn window_pid(&self, window: Window) -> Option<u32> {
+        let (format, bytes) = self.property(window, c"_NET_WM_PID")?;
+        if format != 32 || bytes.len() != std::mem::size_of::<c_ulong>() {
+            return None;
+        }
+        let pid = c_ulong::from_ne_bytes(bytes.try_into().ok()?);
+        u32::try_from(pid).ok().filter(|&pid| pid != 0)
+    }
+    fn parent(&self, window: Window) -> Result<Window> {
+        let (mut root, mut parent, mut children, mut count) = (0, 0, ptr::null_mut(), 0);
+        // SAFETY: initialized outputs; the returned children allocation is freed
+        // even when only the parent is needed.
+        let status = unsafe {
+            let status = (self.api.XQueryTree)(
+                self.display,
+                window,
+                &mut root,
+                &mut parent,
+                &mut children,
+                &mut count,
+            );
+            if !children.is_null() {
+                (self.api.XFree)(children.cast());
+            }
+            status
+        };
+        if status == 0 || parent == window {
+            return Err("could not identify the focused X11 client window".into());
+        }
+        Ok(parent)
+    }
+    fn type_utf8(&self, window: Option<Window>, text: &str) -> Result<()> {
+        // MappingNotify plus XSync only orders server requests. A paused client
+        // can read a later mapping for an older key event, so no temporary row
+        // (or timing delay) can safely encode arbitrary Unicode here.
+        if text.len() > 65536 || text.chars().any(char::is_control) {
+            return Err("Unsupported X11 Unicode text: use at most 64 KiB of printable UTF-8; send control keys separately; no input was sent".into());
+        }
+        // AT-SPI describes this machine's session. Never correlate remote X11
+        // PIDs with local accessibility objects.
+        let display = unsafe { CStr::from_ptr((self.api.XDisplayString)(self.display)) };
+        let display = display.to_bytes();
+        if !(display.starts_with(b":")
+            || display.starts_with(b"unix:")
+            || display.starts_with(b"unix/:"))
+        {
+            return Err(
+                "Unsupported X11 Unicode text on a remote display; no input was sent".into(),
+            );
+        }
+        let focus = self.window_id("active")?;
+        if window.is_some_and(|window| window != focus) {
+            return Err("Unsupported background X11 Unicode text: explicitly focus the target and use type_text; no input was sent".into());
+        }
+        let mut client = focus;
+        let mut pid = None;
+        for _ in 0..32 {
+            if client <= 1 || client == self.root {
+                break;
+            }
+            pid = self.window_pid(client);
+            if pid.is_some() {
+                break;
+            }
+            client = self.parent(client)?;
+        }
+        let pid = pid.ok_or("Unsupported X11 Unicode text: focused window has no local process identity; no input was sent")?;
+        // A local display can still have clients connected from another host.
+        // EWMH requires WM_CLIENT_MACHINE alongside _NET_WM_PID; do not compare
+        // a remote client's numeric PID with this session's AT-SPI processes.
+        let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .map_err(|_| "Unsupported X11 Unicode text: cannot establish the local host identity; no input was sent")?;
+        let hostname = hostname.trim_end().as_bytes();
+        let local_client = || {
+            self.property(client, c"WM_CLIENT_MACHINE")
+                .is_some_and(|(format, mut name)| {
+                    while name.last() == Some(&0) {
+                        name.pop();
+                    }
+                    format == 8 && !hostname.is_empty() && name == hostname
+                })
+        };
+        if !local_client() {
+            return Err("Unsupported X11 Unicode text: the focused client is not identified as local; no input was sent".into());
+        }
+        let bounds = self.geometry(client)?;
+        let frame_bounds =
+            self.property(client, c"_NET_FRAME_EXTENTS")
+                .and_then(|(format, bytes)| {
+                    if format != 32 || bytes.len() != 4 * std::mem::size_of::<c_ulong>() {
+                        return None;
+                    }
+                    let extents = bytes
+                        .as_chunks::<{ std::mem::size_of::<c_ulong>() }>()
+                        .0
+                        .iter()
+                        .map(|v| u32::try_from(c_ulong::from_ne_bytes(*v)).ok())
+                        .collect::<Option<Vec<_>>>()?;
+                    let [left, right, top, bottom] = extents.as_slice() else {
+                        return None;
+                    };
+                    Some((
+                        bounds.0.checked_sub(i32::try_from(*left).ok()?)?,
+                        bounds.1.checked_sub(i32::try_from(*top).ok()?)?,
+                        bounds.2.checked_add(*left)?.checked_add(*right)?,
+                        bounds.3.checked_add(*top)?.checked_add(*bottom)?,
+                    ))
+                });
+        crate::accessibility::insert_focused_x11(pid, bounds, frame_bounds, text, || {
+            if self.window_id("active")? != focus
+                || self.window_pid(client) != Some(pid)
+                || !local_client()
+                || self.geometry(client)? != bounds
+            {
+                return Err("X11 focus, target identity or geometry changed".into());
+            }
+            Ok(())
+        })
     }
     unsafe fn send_key(&self, window: Window, code: u8, down: bool, state: u32) {
         let mut event = [0 as c_ulong; 24];
@@ -690,5 +862,52 @@ impl X11 {
         }
         result?;
         Ok(image_metadata(path, width, height, "x11"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_plan_requires_every_character_before_dispatch() {
+        let map = [
+            b'a' as c_ulong,
+            b'A' as c_ulong,
+            b' ' as c_ulong,
+            0,
+            0xff0d,
+            0,
+            0xff09,
+            0,
+        ];
+        assert_eq!(
+            key_plan(&map, 8, 2, "aA \n\t"),
+            Some(vec![
+                (8, false),
+                (8, true),
+                (9, false),
+                (10, false),
+                (11, false)
+            ])
+        );
+        assert_eq!(key_plan(&map, 8, 2, "aA 中"), None);
+        assert_eq!(key_plan(&map, 8, 2, "aA 🙂"), None);
+    }
+
+    #[test]
+    fn existing_unicode_symbols_need_no_mapping_change() {
+        let map = [0x01004e2d, 0, 0x0101f642, 0];
+        assert_eq!(
+            key_plan(&map, 8, 2, "中🙂中"),
+            Some(vec![(8, false), (9, false), (8, false)])
+        );
+    }
+
+    #[test]
+    fn xkb_state_layout_matches_the_public_header() {
+        assert_eq!(std::mem::size_of::<KeyboardState>(), 18);
+        assert_eq!(std::mem::align_of::<KeyboardState>(), 2);
+        assert_eq!(std::mem::offset_of!(KeyboardState, ptr_buttons), 16);
     }
 }

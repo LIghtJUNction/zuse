@@ -1,0 +1,55 @@
+{
+  "source_sha256": {
+    "src/platform/x11.rs": "65777c5aa1775afa3c706b69076101bf84a7b85d5dfbde43b4d0fc263c7ffd84",
+    "src/accessibility.rs": "ecaaaeea18f41cd6e3c1c8124cdf794449be791c241c7a088889a4377aba60fa",
+    "src/accessibility/native/x11_input.rs": "f576370a2bf24cd163c4db7cdfc838763570d5c5f45a16cd71c76f39ed3484a4",
+    "tests/x11_utf8_native.rs": "8a157f9989e24f1ff19f4b83918f0b7fa4746f9ad865074184b8c5f7cbce63fa",
+    "tests/native_x11_utf8_fixture.c": "6ab34110271589a8e4d6e0b3b7863cb3af4fbde29f0d37b1878a67585382c275",
+    "tests/native_x11_utf8.py": "7ffb163534d9f065ef189289f79fb91368508fd9e731ae07a8733f14d020c413"
+  },
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.715722453998751,
+      "summary": []
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 1.541672601000755,
+      "summary": [
+        "    Checking zuse-computer v0.2.0 (/home/lightjunction/Documents/GITHUB/project_z/dist/worktrees/zuse-unicode-repair)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.47s"
+      ]
+    },
+    {
+      "name": "diff-whitespace",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.006595110011403449,
+      "summary": []
+    }
+  ]
+}

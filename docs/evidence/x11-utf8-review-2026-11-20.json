@@ -1,0 +1,541 @@
+{
+  "cases": [
+    {
+      "name": "normal multilingual UTF-8",
+      "result": "ok",
+      "seconds": 0.04577289799635764,
+      "observed": {
+        "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+        "other": "other window untouched",
+        "caret": 24,
+        "selection": [
+          24,
+          24
+        ],
+        "changes": 1,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "receiver stopped before input",
+      "result": "ok",
+      "seconds": 0.12651340900629293,
+      "observed": {
+        "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+        "other": "other window untouched",
+        "caret": 24,
+        "selection": [
+          24,
+          24
+        ],
+        "changes": 1,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "receiver pauses inside insertion callback",
+      "result": "ok",
+      "seconds": 0.12991121799859684,
+      "observed": {
+        "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+        "other": "other window untouched",
+        "caret": 24,
+        "selection": [
+          24,
+          24
+        ],
+        "changes": 1,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "selection uses character offsets and byte length",
+      "result": "ok",
+      "seconds": 0.014984930996433832,
+      "observed": {
+        "text": "左🙂नम右",
+        "other": "other window untouched",
+        "caret": 4,
+        "selection": [
+          4,
+          4
+        ],
+        "changes": 2,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "caret advances for repeated commits",
+      "result": "ok",
+      "seconds": 0.009767828989424743,
+      "observed": {
+        "text": "左🙂नमé右",
+        "other": "other window untouched",
+        "caret": 6,
+        "selection": [
+          6,
+          6
+        ],
+        "changes": 3,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "focus changes after insertion report uncertainty",
+      "result": "error: X11 Unicode insertion was not fully confirmed: X11 focus, target identity or geometry changed; text may have changed, do not retry automatically",
+      "seconds": 0.010573804000159726,
+      "observed": {
+        "text": "你好🙂",
+        "other": "other window untouched",
+        "caret": 3,
+        "selection": [
+          3,
+          3
+        ],
+        "changes": 1,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      }
+    },
+    {
+      "name": "changed old selection is preserved",
+      "result": "error: X11 Unicode insertion was not fully confirmed: the receiver did not retain the exact UTF-8 text; text may have changed, do not retry automatically",
+      "seconds": 0.0068418229930102825,
+      "observed": {
+        "text": "左🙂新右",
+        "other": "other window untouched",
+        "caret": 2,
+        "selection": [
+          2,
+          2
+        ],
+        "changes": 2,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "background target rejected",
+      "result": "error: Unsupported background X11 Unicode text: explicitly focus the target and use type_text; no input was sent",
+      "seconds": 0.0034381589939584956,
+      "observed": {
+        "text": "keep",
+        "other": "other window untouched",
+        "caret": 4,
+        "selection": [
+          0,
+          4
+        ],
+        "changes": 0,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      }
+    },
+    {
+      "name": "noneditable target rejects whole string",
+      "result": "error: Unsupported X11 Unicode text: the focused object is not an editable visible control in the X11 window; no input was sent",
+      "seconds": 0.006154610004159622,
+      "observed": {
+        "text": "keep",
+        "other": "other window untouched",
+        "caret": 4,
+        "selection": [
+          0,
+          4
+        ],
+        "changes": 0,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      }
+    },
+    {
+      "name": "mismatched process identity rejected",
+      "result": "error: Unsupported X11 Unicode text: no focused accessibility object belongs to the X11 client; no input was sent",
+      "seconds": 0.006457315001171082,
+      "observed": {
+        "text": "keep",
+        "other": "other window untouched",
+        "caret": 4,
+        "selection": [
+          0,
+          4
+        ],
+        "changes": 0,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      }
+    },
+    {
+      "name": "remote X client identity rejected",
+      "result": "error: Unsupported X11 Unicode text: the focused client is not identified as local; no input was sent",
+      "seconds": 0.003308536994154565,
+      "observed": {
+        "text": "keep",
+        "other": "other window untouched",
+        "caret": 4,
+        "selection": [
+          0,
+          4
+        ],
+        "changes": 0,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      }
+    },
+    {
+      "name": "UTF-8 preserves a held modifier",
+      "result": "ok",
+      "seconds": 0.011374390000128187,
+      "observed": {
+        "text": "你好🙂",
+        "other": "other window untouched",
+        "caret": 3,
+        "selection": [
+          3,
+          3
+        ],
+        "changes": 1,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,1,1,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,1,1,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "mapped ASCII uses confirmed insertion while preserving held Shift",
+      "result": "ok",
+      "seconds": 0.008562130999052897,
+      "observed": {
+        "text": "你好🙂ASCII",
+        "other": "other window untouched",
+        "caret": 8,
+        "selection": [
+          8,
+          8
+        ],
+        "changes": 2,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,1,1,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,1,1,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "ASCII keyboard path",
+      "result": "ok",
+      "seconds": 0.0031181029917206615,
+      "observed": {
+        "text": "Hello Zuse 123!",
+        "other": "other window untouched",
+        "caret": 15,
+        "selection": [
+          15,
+          15
+        ],
+        "changes": 15,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "existing select-all shortcut and ASCII replacement",
+      "result": "ok",
+      "seconds": 0.002963613995234482,
+      "observed": {
+        "text": "Replaced!",
+        "other": "other window untouched",
+        "caret": 9,
+        "selection": [
+          9,
+          9
+        ],
+        "changes": 25,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "4194320"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "filtered insertion fails without key fallback",
+      "result": "error: X11 Unicode insertion was not fully confirmed: the receiver filtered or truncated the insertion; text may have changed, do not retry automatically",
+      "seconds": 0.007331735992920585,
+      "observed": {
+        "text": "ABC",
+        "other": "other window untouched",
+        "caret": 3,
+        "selection": [
+          3,
+          3
+        ],
+        "changes": 1,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    },
+    {
+      "name": "uncertain reply does not resend or roll back",
+      "result": "error: X11 Unicode insertion was not fully confirmed: timeout from dbind; text may have changed, do not retry automatically",
+      "seconds": 1.011249945993768,
+      "observed": {
+        "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+        "other": "other window untouched",
+        "caret": 24,
+        "selection": [
+          24,
+          24
+        ],
+        "changes": 1,
+        "clipboard_clears": 0
+      },
+      "state_before": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      },
+      "state_after": {
+        "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+        "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "keyboard": "0,0,0,0,0,0,0,0",
+        "clipboard_owner": "4194320",
+        "primary_owner": "0"
+      }
+    }
+  ],
+  "payload": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+  "transport": "local X11 + confirmed AT-SPI UTF-8",
+  "driver": "/home/lightjunction/Documents/GITHUB/project_z/dist/worktrees/ztype/.build/final-target/debug/build/zuse-computer/0dc308ca6f8a2694/out/x11_utf8_native-0dc308ca6f8a2694",
+  "driver_sha256": "fd72f3977f1437ea1d37f07d71572c3801111c85e99315759840b5409acb760f",
+  "gtk_version": "3.24.52",
+  "atspi_version": "2.62.1",
+  "display_isolation": {
+    "display": ":20769",
+    "high_number_lease": true,
+    "private_authorization": true,
+    "ready_matches_requested": true
+  },
+  "clipboard_text_and_binary_preserved": true,
+  "status": "pass",
+  "provenance": {
+    "baseline_commit": "afcb4544ff3005211243501b15e9d4b463c64b93",
+    "source_sha256": {
+      "src/platform/x11.rs": "65777c5aa1775afa3c706b69076101bf84a7b85d5dfbde43b4d0fc263c7ffd84",
+      "src/accessibility.rs": "ecaaaeea18f41cd6e3c1c8124cdf794449be791c241c7a088889a4377aba60fa",
+      "src/accessibility/native/x11_input.rs": "f576370a2bf24cd163c4db7cdfc838763570d5c5f45a16cd71c76f39ed3484a4",
+      "tests/x11_utf8_native.rs": "8a157f9989e24f1ff19f4b83918f0b7fa4746f9ad865074184b8c5f7cbce63fa",
+      "tests/native_x11_utf8_fixture.c": "6ab34110271589a8e4d6e0b3b7863cb3af4fbde29f0d37b1878a67585382c275",
+      "tests/native_x11_utf8.py": "7ffb163534d9f065ef189289f79fb91368508fd9e731ae07a8733f14d020c413"
+    },
+    "recorded_utc": "2026-11-20T00:22:48.309460+00:00",
+    "earlier_gates": "x11-utf8-gates-2026-11-20.json records the first revision; the 77 library tests were not rerun for this bounded follow-up."
+  }
+}
