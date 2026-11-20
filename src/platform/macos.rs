@@ -637,9 +637,15 @@ impl Desktop {
             },
             || {
                 let array = copy_attribute(app.0, attr.0, "AXWindows")?;
-                let count = unsafe { CFArrayGetCount(array.0) }.clamp(0, 4096);
-                // Moving the owner into the iterator keeps the borrowed AX
-                // window objects alive throughout title lookup and AXRaise.
+                let count = unsafe { CFArrayGetCount(array.0) };
+                if !(0..=4096).contains(&count) {
+                    return Err(
+                        "AXWindows count exceeds the supported range; cannot identify a unique window"
+                            .into(),
+                    );
+                }
+                // Scan the complete list so a duplicate title is not hidden by
+                // truncation. Keep its owner alive until activation and AXRaise.
                 Ok((0..count)
                     .map(move |index| unsafe { CFArrayGetValueAtIndex(array.as_ref(), index) }))
             },

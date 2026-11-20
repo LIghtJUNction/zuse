@@ -9,8 +9,12 @@ pub(super) fn ax_status(status: i32, operation: &str) -> Result<()> {
     }
 }
 
-/// Keep native objects in the returned iterator alive until title lookup and
-/// raising finish. The adapter supplies native operations; tests supply outcomes.
+/// Resolve a unique title before activating the application or raising a window.
+///
+/// The native iterator owns the borrowed window objects and must remain alive
+/// through both side effects. An unreadable title or a duplicate match makes the
+/// target uncertain; neither case may choose an arbitrary window. This does not
+/// make AX lookup and activation atomic against concurrent application changes.
 pub(super) fn focus_window<W: Copy, I: IntoIterator<Item = W>>(
     target_title: &str,
     frontmost: impl FnOnce() -> Result<()>,
@@ -18,20 +22,22 @@ pub(super) fn focus_window<W: Copy, I: IntoIterator<Item = W>>(
     mut title: impl FnMut(W) -> Result<String>,
     mut raise: impl FnMut(W) -> Result<()>,
 ) -> Result<()> {
-    frontmost()?;
-    let mut title_error = None;
-    for window in windows()? {
-        match title(window) {
-            Ok(title) if title == target_title => return raise(window),
-            Ok(_) => {}
-            Err(error) => {
-                // A stale or untitled unrelated window must not hide a later
-                // match. Retain the failure if no requested window is found.
-                title_error.get_or_insert(error);
+    let mut windows = windows()?.into_iter();
+    let mut selected = None;
+    for window in windows.by_ref() {
+        if title(window)? == target_title {
+            if selected.is_some() {
+                return Err(
+                    "requested macOS window title is ambiguous in AXWindows; no window was focused"
+                        .into(),
+                );
             }
+            selected = Some(window);
         }
     }
-    Err(title_error.unwrap_or_else(|| "requested macOS window was not found in AXWindows".into()))
+    let selected = selected.ok_or("requested macOS window was not found in AXWindows")?;
+    frontmost()?;
+    raise(selected)
 }
 
 #[cfg(test)]
@@ -40,7 +46,7 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     #[test]
-    fn focuses_only_the_first_matching_window_in_native_order() {
+    fn resolves_the_unique_window_before_activating_and_raising() {
         let calls = RefCell::new(Vec::new());
         let result = focus_window(
             "target",
@@ -54,7 +60,7 @@ mod tests {
             },
             |index| {
                 calls.borrow_mut().push(format!("title:{index}"));
-                Ok(if index == 0 { "other" } else { "target" }.into())
+                Ok(if index == 1 { "target" } else { "other" }.into())
             },
             |index| {
                 calls.borrow_mut().push(format!("raise:{index}"));
@@ -64,7 +70,14 @@ mod tests {
         assert_eq!(result, Ok(()));
         assert_eq!(
             *calls.borrow(),
-            ["frontmost", "windows", "title:0", "title:1", "raise:1"]
+            [
+                "windows",
+                "title:0",
+                "title:1",
+                "title:2",
+                "frontmost",
+                "raise:1"
+            ]
         );
     }
 
@@ -74,7 +87,7 @@ mod tests {
             let queried = Cell::new(0);
             let result = focus_window(
                 "target",
-                || Ok(()),
+                || panic!("a missing window must not activate the application"),
                 || Ok(0..count),
                 |_| {
                     queried.set(queried.get() + 1);
@@ -91,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn frontmost_failure_stops_before_enumerating_windows() {
+    fn frontmost_failure_stops_before_raising_after_unique_lookup() {
         let calls = RefCell::new(Vec::new());
         let result = focus_window(
             "target",
@@ -103,11 +116,14 @@ mod tests {
                 calls.borrow_mut().push("windows");
                 Ok(0..1)
             },
-            |_| panic!("no title query after AXFrontmost failure"),
+            |_| {
+                calls.borrow_mut().push("title");
+                Ok("target".into())
+            },
             |_| panic!("no raise after AXFrontmost failure"),
         );
         assert_eq!(result.unwrap_err(), "AXFrontmost failed with error -25204");
-        assert_eq!(*calls.borrow(), ["frontmost"]);
+        assert_eq!(*calls.borrow(), ["windows", "title", "frontmost"]);
     }
 
     #[test]
@@ -128,15 +144,15 @@ mod tests {
             |_| panic!("no raise after AXWindows failure"),
         );
         assert_eq!(result.unwrap_err(), "AXWindows failed with error -25204");
-        assert_eq!(*calls.borrow(), ["frontmost", "windows"]);
+        assert_eq!(*calls.borrow(), ["windows"]);
     }
 
     #[test]
-    fn unreadable_unrelated_window_does_not_hide_a_later_match() {
+    fn unreadable_window_rejects_selection_before_activation() {
         let calls = RefCell::new(Vec::new());
         let result = focus_window(
             "target",
-            || Ok(()),
+            || panic!("unreadable titles must not activate the application"),
             || Ok(0..3),
             |index| {
                 calls.borrow_mut().push(format!("title:{index}"));
@@ -150,8 +166,8 @@ mod tests {
                 Ok(())
             },
         );
-        assert_eq!(result, Ok(()));
-        assert_eq!(*calls.borrow(), ["title:0", "title:1", "raise:1"]);
+        assert_eq!(result.unwrap_err(), "AXTitle failed with error -25212");
+        assert_eq!(*calls.borrow(), ["title:0"]);
     }
 
     #[test]
@@ -171,11 +187,11 @@ mod tests {
             |_| panic!("an unreadable or nonmatching window may not be raised"),
         );
         assert_eq!(result.unwrap_err(), "AXTitle failed with error -25202");
-        assert_eq!(queried.get(), 2);
+        assert_eq!(queried.get(), 1);
     }
 
     #[test]
-    fn raise_failure_is_returned_without_trying_a_second_window() {
+    fn raise_failure_is_returned_without_retrying_another_window() {
         let calls = RefCell::new(Vec::new());
         let result = focus_window(
             "target",
@@ -189,7 +205,7 @@ mod tests {
             },
             |index| {
                 calls.borrow_mut().push(format!("title:{index}"));
-                Ok("target".into())
+                Ok(if index == 0 { "target" } else { "other" }.into())
             },
             |index| {
                 calls.borrow_mut().push(format!("raise:{index}"));
@@ -199,7 +215,7 @@ mod tests {
         assert_eq!(result.unwrap_err(), "AXRaise failed with error -25206");
         assert_eq!(
             *calls.borrow(),
-            ["frontmost", "windows", "title:0", "raise:0"]
+            ["windows", "title:0", "title:1", "frontmost", "raise:0"]
         );
     }
 
@@ -224,7 +240,10 @@ mod tests {
             let dropped = Cell::new(0);
             let result = focus_window(
                 "target",
-                || Ok(()),
+                || {
+                    assert_eq!(dropped.get(), 0);
+                    Ok(())
+                },
                 || {
                     Ok(Windows {
                         remaining: 0..1,
@@ -242,6 +261,83 @@ mod tests {
             );
             assert_eq!(result.is_ok(), target_exists && status == 0);
             assert_eq!(dropped.get(), 1);
+        }
+    }
+    #[test]
+    fn rejects_duplicate_titles_before_foreground_activation() {
+        let activations = Cell::new(0);
+        let raised = RefCell::new(Vec::new());
+        let result = focus_window(
+            "shared title",
+            || {
+                activations.set(activations.get() + 1);
+                Ok(())
+            },
+            || Ok(0..2),
+            |_| Ok("shared title".into()),
+            |window| {
+                raised.borrow_mut().push(window);
+                Ok(())
+            },
+        );
+        assert!(
+            result.is_err(),
+            "duplicate titles must not pick the first window"
+        );
+        assert_eq!(activations.get(), 0);
+        assert!(raised.borrow().is_empty());
+    }
+
+    #[test]
+    fn missing_target_does_not_activate_the_application() {
+        let activations = Cell::new(0);
+        let result = focus_window(
+            "gone",
+            || {
+                activations.set(activations.get() + 1);
+                Ok(())
+            },
+            || Ok(0..1),
+            |_| Ok("other".into()),
+            |_| panic!("no matching window may be raised"),
+        );
+        assert!(result.is_err());
+        assert_eq!(activations.get(), 0);
+    }
+
+    #[test]
+    fn unreadable_title_after_a_candidate_still_prevents_activation() {
+        let calls = RefCell::new(Vec::new());
+        let result = focus_window(
+            "target",
+            || panic!("an incomplete title scan must not activate the application"),
+            || Ok(0..2),
+            |index| {
+                calls.borrow_mut().push(index);
+                if index == 0 {
+                    Ok("target".into())
+                } else {
+                    ax_status(-25202, "AXTitle")?;
+                    unreachable!()
+                }
+            },
+            |_| panic!("an incomplete title scan must not raise a candidate"),
+        );
+        assert_eq!(result.unwrap_err(), "AXTitle failed with error -25202");
+        assert_eq!(*calls.borrow(), [0, 1]);
+    }
+
+    #[test]
+    fn separated_duplicate_titles_and_empty_titles_are_ambiguous() {
+        for (target, titles) in [("same", ["same", "other", "same"]), ("", ["", "other", ""])] {
+            let result = focus_window(
+                target,
+                || panic!("ambiguous titles must not activate the application"),
+                || Ok(0..titles.len()),
+                |index| Ok(titles[index].into()),
+                |_| panic!("ambiguous titles must not raise a window"),
+            );
+            assert!(result.unwrap_err().contains("ambiguous"));
         }
     }
 }
