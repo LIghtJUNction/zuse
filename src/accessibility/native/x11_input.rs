@@ -168,6 +168,45 @@ fn accepted(api: &Api, success: c_int, error: ErrPtr, action: &str) -> Result<()
     Ok(())
 }
 
+fn selected_text(api: &Api, object: Obj, start: c_int, end: c_int) -> Result<String> {
+    // Bound the request before asking the application to allocate a response.
+    // At most 64 Ki Unicode characters, hence at most 256 KiB of valid UTF-8.
+    let characters = end - start;
+    if characters > 65_536 {
+        return Err(unsupported(
+            "selection exceeds the 64 Ki-character snapshot limit",
+        ));
+    }
+    let mut error = core::ptr::null_mut();
+    let pointer = unsafe { (api.text)(object, start, end, &mut error) };
+    let value = if pointer.is_null() {
+        Err(unsupported("selection text is unavailable"))
+    } else {
+        unsafe {
+            let bytes = CStr::from_ptr(pointer).to_bytes();
+            let value = if bytes.len() > 262_144 {
+                Err(unsupported(
+                    "selection response exceeds the UTF-8 snapshot limit",
+                ))
+            } else {
+                std::str::from_utf8(bytes)
+                    .map(str::to_owned)
+                    .map_err(|_| unsupported("selection response is not valid UTF-8"))
+            };
+            (api.free)(pointer.cast());
+            value
+        }
+    };
+    api.error(error)?;
+    let value = value?;
+    if value.chars().count() != characters as usize {
+        return Err(unsupported(
+            "selection text does not match its character offsets",
+        ));
+    }
+    Ok(value)
+}
+
 pub(in crate::accessibility) fn insert(
     pid: u32,
     client: Bounds,
@@ -242,6 +281,11 @@ pub(in crate::accessibility) fn insert(
     if start < 0 || end < start || end > length {
         return Err(unsupported("selection boundaries are invalid"));
     }
+    let original_selection = if end > start {
+        Some(selected_text(api, text_interface.ptr, start, end)?)
+    } else {
+        None
+    };
     let characters =
         c_int::try_from(text.chars().count()).map_err(|_| unsupported("text is too long"))?;
     let bytes = c_int::try_from(text.len()).map_err(|_| unsupported("text is too long"))?;
@@ -258,7 +302,7 @@ pub(in crate::accessibility) fn insert(
     // Complete all discovery and validation before the first mutation. Once a
     // mutation starts, no error falls back to keys, retries, or old whole text.
     editable(api, object.ptr, client)?;
-    still_focused()?;
+    still_focused().map_err(|error| format!("{error}; no input was sent"))?;
     let perform = || -> Result<()> {
         let mut error = core::ptr::null_mut();
         // AT-SPI position is in Unicode characters; InsertText length is BYTES.
@@ -271,8 +315,11 @@ pub(in crate::accessibility) fn insert(
             return Err("the receiver filtered or truncated the insertion".into());
         }
         exact_range(api, text_interface.ptr, start, final_caret, text)?;
-        if end > start {
+        if let Some(original) = original_selection.as_deref() {
             still_focused()?;
+            // A callback can rewrite the old selection without changing the
+            // character count. Never delete that replacement blindly.
+            exact_range(api, text_interface.ptr, final_caret, shifted_end, original)?;
             let mut error = core::ptr::null_mut();
             let success =
                 unsafe { (api.delete)(interface.ptr, final_caret, shifted_end, &mut error) };

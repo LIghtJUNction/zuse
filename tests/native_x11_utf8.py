@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import select
+import secrets
 import signal
 import subprocess
 import sys
@@ -45,6 +46,20 @@ def stop(process):
             process.wait(timeout=3)
 
 
+def reserve_display():
+    # Atomic directory creation is the per-user display lease. It remains held
+    # until Xvfb exits; unlike unlinking a flock file, it has no open-inode race.
+    for _ in range(32):
+        number = str(10_000 + secrets.randbelow(20_000))
+        lease = Path("/tmp") / f"project-z-xvfb-{os.getuid()}-{number}.lock"
+        try:
+            lease.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        return number, lease
+    raise RuntimeError("could not reserve a private high-number display")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--inside", action="store_true")
@@ -61,6 +76,7 @@ def main():
     report = {"cases": [], "payload": PAYLOAD, "transport": "local X11 + confirmed AT-SPI UTF-8"}
     fixture = bus = registry = xvfb = None
     logs = []
+    display_lease = None
     try:
         if args.driver:
             driver = args.driver.resolve()
@@ -84,16 +100,28 @@ def main():
             handle = (args.output / name).open("wb")
             logs.append(handle)
             return handle
-        xvfb = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "960x360x24", "-nolisten", "tcp"], stdout=subprocess.PIPE, stderr=log("xvfb.log"), bufsize=0)
+        # An unspecified -displayfd starts searching at :0, which can occupy a
+        # lazy host XWayland display. Use a high explicit number and -nopn so
+        # partial socket binding cannot make a collision appear successful.
+        requested_display, display_lease = reserve_display()
+        auth_file = args.output / "Xauthority"
+        auth_file.touch(mode=0o600, exist_ok=True)
+        auth_file.chmod(0o600)
+        authorized = subprocess.run(["xauth", "-f", str(auth_file), "add", ":" + requested_display, "MIT-MAGIC-COOKIE-1", secrets.token_hex(16)], capture_output=True, timeout=5)
+        if authorized.returncode:
+            raise RuntimeError("could not create the private Xvfb authorization file")
+        xvfb = subprocess.Popen(["Xvfb", ":" + requested_display, "-displayfd", "1", "-screen", "0", "960x360x24", "-nolisten", "tcp", "-nopn", "-auth", str(auth_file)], stdout=subprocess.PIPE, stderr=log("xvfb.log"), bufsize=0)
         display_number = line(xvfb)
-        if not display_number.isdigit():
+        if display_number != requested_display or xvfb.poll() is not None:
             raise RuntimeError("Xvfb did not allocate a private display")
         bus = subprocess.Popen(["dbus-daemon", "--config-file=/usr/share/defaults/at-spi2/accessibility.conf", "--nofork", "--print-address=1"], stdout=subprocess.PIPE, stderr=log("bus.log"), bufsize=0)
         address = line(bus)
         if not address.startswith("unix:"):
             raise RuntimeError("private accessibility bus did not start")
-        env = dict(os.environ, DISPLAY=":" + display_number, ZUSE_BACKEND="x11", GDK_BACKEND="x11", NO_AT_BRIDGE="0", AT_SPI_BUS_ADDRESS=address, GIO_USE_VFS="local", ZUSE_X11_UTF8_FIXTURE="1")
+        env = dict(os.environ, DISPLAY=":" + display_number, XAUTHORITY=str(auth_file), ZUSE_BACKEND="x11", GDK_BACKEND="x11", NO_AT_BRIDGE="0", AT_SPI_BUS_ADDRESS=address, GIO_USE_VFS="local", ZUSE_X11_UTF8_FIXTURE="1")
         env.pop("WAYLAND_DISPLAY", None)
+        subprocess.run(["xdpyinfo", "-display", env["DISPLAY"]], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=5)
+        report["display_isolation"] = {"display": env["DISPLAY"], "high_number_lease": True, "private_authorization": True, "ready_matches_requested": True}
         registry_path = next((str(p) for p in [Path("/usr/lib/at-spi2-registryd"), Path("/usr/libexec/at-spi2-registryd")] if p.is_file()), None)
         if registry_path is None:
             raise RuntimeError("at-spi2-registryd is missing")
@@ -203,6 +231,16 @@ def main():
         assert selected["observed"]["caret"] == 4, selected
         appended = check("caret advances for repeated commits", "e\u0301", "左🙂नमe\u0301右")
         assert appended["observed"]["caret"] == 6, appended
+        reset()
+        assert command("FOCUS_ON_CHANGE") == "OK"
+        moved = check("focus changes after insertion report uncertainty", "你好🙂", "你好🙂", error=True)
+        assert "not fully confirmed" in moved["result"] and "no input was sent" not in moved["result"], moved
+        assert moved["observed"]["changes"] == 1, moved
+        reset("左旧右")
+        assert command("SELECT 1 2") == "OK"
+        assert command("MUTATE_SELECTION") == "OK"
+        rewritten = check("changed old selection is preserved", "🙂", "左🙂新右", error=True)
+        assert "not fully confirmed" in rewritten["result"] and rewritten["observed"]["changes"] == 2, rewritten
         reset("keep")
         check("background target rejected", "ASCII prefix🙂", "keep", error=True, action="background", window=other)
         reset("keep")
@@ -224,7 +262,7 @@ def main():
         assert command("SHIFT_DOWN") == "OK"
         try:
             check("UTF-8 preserves a held modifier", "你好🙂", "你好🙂")
-            check("native keys reject a held modifier without releasing it", "ASCII", "你好🙂", error=True)
+            check("mapped ASCII uses confirmed insertion while preserving held Shift", "ASCII", "你好🙂ASCII")
         finally:
             assert command("SHIFT_UP") == "OK"
         reset()
@@ -257,6 +295,9 @@ def main():
             stop(process)
         for handle in logs:
             handle.close()
+        (args.output / "Xauthority").unlink(missing_ok=True)
+        if display_lease is not None:
+            display_lease.rmdir()
         (args.output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
         print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
 

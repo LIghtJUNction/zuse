@@ -14,6 +14,7 @@
 static GtkWidget *window, *entry, *other, *other_entry, *button;
 static Display *display;
 static unsigned pause_ms;
+static int focus_on_change, mutate_selection;
 static int changes;
 static int clipboard_clears;
 static void clipboard_get(GtkClipboard *clipboard, GtkSelectionData *data, guint info, gpointer value) {
@@ -29,6 +30,17 @@ static void clipboard_clear(GtkClipboard *clipboard, gpointer value) {
 }
 static void changed(GtkEditable *editable, gpointer value) {
     (void)editable; (void)value; changes++;
+    if (mutate_selection) {
+        mutate_selection = 0;
+        if(!strcmp(gtk_entry_get_text(GTK_ENTRY(entry)),"左🙂旧右"))
+            gtk_entry_set_text(GTK_ENTRY(entry),"左🙂新右");
+    }
+    if (focus_on_change) {
+        focus_on_change = 0;
+        gtk_widget_grab_focus(other_entry);
+        gdk_window_focus(gtk_widget_get_window(other), GDK_CURRENT_TIME);
+        XSync(display,False);
+    }
     if (pause_ms) { unsigned ms = pause_ms; pause_ms = 0; g_usleep(ms * 1000); }
 }
 static void state(void) {
@@ -68,7 +80,8 @@ static gboolean command(GIOChannel *channel, GIOCondition condition, gpointer da
     if (!strncmp(line, "RESET ", 6)) {
         gsize length; gchar *decoded = (gchar*)g_base64_decode(line+6, &length);
         gchar *text = g_strndup(decoded, length); g_free(decoded);
-        pause_ms = 0; gtk_entry_set_max_length(GTK_ENTRY(entry), 0);
+        pause_ms = 0; focus_on_change = 0; mutate_selection = 0;
+        gtk_entry_set_max_length(GTK_ENTRY(entry), 0);
         gtk_entry_set_text(GTK_ENTRY(entry), text); g_free(text);
         gtk_entry_set_text(GTK_ENTRY(other_entry), "other window untouched");
         gtk_editable_set_position(GTK_EDITABLE(entry), -1);
@@ -80,6 +93,10 @@ static gboolean command(GIOChannel *channel, GIOCondition condition, gpointer da
         gtk_editable_set_position(GTK_EDITABLE(entry), atoi(line+6));
     } else if (!strncmp(line, "PAUSE ", 6)) {
         pause_ms = atoi(line+6);
+    } else if (!strcmp(line,"FOCUS_ON_CHANGE")) {
+        focus_on_change = 1;
+    } else if (!strcmp(line,"MUTATE_SELECTION")) {
+        mutate_selection = 1;
     } else if (!strncmp(line, "LIMIT ", 6)) {
         gtk_entry_set_max_length(GTK_ENTRY(entry), atoi(line+6));
     } else if (!strcmp(line, "BUTTON")) {

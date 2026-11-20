@@ -400,9 +400,12 @@ impl X11 {
             if self.test.is_none() {
                 return Err("XTest extension library unavailable".into());
             }
-            // Never release a user's held Shift, apply a latched modifier, or
-            // type the group-zero plan through a different active layout.
-            self.quiescent_keyboard()?;
+            // A GUI can commit while Enter (or another user key) is still down.
+            // Choose the confirmed whole-string path before emitting any key;
+            // never release user keys or apply this plan through another layout.
+            if self.quiescent_keyboard().is_err() {
+                return self.type_utf8(window, text);
+            }
         }
         let shift_code = unsafe { (self.api.XKeysymToKeycode)(self.display, 0xffe1) };
         if shift_code == 0 && plan.iter().any(|&(_, shift)| shift) {
@@ -566,7 +569,7 @@ impl X11 {
                 || !local_client()
                 || self.geometry(client)? != bounds
             {
-                return Err("X11 focus or target geometry changed; no input was sent".into());
+                return Err("X11 focus, target identity or geometry changed".into());
             }
             Ok(())
         })

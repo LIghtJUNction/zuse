@@ -1,0 +1,244 @@
+{
+  "application_baseline": "c2b16f9df0a125a08d6055ce496e0977d723f0c3",
+  "application_source_sha256": {
+    "src/engine.rs": "a397e29c25c3ebdcd991924c693404ff15d9c2be000e3266a4e0d2985f2628eb",
+    "src/lib.rs": "1777ca1bf99ff9d42e95880a3c9940e68fdcada3c442e36e05dba71f08e1a947",
+    "src/main.rs": "2f4916055a11eb43b9edef4cc13d67bfc40eb52d606fa79937b1f94dff32d9e9",
+    "src/native.rs": "668a93a78747e47421d16d3ca1e8d4f346c82e693608f4be38aef179aef8ee21",
+    "src/panel.rs": "5af421f7eb5f602abcf029f1b6713d6f14e951678cd29a3f2512a7b860fbfba6",
+    "src/plugin.rs": "f97c5d889ab7c433017d77c35705752101c41e28e40a1ad3192d4289e996fa9b"
+  },
+  "native_script_sha256": "5aecbda1e6f3435c8901b48e35e896beea01e227370987e825cc836c19f21aa9",
+  "vendor_zui": "5e37fcfb791eec9ac523fc19373e95d0a513112f",
+  "method": "Explicit private Cargo patch to repaired zuse-computer 0.2.0. Both builds restored the application Cargo.lock bytes before native execution; no private patch is published as a dependency.",
+  "before": {
+    "build": {
+      "source": {
+        "src/platform/x11.rs": "1a42f813d0ef76fad898343adaaf3d18c30311970418f5a6d73ded9a2d13fd0f",
+        "src/accessibility/native/x11_input.rs": "83d5ced0bd331307892108c7d14214b82ea5f8516bc58745c2db33af7a1d854d"
+      },
+      "patch": "private explicit Cargo patch; lock bytes restored before execution",
+      "build_exit": 0,
+      "lock_restored": true,
+      "binary": "/home/lightjunction/Documents/GITHUB/project_z/dist/worktrees/ztype/.build/final-target/debug/ztype",
+      "plugin": "/home/lightjunction/Documents/GITHUB/project_z/dist/worktrees/ztype/.build/final-target/debug/examples/libkana_plugin.so",
+      "native_exit": 1,
+      "status": "failed",
+      "checks": 6,
+      "received": "Z 你好こんにちは مرحبا नमस्ते 🙂せかい你好",
+      "error": "native input mismatch: expected 'Z 你好こんにちは مرحبا नमस्ते 🙂せかい你好ASCII Ztype', received 'Z 你好こんにちは مرحبا नमस्ते 🙂せかい你好'"
+    },
+    "native": {
+      "display_isolation": "private high-number Xvfb with its own authorization, session and accessibility bus; no host display or input settings",
+      "checks": [
+        {
+          "command": [
+            "--engine",
+            "literal",
+            "--text",
+            "Z "
+          ],
+          "expected_append": "Z ",
+          "stdout": "submitted 2 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": [
+            "--text",
+            "nihao"
+          ],
+          "expected_append": "你好",
+          "stdout": "submitted 6 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": [
+            "--engine",
+            "kana",
+            "--text",
+            "konnichiha"
+          ],
+          "expected_append": "こんにちは",
+          "stdout": "submitted 15 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": [
+            "--engine",
+            "literal",
+            "--text",
+            " مرحبا नमस्ते 🙂"
+          ],
+          "expected_append": " مرحبا नमस्ते 🙂",
+          "stdout": "submitted 35 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": [
+            "--plugin",
+            "/home/lightjunction/Documents/GITHUB/project_z/dist/worktrees/ztype/.build/final-target/debug/examples/libkana_plugin.so",
+            "--text",
+            "sekai"
+          ],
+          "expected_append": "せかい",
+          "stdout": "submitted 9 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": "native panel Enter",
+          "expected_append": "你好",
+          "exact_utf8": true
+        }
+      ],
+      "display": {
+        "number": ":27354",
+        "high_number_lease": true,
+        "private_authorization": true,
+        "ready_matches_requested": true
+      },
+      "received": "Z 你好こんにちは مرحبا नमस्ते 🙂せかい你好",
+      "status": "failed",
+      "window": {
+        "minimum_size": [
+          520,
+          112
+        ],
+        "class": [
+          "ztype",
+          "Ztype"
+        ],
+        "properties": "window-properties.txt"
+      },
+      "error": "native input mismatch: expected 'Z 你好こんにちは مرحبا नमस्ते 🙂せかい你好ASCII Ztype', received 'Z 你好こんにちは مرحبا नमस्ते 🙂せかい你好'"
+    }
+  },
+  "after": {
+    "build": {
+      "source": {
+        "src/platform/x11.rs": "65777c5aa1775afa3c706b69076101bf84a7b85d5dfbde43b4d0fc263c7ffd84",
+        "src/accessibility/native/x11_input.rs": "f576370a2bf24cd163c4db7cdfc838763570d5c5f45a16cd71c76f39ed3484a4"
+      },
+      "patch": "private explicit Cargo patch; lock bytes restored before execution",
+      "build_exit": 0,
+      "lock_restored": true,
+      "binary": "/home/lightjunction/Documents/GITHUB/project_z/dist/worktrees/ztype/.build/final-target/debug/ztype",
+      "plugin": "/home/lightjunction/Documents/GITHUB/project_z/dist/worktrees/ztype/.build/final-target/debug/examples/libkana_plugin.so",
+      "native_exit": 0,
+      "status": "passed",
+      "checks": 11,
+      "received": "Z 你好こんにちは مرحبا नमस्ते 🙂せかい你好ASCII Ztype候选六好",
+      "error": null
+    },
+    "native": {
+      "display_isolation": "private high-number Xvfb with its own authorization, session and accessibility bus; no host display or input settings",
+      "checks": [
+        {
+          "command": [
+            "--engine",
+            "literal",
+            "--text",
+            "Z "
+          ],
+          "expected_append": "Z ",
+          "stdout": "submitted 2 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": [
+            "--text",
+            "nihao"
+          ],
+          "expected_append": "你好",
+          "stdout": "submitted 6 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": [
+            "--engine",
+            "kana",
+            "--text",
+            "konnichiha"
+          ],
+          "expected_append": "こんにちは",
+          "stdout": "submitted 15 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": [
+            "--engine",
+            "literal",
+            "--text",
+            " مرحبا नमस्ते 🙂"
+          ],
+          "expected_append": " مرحبا नमस्ते 🙂",
+          "stdout": "submitted 35 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": [
+            "--plugin",
+            "/home/lightjunction/Documents/GITHUB/project_z/dist/worktrees/ztype/.build/final-target/debug/examples/libkana_plugin.so",
+            "--text",
+            "sekai"
+          ],
+          "expected_append": "せかい",
+          "stdout": "submitted 9 UTF-8 bytes via x11",
+          "exact_utf8": true
+        },
+        {
+          "command": "native panel Enter",
+          "expected_append": "你好",
+          "exact_utf8": true
+        },
+        {
+          "command": "native panel ASCII Enter while Return remains down",
+          "expected_append": "ASCII Ztype",
+          "exact_utf8": true
+        },
+        {
+          "command": "native panel next page and Enter",
+          "expected_append": "候选六",
+          "exact_utf8": true
+        },
+        {
+          "command": "Ctrl+A replaces draft and Ctrl+C copies through native clipboard",
+          "expected_append": "好",
+          "exact_utf8": true
+        },
+        {
+          "command": "invalid edit and Escape prevent stale panel commit",
+          "expected_append": "",
+          "exact_utf8": true
+        },
+        {
+          "command": "readonly target rejects the complete mixed string",
+          "expected_append": "",
+          "rejected": true,
+          "stderr": "ztype: text delivery failed: Unsupported X11 Unicode text: the focused object is not an editable visible control in the X11 window; no input was sent"
+        }
+      ],
+      "display": {
+        "number": ":28773",
+        "high_number_lease": true,
+        "private_authorization": true,
+        "ready_matches_requested": true
+      },
+      "received": "Z 你好こんにちは مرحبا नमस्ते 🙂せかい你好ASCII Ztype候选六好",
+      "status": "passed",
+      "window": {
+        "minimum_size": [
+          520,
+          112
+        ],
+        "class": [
+          "ztype",
+          "Ztype"
+        ],
+        "properties": "window-properties.txt"
+      },
+      "utf8_bytes": 96
+    },
+    "binary_sha256": "3d114f7e0a21dc901c1a4e4f80e3b2adb3ce60eab8a4294f700ffd6c85054d2f",
+    "plugin_sha256": "4a349ed1895ea8437373ff3b74c5ea26f21bbd515cbcdee5ce266de394b71f14"
+  }
+}
