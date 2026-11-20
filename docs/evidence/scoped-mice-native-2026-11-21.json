@@ -182,5 +182,27 @@
     "hard_kill_cleanup_guaranteed": false,
     "live_windows_or_macos_tested": false,
     "ssmcp_release_updated": false
+  },
+  "dependency_impact": {
+    "status": "pass",
+    "command": [
+      "python3",
+      "scripts/project_z.py",
+      "impact",
+      "--repositories",
+      "zuse"
+    ],
+    "repositories": [
+      "oh-my-ztty",
+      "ssmcp",
+      "zrc",
+      "ztype",
+      "zuse"
+    ],
+    "source_snapshot_head": "83e6325893ac1603524176552e30ef297e08a35a",
+    "manager_git_blob": "acfa1440286ea059b5b3bf7e679d161d939f45c4",
+    "generated_and_policy_unchanged": true,
+    "source_freshness_verified": false,
+    "downstream_updates_applied": false
   }
 }
