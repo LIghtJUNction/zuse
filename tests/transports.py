@@ -20,7 +20,7 @@ import threading
 import time
 import unittest
 
-from private_xvfb import private_xvfb_command, verify_private_xvfb
+from private_xvfb import private_xvfb_command, release_private_xvfb, verify_private_xvfb
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION = "2026-07-28"
@@ -150,20 +150,25 @@ class Transports(unittest.TestCase):
         cls.workspace = tempfile.TemporaryDirectory(prefix="zuse-transport-tests-")
         cls.display = None
         cls.xvfb = None
-        if os.name == "posix" and shutil.which("Xvfb"):
-            xvfb_command, display_number = private_xvfb_command("64x48x24", extra=("-ac",))
-            cls.xvfb = Child(xvfb_command, os.environ.copy())
-            try:
-                cls.display = verify_private_xvfb(cls.xvfb.process, display_number, cls.xvfb.line())
-            except BaseException:
+        cls.display_lease = None
+        cls.auth_file = pathlib.Path(cls.workspace.name) / "Xauthority"
+        try:
+            if os.name == "posix" and shutil.which("Xvfb"):
+                xvfb_command, display_number, cls.display_lease = private_xvfb_command("64x48x24", cls.auth_file)
+                cls.xvfb = Child(xvfb_command, os.environ.copy())
+                cls.display = verify_private_xvfb(cls.xvfb.process, display_number, cls.xvfb.line(), cls.auth_file)
+        except BaseException:
+            if cls.xvfb:
                 cls.xvfb.close()
-                cls.workspace.cleanup()
-                raise
+            release_private_xvfb(cls.display_lease, cls.auth_file)
+            cls.workspace.cleanup()
+            raise
 
     @classmethod
     def tearDownClass(cls):
         if cls.xvfb:
             cls.xvfb.close()
+        release_private_xvfb(cls.display_lease, cls.auth_file)
         cls.workspace.cleanup()
 
     def setUp(self):
@@ -175,8 +180,10 @@ class Transports(unittest.TestCase):
         self.env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/does-not-exist/zuse-test-bus"
         if self.display:
             self.env["DISPLAY"] = self.display
+            self.env["XAUTHORITY"] = str(self.auth_file)
         else:
             self.env.pop("DISPLAY", None)
+            self.env.pop("XAUTHORITY", None)
         self.children = []
 
     def tearDown(self):

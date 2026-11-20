@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Run native desktop integration checks in a new Xvfb server.
-Requires cargo, gcc, Xvfb, libX11 and libXtst. No host desktop input is generated.
+Requires cargo, gcc, Xvfb, xauth, xdpyinfo, libX11 and libXtst. No host desktop input is generated.
 """
 import json
 import os
 import pathlib
+import select
 import shutil
 import struct
 import subprocess
@@ -12,7 +13,7 @@ import tempfile
 import time
 import zlib
 
-from private_xvfb import private_xvfb_command, verify_private_xvfb
+from private_xvfb import private_xvfb_command, release_private_xvfb, verify_private_xvfb
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURE = r"""
@@ -91,7 +92,7 @@ def check_png(path, expected):
     return {"width": dims[0], "height": dims[1], "bytes": len(raw)}
 
 def main():
-    for tool in ("cargo", "gcc", "Xvfb"):
+    for tool in ("cargo", "gcc", "Xvfb", "xauth", "xdpyinfo"):
         if not shutil.which(tool):
             raise SystemExit(f"required integration-test tool is missing: {tool}")
     with tempfile.TemporaryDirectory(prefix="zuse-native-x11-") as directory:
@@ -108,18 +109,22 @@ def main():
             ["cargo", "metadata", "--manifest-path", str(p / "Cargo.toml"),
              "--no-deps", "--format-version", "1", "--offline"], text=True))
         harness = pathlib.Path(metadata["target_directory"]) / "debug/native-check"
-        fixture = None
-        xvfb_command, display_number = private_xvfb_command("640x480x24")
-        xvfb = subprocess.Popen(
-            xvfb_command,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        fixture = xvfb = None
+        display_lease = None
+        auth_file = p / "Xauthority"
         try:
+            xvfb_command, display_number, display_lease = private_xvfb_command("640x480x24", auth_file)
+            xvfb = subprocess.Popen(
+                xvfb_command,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if not select.select([xvfb.stdout], [], [], 5)[0]:
+                raise RuntimeError("private Xvfb did not become ready within 5s")
             ready = xvfb.stdout.readline().strip()
             if not ready:
                 raise RuntimeError("Xvfb failed: " + xvfb.stderr.read())
-            display = verify_private_xvfb(xvfb, display_number, ready)
+            display = verify_private_xvfb(xvfb, display_number, ready, auth_file)
             env = os.environ.copy()
-            env.update(DISPLAY=display, ZUSE_BACKEND="x11")
+            env.update(DISPLAY=display, XAUTHORITY=str(auth_file), ZUSE_BACKEND="x11")
             with (p / "events.log").open("w") as log:
                 fixture = subprocess.Popen([str(p / "fixture")], env=env, stdout=log)
                 for _ in range(200):
@@ -151,11 +156,17 @@ def main():
             }
             print(json.dumps(report, indent=2))
         finally:
-            if fixture is not None:
-                fixture.terminate()
-                fixture.wait(timeout=5)
-            xvfb.terminate()
-            xvfb.wait(timeout=5)
+            try:
+                if fixture is not None:
+                    fixture.terminate()
+                    try: fixture.wait(timeout=5)
+                    except subprocess.TimeoutExpired: fixture.kill(); fixture.wait(timeout=5)
+            finally:
+                if xvfb is not None:
+                    xvfb.terminate()
+                    try: xvfb.wait(timeout=5)
+                    except subprocess.TimeoutExpired: xvfb.kill(); xvfb.wait(timeout=5)
+                release_private_xvfb(display_lease, auth_file)
 
 if __name__ == "__main__":
     main()
