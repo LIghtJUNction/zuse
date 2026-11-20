@@ -539,6 +539,7 @@ mod tests {
         calls: Vec<(String, MouseId)>,
         submitted: Vec<(MouseId, Point)>,
         fail_move: bool,
+        fail_close: bool,
         cancel_after_sample: Option<super::super::CancellationToken>,
         cancel_on_locate: Option<super::super::CancellationToken>,
         observed_name: Option<String>,
@@ -552,7 +553,11 @@ mod tests {
         fn close(&mut self, id: MouseId) -> Result<(), String> {
             self.points.remove(&id);
             self.calls.push(("close".into(), id));
-            Ok(())
+            if self.fail_close {
+                Err("injected cleanup failure".into())
+            } else {
+                Ok(())
+            }
         }
         fn position(&self, id: MouseId) -> Result<Point, String> {
             self.points.get(&id).copied().ok_or("missing mouse".into())
@@ -812,4 +817,54 @@ mod tests {
         assert!(host.points.is_empty());
         assert!(out.contains("\"released\":true"));
     }
+
+    #[test]
+    fn script_receipt_summary_preserves_effects_errors_and_cleanup() {
+        for (fail_move, fail_close, cancel) in
+            [(false, false, false), (true, false, false), (false, true, false), (false, false, true)]
+        {
+            let options = Options {
+                max_steps: 2600,
+                ..Options::default()
+            };
+            let plan = super::super::compile(
+                "let p=mouse();p.down();repeat 2500 {touchpad.capabilities();}p.move(x=20,y=30,duration=0);p.up();",
+                options,
+            )
+            .unwrap();
+            let token = super::super::CancellationToken::default();
+            let host = MockHost {
+                fail_move,
+                fail_close,
+                cancel_after_sample: cancel.then(|| token.clone()),
+                ..MockHost::default()
+            };
+            let (out, host) = execute_on(host, &plan, options, || token.is_cancelled()).unwrap();
+            assert_eq!(crate::runtime::failed(&out), fail_move || fail_close || cancel);
+            assert!(host.points.is_empty());
+            assert_eq!(host.calls.iter().filter(|(name, _)| name == "down").count(), 1);
+            assert_eq!(host.calls.iter().filter(|(name, _)| name == "close").count(), 1);
+            assert_eq!(host.submitted.is_empty(), fail_move);
+            json::with_value(&out, |value| {
+                assert!(value.get("events_omitted").unwrap().integer().unwrap() > 0);
+                let cleanup = value.get("cleanup").unwrap();
+                assert_eq!(cleanup.get("attempted").unwrap().integer().unwrap(), 1);
+                assert_eq!(cleanup.get("failed").unwrap().integer().unwrap(), i64::from(fail_close));
+                let error = value.get("error").unwrap();
+                if fail_move {
+                    assert!(json::text(error)?.contains("injected native failure"));
+                } else if fail_close {
+                    assert!(json::text(error)?.contains("injected cleanup failure"));
+                } else if cancel {
+                    assert!(json::text(error)?.contains("script cancelled"));
+                } else {
+                    assert_eq!(error.raw(), "null");
+                    assert_eq!(host.calls.iter().filter(|(name, _)| name == "up").count(), 1);
+                }
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
 }
