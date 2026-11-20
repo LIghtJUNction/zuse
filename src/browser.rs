@@ -202,15 +202,44 @@ impl Browser {
         Ok(())
     }
 
-    fn attach(&mut self, target: &str) -> Result<()> {
+    fn attach_session(&mut self, target: &str) -> Result<String> {
         let result = self.request(
             "Target.attachToTarget",
             &format!(r#"{{"targetId":{},"flatten":true}}"#, quote(target)),
             false,
         )?;
-        self.session = field_string(&result, &["sessionId"])?;
+        field_string(&result, &["sessionId"])
+    }
+
+    fn attach(&mut self, target: &str) -> Result<()> {
+        self.session = self.attach_session(target)?;
         self.target = target.to_owned();
         Ok(())
+    }
+
+    fn detach_session(&mut self, session: &str) -> Result<()> {
+        self.request(
+            "Target.detachFromTarget",
+            &format!(r#"{{"sessionId":{}}}"#, quote(session)),
+            false,
+        )?;
+        Ok(())
+    }
+
+    fn close_target(&mut self, target: &str) -> Result<()> {
+        let response = self.request(
+            "Target.closeTarget",
+            &format!(r#"{{"targetId":{}}}"#, quote(target)),
+            false,
+        )?;
+        with_json(&response, |root| match root.get("success") {
+            Some(value) if value.raw() == "true" => Ok(()),
+            Some(value) if value.raw() == "false" => Err(
+                "CDP Target.closeTarget returned success=false; the owned tab may remain open"
+                    .into(),
+            ),
+            _ => Err("CDP Target.closeTarget did not confirm closing the owned tab".into()),
+        })
     }
 
     /// List all inspectable targets as CDP JSON.
@@ -238,12 +267,13 @@ impl Browser {
     }
 
     /// Select an existing page by its exact target ID. Closing zuse does not
-    /// close a selected user-owned target.
+    /// close a selected user-owned target. Re-selecting the current page preserves
+    /// its session; a new page is initialized before releasing the current one.
     pub fn select(&mut self, target: &str) -> Result<String> {
+        if self.closed {
+            return Err("browser connection is closed".into());
+        }
         if self.mobile {
-            if self.closed {
-                return Err("browser connection is closed".into());
-            }
             if target != self.target {
                 return Err("mobile browser sessions only select their own created tab".into());
             }
@@ -251,6 +281,9 @@ impl Browser {
                 r#"{{"targetId":{},"scope":"owned"}}"#,
                 quote(target)
             ));
+        }
+        if !target.is_empty() && target == self.target {
+            return Ok(format!(r#"{{"targetId":{}}}"#, quote(target)));
         }
         let result = self.request(
             "Target.getTargetInfo",
@@ -260,23 +293,29 @@ impl Browser {
         if field_string(&result, &["targetInfo", "type"])? != "page" {
             return Err("target is not a page".into());
         }
-        if !self.session.is_empty() {
-            self.request(
-                "Target.detachFromTarget",
-                &format!(r#"{{"sessionId":{}}}"#, quote(&self.session)),
-                false,
-            )?;
+        let candidate = self.attach_session(target)?;
+        let previous_session = std::mem::replace(&mut self.session, candidate);
+        let prepared = self.enable_page().and_then(|()| {
+            if self.owned_target {
+                // Closing the old owned target also releases its session.
+                self.close_target(&self.target.clone())
+            } else if !previous_session.is_empty() {
+                self.detach_session(&previous_session)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(error) = prepared {
+            let candidate = std::mem::replace(&mut self.session, previous_session);
+            return match self.detach_session(&candidate) {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(format!(
+                    "{error}; candidate session cleanup failed: {cleanup}"
+                )),
+            };
         }
-        if self.owned_target {
-            self.request(
-                "Target.closeTarget",
-                &format!(r#"{{"targetId":{}}}"#, quote(&self.target)),
-                false,
-            )?;
-        }
-        self.attach(target)?;
+        self.target = target.to_owned();
         self.owned_target = false;
-        self.enable_page()?;
         Ok(format!(r#"{{"targetId":{}}}"#, quote(target)))
     }
 
@@ -504,21 +543,7 @@ impl Browser {
         }
         let mut error = None;
         if self.child.is_none() && self.owned_target && !self.target.is_empty() {
-            let closed = self
-                .request(
-                    "Target.closeTarget",
-                    &format!(r#"{{"targetId":{}}}"#, quote(&self.target)),
-                    false,
-                )
-                .and_then(|response| {
-                    with_json(&response, |root| match root.get("success") {
-                        Some(value) if value.raw() == "true" => Ok(()),
-                        Some(value) if value.raw() == "false" => Err(
-                            "CDP Target.closeTarget returned success=false; the owned tab may remain open".into(),
-                        ),
-                        _ => Err("CDP Target.closeTarget did not confirm closing the owned tab".into()),
-                    })
-                });
+            let closed = self.close_target(&self.target.clone());
             if let Err(value) = closed {
                 error = Some(value);
             }
@@ -1579,3 +1604,7 @@ mod tests {
 #[cfg(test)]
 #[path = "../tests/support/android_browser.rs"]
 mod android_browser_tests;
+
+#[cfg(test)]
+#[path = "../tests/support/browser_selection.rs"]
+mod browser_selection_tests;
