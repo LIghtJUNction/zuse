@@ -76,7 +76,7 @@ The browser adapter speaks Chrome DevTools Protocol over native sockets. Launch 
 
 `browser.fill` rejects password inputs. Use a visible browser and `human.request` for a local operator to complete those steps. Explicit `browser.evaluate` executes JavaScript with access to the page.
 
-`browser.connect(endpoint="http://127.0.0.1:9222")` connects to an explicitly selected loopback debugging endpoint and creates a fresh page. `browser.tabs()` lists targets; `browser.select(id="...")` attaches to an existing page. When connected to a browser started outside zuse, closing the connection preserves those selected existing pages.
+`browser.connect(endpoint="http://127.0.0.1:9222")` connects to an explicitly selected loopback debugging endpoint and creates a fresh page. `browser.tabs()` lists targets; `browser.select(id="...")` attaches to an existing page. When connected to a browser started outside zuse, closing the connection preserves those selected existing pages. Re-selecting the current page preserves its session and content; another page is prepared before the previous selection is released.
 
 ## MCP
 
@@ -226,7 +226,7 @@ X11 text outside the keyboard layout requires a confirmed local AT-SPI editable 
 
 ~~~toml
 [dependencies]
-zuse = { package = "zuse-computer", version = "0.2.0", default-features = false }
+zuse = { package = "zuse-computer", version = "0.2.2", default-features = false }
 ~~~
 
 ~~~rust
@@ -253,7 +253,7 @@ python3 scripts/bump.py patch --commit --tag --push
 
 Checks run locally; the CI workflow is available for pull requests and manual dispatch. The release workflow builds Linux x86_64/ARM64, macOS x86_64/ARM64, and Windows x86_64 archives. It also publishes the Cargo package when `CARGO_REGISTRY_TOKEN` is configured. The Bump and release workflow performs the version commit, atomic branch/tag push, and reusable release call.
 
-See [Development](docs/development.md) and [Validation](docs/validation-0.2.0.md) for exact gates and measured results.
+See [Development](docs/development.md) and [Validation](docs/validation-0.2.2.md) for exact gates and measured results.
 
 ## License
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 — 2026-11-20
+
+- Preserve the current browser page and session when selecting it again; prepare another page before releasing the previous selection.
+- Preserve the previous browser selection on explicit attachment, initialization or cleanup failure, and check target-close confirmation.
+- Resolve a unique macOS AX window title before activating the application; reject ambiguous or missing windows before focus effects.
+- Validate Android screenshot PNG structure and share staged image replacement with iOS so failed captures preserve the previous file.
+- Reject invalid Android capture paths during whole-program validation.
+- Add seven stateful CDP, four macOS selection, five Android capture and one staged-output regression; exercise current-page preservation in real isolated Chromium.
+- Verify 150 Rust tests, no_std/native and wasm builds, Clippy, and Windows plus both macOS all-target checks.
+
 ## 0.2.1 — 2026-11-20
 
 - Fixed X11 Unicode delivery by inserting and confirming complete UTF-8 through the focused AT-SPI editable control instead of temporarily remapping global keycodes.

@@ -121,3 +121,16 @@ The current OCR operation does not expose a language argument and does not pass 
 | Live macOS permission, input, capture, System Events and OCR acceptance | Not performed | No claim of successful Mac interaction, dialog behavior or screenshot correctness is based on these compile checks. |
 
 The next runtime acceptance needs a Mac and an owned, disposable test application: record the capability states from the real launch context, have the human grant the required permissions, then verify delivered input and captured content in that fixture. This document records the current implementation and validation boundary; it does not turn cross-target type checks into runtime evidence.
+
+## Exact window selection
+
+The Quartz window ID identifies the requested application and title. zuse reads
+the application's complete AX window list and requires exactly one matching
+title before setting the application frontmost and raising that window. Missing
+targets, unreadable titles, duplicate titles and an oversized window list return
+an error before focus effects. Give duplicate windows distinct titles before
+retrying. The native lookup and focus operations remain separate calls.
+
+This control flow has twelve portable helper tests and compile checks for both
+macOS architectures. Live Mac permission and application behavior still require
+device acceptance. See [0.2.2 validation](validation-0.2.2.md).

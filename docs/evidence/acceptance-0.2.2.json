@@ -1,0 +1,133 @@
+{
+  "schema": "zuse.acceptance.v1",
+  "version": "0.2.2",
+  "date": "2026-11-20",
+  "checked_source": "b64d940202bbf2aefc9c76dbb9d9856368c0a897",
+  "source_stage_binary_version": "0.2.1",
+  "checks": [
+    {
+      "check": "local-gates",
+      "command": [
+        "python3",
+        "scripts/check.py"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 9.278,
+      "test_summaries": [
+        "test result: ok. 110 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+        "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "check": "windows-all-targets",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--target",
+        "x86_64-pc-windows-gnu"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 4.294,
+      "test_summaries": []
+    },
+    {
+      "check": "macos-arm64-all-targets",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--target",
+        "aarch64-apple-darwin"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 2.178,
+      "test_summaries": []
+    },
+    {
+      "check": "macos-x64-all-targets",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--target",
+        "x86_64-apple-darwin"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 4.259,
+      "test_summaries": []
+    }
+  ],
+  "rust_tests": {
+    "passed": 150,
+    "failed": 0,
+    "ignored_by_default": 4
+  },
+  "subsets": {
+    "browser_selection_cdp": {
+      "passed": 7,
+      "baseline_passed": 2,
+      "baseline_failed": 5,
+      "kind": "stateful loopback CDP"
+    },
+    "macos_focus": {
+      "passed": 12,
+      "new_tests": 4,
+      "kind": "portable production-helper simulation"
+    },
+    "android_capture": {
+      "passed": 5,
+      "kind": "ADB shell-v2 integration fixtures",
+      "malformed_table_cases": 5
+    },
+    "screenshot_deadline": {
+      "passed": 1,
+      "kind": "real filesystem with deterministic final deadline failure"
+    },
+    "ios_protocol": {
+      "passed": 20,
+      "kind": "host WDA HTTP protocol and MCP fixtures"
+    }
+  },
+  "additional_native": {
+    "browser_selection": {
+      "passed": 1,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "browser_selection_native",
+        "--",
+        "--ignored"
+      ],
+      "kind": "real isolated headless Chromium",
+      "default_ignored_test": true
+    }
+  },
+  "scope": {
+    "new_physical_device_validation": false,
+    "live_macos_validation": false,
+    "live_windows_validation": false,
+    "png_crc_validation": false,
+    "png_pixel_decoding": false
+  },
+  "commits": {
+    "macos": "2195fce8bb3da8b73ad47834d43d6a2f1d68316f",
+    "browser": "fe5d6bc4f47a3464a46d7ea358b99b2766ec56c2",
+    "mobile_capture": "b64d940202bbf2aefc9c76dbb9d9856368c0a897"
+  }
+}

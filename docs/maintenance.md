@@ -32,7 +32,7 @@ does not end at the upstream release boundary.
 - [0.2.0 release integrity](evidence/release-0.2.0.json)
 - [0.2.0 native validation](validation-0.2.0.md)
 
-The reverse-dependency query for zuse on 2026-11-20 returned ztype, ssmcp and
+The reverse-dependency query for zuse on 2026-11-20 returned ztype, ssmcp, zrc and
 oh-my-ztty, as well as the zuse root. Project Z's aggregate catalog/gitlinks
 also need to track the selected release. Integration status is recorded in the
 delivery report with consumer owners and exact evidence; an active coordinated
