@@ -1,0 +1,1105 @@
+{
+  "recorded_at": "2026-11-20T00:54:56.577057+00:00",
+  "version": "zuse 0.2.1",
+  "source_commit": "d930769005d307c42639e8abedc81ab039427e40",
+  "tag": "v0.2.1",
+  "tag_object": "26bbed02d6c45dbda1c58145fe399060c3455815",
+  "workflow_run_url": "https://github.com/LIghtJUNction/zuse/actions/runs/44648994167",
+  "release_url": "https://github.com/LIghtJUNction/zuse/releases/tag/v0.2.1",
+  "published_at": "2026-11-20T00:52:44Z",
+  "assets": [
+    {
+      "name": "zuse-v0.2.1-aarch64-apple-darwin.tar.gz",
+      "size": 609805,
+      "digest": "sha256:13ae85f972e447217d57ddb81f64e892244901b664036153c027e4fe36779007",
+      "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.1/zuse-v0.2.1-aarch64-apple-darwin.tar.gz"
+    },
+    {
+      "name": "zuse-v0.2.1-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 681311,
+      "digest": "sha256:9b282e070d70d36a05a9118d12e93ab77ee031fb63e1dbe6e157b68244d1e6b0",
+      "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.1/zuse-v0.2.1-aarch64-unknown-linux-gnu.tar.gz"
+    },
+    {
+      "name": "zuse-v0.2.1-x86_64-apple-darwin.tar.gz",
+      "size": 650074,
+      "digest": "sha256:ed0422ac2fc993a7267be1062ff983a7a0bcdf65ad9af0a5ad49807a10b8bd7e",
+      "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.1/zuse-v0.2.1-x86_64-apple-darwin.tar.gz"
+    },
+    {
+      "name": "zuse-v0.2.1-x86_64-pc-windows-msvc.zip",
+      "size": 615280,
+      "digest": "sha256:449b7b28985ced733a32fbb95b09d80282847f56d6e2ddbfe921966695e086f3",
+      "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.1/zuse-v0.2.1-x86_64-pc-windows-msvc.zip"
+    },
+    {
+      "name": "zuse-v0.2.1-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 720337,
+      "digest": "sha256:ff19a2428adfe98e0b39d7ee0f0eb2da7deeba7a57693c56723f37ae61419908",
+      "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.2.1/zuse-v0.2.1-x86_64-unknown-linux-gnu.tar.gz"
+    }
+  ],
+  "downloaded_asset": "zuse-v0.2.1-x86_64-unknown-linux-gnu.tar.gz",
+  "asset_sha256": "ff19a2428adfe98e0b39d7ee0f0eb2da7deeba7a57693c56723f37ae61419908",
+  "asset_digest_verified": true,
+  "binary_sha256": "0efb05ca3fc0a646519be82aa96ecbf96502f46cda0d4c9131161cd54ea2575c",
+  "crate_url": "https://crates.io/crates/zuse-computer/0.2.1",
+  "crate_checksum": "8da9a00ef8468d196234a99cb4d7f47991d9fb1ef704f67da2ce63d46395ea04",
+  "crate_archive_verified": true,
+  "crate_source_commit_verified": true,
+  "crate_source_files_verified": 31,
+  "post_bump_production_source_unchanged": true,
+  "workflow": {
+    "conclusion": "success",
+    "headSha": "5510f553f0509a0aa2eb3ac02e6d3d0c989efc6e",
+    "status": "completed",
+    "url": "https://github.com/LIghtJUNction/zuse/actions/runs/44648994167"
+  },
+  "crate_archive_bytes": 369745,
+  "published_cli_all_required_gates_passed": true,
+  "published_cli_counts": {
+    "gtk_cases": 17,
+    "gtk_success": 9,
+    "gtk_expected_errors": 8,
+    "mcp_passed": 12,
+    "serial-pty_groups": 5,
+    "usb-c-abi_groups": 11
+  },
+  "published_cli_gates": {
+    "phase": "published",
+    "source_commit": "d930769005d307c42639e8abedc81ab039427e40",
+    "source_tree": "a2831328012de9b6c3f11ada539deb09c8d24cb3",
+    "gates": [
+      {
+        "name": "version",
+        "command": [
+          "<checkout>/target/published-0.2.1/zuse",
+          "--version"
+        ],
+        "exit_code": 0,
+        "seconds": 0.001,
+        "stdout": "zuse 0.2.1\n",
+        "stderr": ""
+      },
+      {
+        "name": "gtk-utf8-cli",
+        "command": [
+          "python3",
+          "tests/native_x11_utf8.py",
+          "--binary",
+          "<checkout>/target/published-0.2.1/zuse",
+          "--output",
+          "<checkout>/target/published-0.2.1/checks/gtk-utf8"
+        ],
+        "exit_code": 0,
+        "seconds": 3.778,
+        "stderr": "",
+        "stdout_detail_key": "gtk_cli"
+      },
+      {
+        "name": "mcp-transports",
+        "command": [
+          "python3",
+          "tests/transports.py",
+          "--binary",
+          "<checkout>/target/published-0.2.1/zuse"
+        ],
+        "exit_code": 0,
+        "seconds": 0.268,
+        "stdout": "",
+        "stderr": "test_dry_run_has_no_human_side_effect (__main__.Transports.test_dry_run_has_no_human_side_effect) ... ok\ntest_errors_preserve_stream_and_request_ids (__main__.Transports.test_errors_preserve_stream_and_request_ids) ... ok\ntest_frame_limit_is_bounded (__main__.Transports.test_frame_limit_is_bounded) ... ok\ntest_http_metadata_origin_host_and_json_errors (__main__.Transports.test_http_metadata_origin_host_and_json_errors) ... ok\ntest_http_token_and_name_binding (__main__.Transports.test_http_token_and_name_binding) ... ok\ntest_human_retry_integrity_and_single_use (__main__.Transports.test_human_retry_integrity_and_single_use) ... ok\ntest_inline_screenshot_is_a_real_isolated_png (__main__.Transports.test_inline_screenshot_is_a_real_isolated_png) ... ok\ntest_legacy_handshake_and_tool_call (__main__.Transports.test_legacy_handshake_and_tool_call) ... ok\ntest_modern_stdio_and_argument_contract (__main__.Transports.test_modern_stdio_and_argument_contract) ... ok\ntest_password_stays_local_and_url_only_client_gets_local_handoff (__main__.Transports.test_password_stays_local_and_url_only_client_gets_local_handoff) ... ok\ntest_server_read_only_cannot_be_weakened (__main__.Transports.test_server_read_only_cannot_be_weakened) ... ok\ntest_unix_socket_permissions_and_jsonl (__main__.Transports.test_unix_socket_permissions_and_jsonl) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 0.174s\n\nOK\n"
+      },
+      {
+        "name": "serial-pty",
+        "command": [
+          "python3",
+          "tests/native_serial.py",
+          "--binary",
+          "<checkout>/target/published-0.2.1/zuse",
+          "--output",
+          "<checkout>/target/published-0.2.1/checks/serial"
+        ],
+        "exit_code": 0,
+        "seconds": 0.279,
+        "stdout": "{\"name\": \"all_256_bytes_bidirectional_and_termios_restore\", \"status\": \"passed\", \"detail\": {\"bytes_each_direction\": 256, \"raw_8n1\": true, \"kernel_baud\": 115200, \"complete_configuration_restored\": true}}\n{\"name\": \"read_timeout\", \"status\": \"passed\", \"detail\": {\"requested_timeout_ms\": 80, \"elapsed_ms\": 81, \"configuration_restored\": true}}\n{\"name\": \"implicit_drop_restores_configuration\", \"status\": \"passed\", \"detail\": {\"explicit_close\": false, \"configuration_restored\": true}}\n{\"name\": \"partial_write_timeout_stops_and_restores\", \"status\": \"passed\", \"detail\": {\"requested_bytes\": 32768, \"bytes_before_timeout\": 15360, \"later_step_stopped\": true, \"configuration_restored\": true}}\n{\"name\": \"whole_program_preflight_has_no_prior_effects\", \"status\": \"passed\", \"detail\": {\"invalid_cases\": 7, \"prior_effects\": 0}}\n",
+        "stderr": ""
+      },
+      {
+        "name": "usb-c-abi",
+        "command": [
+          "python3",
+          "tests/native_usb.py",
+          "--binary",
+          "<checkout>/target/published-0.2.1/zuse",
+          "--output",
+          "<checkout>/target/published-0.2.1/checks/usb"
+        ],
+        "exit_code": 0,
+        "seconds": 0.191,
+        "stdout": "{\"name\": \"enumeration_only_proves_fake_library_selection\", \"status\": \"passed\", \"detail\": {\"devices\": 2, \"handles_opened\": 0, \"fixture_selected\": true}}\n{\"name\": \"bus_address_and_vid_pid_locked_before_open\", \"status\": \"passed\", \"detail\": {\"mismatched_vendor_product_address_cases\": 3, \"handles_opened\": 0}}\n{\"name\": \"busy_interface_does_not_detach\", \"status\": \"passed\", \"detail\": {\"automatic_detach\": false, \"released_unclaimed_interface\": false}}\n{\"name\": \"bulk_interrupt_control_ffi_payloads\", \"status\": \"passed\", \"detail\": {\"bulk_bytes_each_direction\": 256, \"interrupt_bytes_each_direction\": 256, \"control_bytes_each_direction\": 32, \"argument_abi_verified\": true}}\n{\"name\": \"partial_writes_not_retried_and_stop_following_steps\", \"status\": \"passed\", \"detail\": {\"short_or_timed_out_write_cases\": 4, \"transfer_calls_per_failure\": 1, \"later_steps_executed\": 0}}\n{\"name\": \"read_timeout_preserves_partial_bytes\", \"status\": \"passed\", \"detail\": {\"partial_bytes\": 17, \"timed_out\": true, \"transfer_calls\": 1}}\n{\"name\": \"invalid_native_count_is_rejected\", \"status\": \"passed\", \"detail\": {\"impossible_count_rejected\": true, \"later_step_stopped\": true}}\n{\"name\": \"control_timeout_completion_unknown\", \"status\": \"passed\", \"detail\": {\"read_and_write_timeout_cases\": 2, \"completion_reported_unknown\": true}}\n{\"name\": \"release_failure_still_closes_handle_context_library\", \"status\": \"passed\", \"detail\": {\"release_failure_reported\": true, \"handle_context_and_library_closed\": true}}\n{\"name\": \"implicit_drop_releases_all_resources\", \"status\": \"passed\", \"detail\": {\"explicit_close\": false, \"release_close_exit_unload\": true}}\n{\"name\": \"whole_program_preflight_has_no_prior_effects\", \"status\": \"passed\", \"detail\": {\"invalid_cases\": 11, \"libraries_loaded\": 0, \"prior_transfers\": 0}}\n",
+        "stderr": ""
+      }
+    ],
+    "started_at": "2026-11-20T00:54:56.661701+00:00",
+    "compile_jobs": 1,
+    "incremental": false,
+    "binary_sha256": "0efb05ca3fc0a646519be82aa96ecbf96502f46cda0d4c9131161cd54ea2575c",
+    "finished_at": "2026-11-20T00:55:01.183558+00:00",
+    "all_passed": true
+  },
+  "gtk_cli": {
+    "cases": [
+      {
+        "name": "normal multilingual UTF-8",
+        "result": "ok",
+        "seconds": 0.05557649400725495,
+        "observed": {
+          "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+          "other": "other window untouched",
+          "caret": 24,
+          "selection": [
+            24,
+            24
+          ],
+          "changes": 1,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "receiver stopped before input",
+        "result": "ok",
+        "seconds": 0.1338741539948387,
+        "observed": {
+          "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+          "other": "other window untouched",
+          "caret": 24,
+          "selection": [
+            24,
+            24
+          ],
+          "changes": 1,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "receiver pauses inside insertion callback",
+        "result": "ok",
+        "seconds": 0.13623296900186688,
+        "observed": {
+          "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+          "other": "other window untouched",
+          "caret": 24,
+          "selection": [
+            24,
+            24
+          ],
+          "changes": 1,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "selection uses character offsets and byte length",
+        "result": "ok",
+        "seconds": 0.02194618000066839,
+        "observed": {
+          "text": "左🙂नम右",
+          "other": "other window untouched",
+          "caret": 4,
+          "selection": [
+            4,
+            4
+          ],
+          "changes": 2,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "caret advances for repeated commits",
+        "result": "ok",
+        "seconds": 0.005714225000701845,
+        "observed": {
+          "text": "左🙂नमé右",
+          "other": "other window untouched",
+          "caret": 6,
+          "selection": [
+            6,
+            6
+          ],
+          "changes": 3,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "focus changes after insertion report uncertainty",
+        "result": "error: X11 Unicode insertion was not fully confirmed: X11 focus, target identity or geometry changed; text may have changed, do not retry automatically",
+        "seconds": 0.0056545279949205,
+        "observed": {
+          "text": "你好🙂",
+          "other": "other window untouched",
+          "caret": 3,
+          "selection": [
+            3,
+            3
+          ],
+          "changes": 1,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        }
+      },
+      {
+        "name": "changed old selection is preserved",
+        "result": "error: X11 Unicode insertion was not fully confirmed: the receiver did not retain the exact UTF-8 text; text may have changed, do not retry automatically",
+        "seconds": 0.01250143299694173,
+        "observed": {
+          "text": "左🙂新右",
+          "other": "other window untouched",
+          "caret": 2,
+          "selection": [
+            2,
+            2
+          ],
+          "changes": 2,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "background target rejected",
+        "result": "error: Unsupported background X11 Unicode text: explicitly focus the target and use type_text; no input was sent",
+        "seconds": 0.00558549199195113,
+        "observed": {
+          "text": "keep",
+          "other": "other window untouched",
+          "caret": 4,
+          "selection": [
+            0,
+            4
+          ],
+          "changes": 0,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        }
+      },
+      {
+        "name": "noneditable target rejects whole string",
+        "result": "error: Unsupported X11 Unicode text: the focused object is not an editable visible control in the X11 window; no input was sent",
+        "seconds": 0.00775649500428699,
+        "observed": {
+          "text": "keep",
+          "other": "other window untouched",
+          "caret": 4,
+          "selection": [
+            0,
+            4
+          ],
+          "changes": 0,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        }
+      },
+      {
+        "name": "mismatched process identity rejected",
+        "result": "error: Unsupported X11 Unicode text: no focused accessibility object belongs to the X11 client; no input was sent",
+        "seconds": 0.005367410005419515,
+        "observed": {
+          "text": "keep",
+          "other": "other window untouched",
+          "caret": 4,
+          "selection": [
+            0,
+            4
+          ],
+          "changes": 0,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        }
+      },
+      {
+        "name": "remote X client identity rejected",
+        "result": "error: Unsupported X11 Unicode text: the focused client is not identified as local; no input was sent",
+        "seconds": 0.002886082002078183,
+        "observed": {
+          "text": "keep",
+          "other": "other window untouched",
+          "caret": 4,
+          "selection": [
+            0,
+            4
+          ],
+          "changes": 0,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        }
+      },
+      {
+        "name": "UTF-8 preserves a held modifier",
+        "result": "ok",
+        "seconds": 0.010000155001762323,
+        "observed": {
+          "text": "你好🙂",
+          "other": "other window untouched",
+          "caret": 3,
+          "selection": [
+            3,
+            3
+          ],
+          "changes": 1,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,1,1,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,1,1,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "mapped ASCII uses confirmed insertion while preserving held Shift",
+        "result": "ok",
+        "seconds": 0.004817584005650133,
+        "observed": {
+          "text": "你好🙂ASCII",
+          "other": "other window untouched",
+          "caret": 8,
+          "selection": [
+            8,
+            8
+          ],
+          "changes": 2,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,1,1,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,1,1,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "ASCII keyboard path",
+        "result": "ok",
+        "seconds": 0.004987647000234574,
+        "observed": {
+          "text": "Hello Zuse 123!",
+          "other": "other window untouched",
+          "caret": 15,
+          "selection": [
+            15,
+            15
+          ],
+          "changes": 15,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "existing select-all shortcut and ASCII replacement",
+        "result": "ok",
+        "seconds": 0.00646415600203909,
+        "observed": {
+          "text": "Replaced!",
+          "other": "other window untouched",
+          "caret": 9,
+          "selection": [
+            9,
+            9
+          ],
+          "changes": 25,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "4194320"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "filtered insertion fails without key fallback",
+        "result": "error: X11 Unicode insertion was not fully confirmed: the receiver filtered or truncated the insertion; text may have changed, do not retry automatically",
+        "seconds": 0.013159697002265602,
+        "observed": {
+          "text": "ABC",
+          "other": "other window untouched",
+          "caret": 3,
+          "selection": [
+            3,
+            3
+          ],
+          "changes": 1,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      },
+      {
+        "name": "uncertain reply does not resend or roll back",
+        "result": "error: X11 Unicode insertion was not fully confirmed: timeout from dbind; text may have changed, do not retry automatically",
+        "seconds": 1.0090973999904236,
+        "observed": {
+          "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+          "other": "other window untouched",
+          "caret": 24,
+          "selection": [
+            24,
+            24
+          ],
+          "changes": 1,
+          "clipboard_clears": 0
+        },
+        "state_before": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        },
+        "state_after": {
+          "mapping": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9",
+          "keys": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "keyboard": "0,0,0,0,0,0,0,0",
+          "clipboard_owner": "4194320",
+          "primary_owner": "0"
+        }
+      }
+    ],
+    "payload": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+    "transport": "local X11 + confirmed AT-SPI UTF-8",
+    "sender": "cli-shell",
+    "binary": "<checkout>/target/published-0.2.1/zuse",
+    "binary_sha256": "0efb05ca3fc0a646519be82aa96ecbf96502f46cda0d4c9131161cd54ea2575c",
+    "cli_calls": [
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 76,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.type\",\"elapsed_us\":45221,\"value\":{\"typed_bytes\":58,\"submitted_bytes\":58,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0.12,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 36,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.type\",\"elapsed_us\":129740,\"value\":{\"typed_bytes\":58,\"submitted_bytes\":58,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 58,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.type\",\"elapsed_us\":130781,\"value\":{\"typed_bytes\":58,\"submitted_bytes\":58,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 59,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.type\",\"elapsed_us\":18069,\"value\":{\"typed_bytes\":10,\"submitted_bytes\":10,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 25,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.type\",\"elapsed_us\":2690,\"value\":{\"typed_bytes\":3,\"submitted_bytes\":3,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 31,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 1,
+        "stdout": "{\"status\":\"failed\",\"failed_step\":0,\"operation\":\"keyboard.type\",\"error\":\"X11 Unicode insertion was not fully confirmed: X11 focus, target identity or geometry changed; text may have changed, do not retry automatically\",\"error_code\":\"execution_error\",\"completed\":0,\"results\":[]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 69,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 1,
+        "stdout": "{\"status\":\"failed\",\"failed_step\":0,\"operation\":\"keyboard.type\",\"error\":\"X11 Unicode insertion was not fully confirmed: the receiver did not retain the exact UTF-8 text; text may have changed, do not retry automatically\",\"error_code\":\"execution_error\",\"completed\":0,\"results\":[]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "background",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "exit_code": 1,
+        "stdout": "{\"status\":\"failed\",\"failed_step\":0,\"operation\":\"keyboard.type\",\"error\":\"Unsupported background X11 Unicode text: explicitly focus the target and use type_text; no input was sent\",\"error_code\":\"execution_error\",\"completed\":0,\"results\":[]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 338,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 1,
+        "stdout": "{\"status\":\"failed\",\"failed_step\":0,\"operation\":\"keyboard.type\",\"error\":\"Unsupported X11 Unicode text: the focused object is not an editable visible control in the X11 window; no input was sent\",\"error_code\":\"execution_error\",\"completed\":0,\"results\":[]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 34,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 1,
+        "stdout": "{\"status\":\"failed\",\"failed_step\":0,\"operation\":\"keyboard.type\",\"error\":\"Unsupported X11 Unicode text: no focused accessibility object belongs to the X11 client; no input was sent\",\"error_code\":\"execution_error\",\"completed\":0,\"results\":[]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 35,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 1,
+        "stdout": "{\"status\":\"failed\",\"failed_step\":0,\"operation\":\"keyboard.type\",\"error\":\"Unsupported X11 Unicode text: the focused client is not identified as local; no input was sent\",\"error_code\":\"execution_error\",\"completed\":0,\"results\":[]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 351,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.type\",\"elapsed_us\":5514,\"value\":{\"typed_bytes\":10,\"submitted_bytes\":10,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 39,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.type\",\"elapsed_us\":2813,\"value\":{\"typed_bytes\":5,\"submitted_bytes\":5,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 126,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.type\",\"elapsed_us\":654,\"value\":{\"typed_bytes\":15,\"submitted_bytes\":15,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "key",
+        "operation": "keyboard.key",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 143,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.key\",\"elapsed_us\":90,\"value\":{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 95,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 0,
+        "stdout": "{\"status\":\"completed\",\"completed\":1,\"results\":[{\"step\":0,\"operation\":\"keyboard.type\",\"elapsed_us\":744,\"value\":{\"typed_bytes\":9,\"submitted_bytes\":9,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 64,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 1,
+        "stdout": "{\"status\":\"failed\",\"failed_step\":0,\"operation\":\"keyboard.type\",\"error\":\"X11 Unicode insertion was not fully confirmed: the receiver filtered or truncated the insertion; text may have changed, do not retry automatically\",\"error_code\":\"execution_error\",\"completed\":0,\"results\":[]}\n",
+        "stderr": ""
+      },
+      {
+        "action": "type",
+        "operation": "keyboard.type",
+        "pause_before": 0,
+        "backend": "x11",
+        "version": "0.2.1",
+        "focus_reply": {
+          "status": "completed",
+          "completed": 1,
+          "results": [
+            {
+              "step": 0,
+              "operation": "window.focus",
+              "elapsed_us": 38,
+              "value": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        "exit_code": 1,
+        "stdout": "{\"status\":\"failed\",\"failed_step\":0,\"operation\":\"keyboard.type\",\"error\":\"X11 Unicode insertion was not fully confirmed: timeout from dbind; text may have changed, do not retry automatically\",\"error_code\":\"execution_error\",\"completed\":0,\"results\":[]}\n",
+        "stderr": ""
+      }
+    ],
+    "gtk_version": "3.24.52",
+    "atspi_version": "2.62.1",
+    "display_isolation": {
+      "display": ":27614",
+      "high_number_lease": true,
+      "private_authorization": true,
+      "ready_matches_requested": true
+    },
+    "clipboard_text_and_binary_preserved": true,
+    "status": "pass"
+  },
+  "coverage_limits": [
+    "The downloaded Linux x86_64 binary executed the native GTK, MCP, PTY and isolated libusb checks.",
+    "The other four release targets built successfully but were not desktop-runtime tested here.",
+    "Windows/macOS production control logic and iOS/WDA protocols have Linux-host simulations documented in acceptance-0.2.1.json.",
+    "USB device responses were simulated at the C ABI boundary; serial transfers used owned Linux kernel PTYs."
+  ]
+}

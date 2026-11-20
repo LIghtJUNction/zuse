@@ -11,7 +11,7 @@ Recorded on 2026-11-20 (Asia/Taipei). This record covers verified source behavio
 | Refreshed X11 implementation | [8cb97129feeed2eea82b52aefaaf0743a29122b1](https://github.com/LIghtJUNction/zuse/commit/8cb97129feeed2eea82b52aefaaf0743a29122b1) | Reviewed focus, selection and held-key handling |
 | Tested debug CLI SHA-256 | `ba171c507503ba48c60026a7648fc904fc0d27ac63b1851bde4843f7bab82562` | Actual CLI used for the 17-case GTK acceptance run and the recorded PTY/USB harness runs |
 | Tested CLI version | `0.2.0` | Version reported before the formal 0.2.1 bump |
-| Final source acceptance SHA | [a6dc1b0a47de4327aa6407a0881da547811c41eb](https://github.com/LIghtJUNction/zuse/commit/a6dc1b0a47de4327aa6407a0881da547811c41eb) | Fill from the final consolidated source receipt |
+| Final source acceptance SHA | [a6dc1b0a47de4327aa6407a0881da547811c41eb](https://github.com/LIghtJUNction/zuse/commit/a6dc1b0a47de4327aa6407a0881da547811c41eb) | Final consolidated source receipt |
 
 The source gate, native CLI details and downloaded release artifact have separate receipt destinations:
 
@@ -57,7 +57,7 @@ Selection replacement is nontransactional: insertion, application callbacks, ver
 
 The fixture's `CLIPBOARD` text, binary payload and owner were preserved. The `PRIMARY` owner changed during the tested operations. This record consequently describes preservation of the tested `CLIPBOARD` state.
 
-The first legacy native-X11 attempt stopped because the new helper incorrectly required an optional `.XN-lock` file. The corrected helper uses an atomic display lease, a private Xauthority cookie and an authenticated readiness probe. The affected X11, AT-SPI and MCP checks then passed. The consolidated receipt retains the initial failure. A Git diff confirmed that production Rust, Cargo inputs, and the already-passed GTK/PTY/USB scripts were unchanged by this helper correction. Final explicit legacy X11/AT-SPI and MCP results: `native_x11.py` passed pointer input, foreground/background text and screen/window PNG checks; the explicit AT-SPI test passed observation, editing, actions and redaction; all 12 MCP transport tests passed with no skips..
+The first legacy native-X11 attempt stopped because the new helper incorrectly required an optional `.XN-lock` file. The corrected helper uses an atomic display lease, a private Xauthority cookie and an authenticated readiness probe. The affected X11, AT-SPI and MCP checks then passed. The consolidated receipt retains the initial failure. A Git diff confirmed that production Rust, Cargo inputs, and the already-passed GTK/PTY/USB scripts were unchanged by this helper correction. Final explicit legacy X11/AT-SPI and MCP results: `native_x11.py` passed pointer input, foreground/background text and screen/window PNG checks; the explicit AT-SPI test passed observation, editing, actions and redaction; all 12 MCP transport tests passed with no skips.
 
 ## Serial and USB behavior
 
