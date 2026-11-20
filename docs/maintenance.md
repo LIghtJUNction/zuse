@@ -14,9 +14,10 @@ does not end at the upstream release boundary.
 2. Identify the active owner and checkout for each consumer. Agree who changes
    the dependency set. Use a separate worktree for assigned work; do not edit
    another owner's active tree or start duplicate model/build work.
-3. Propagate a real released version or an agreed immutable source revision,
-   with the corresponding checksums, gitlinks and genuine lockfiles. Do not
-   fabricate registry checksums or relabel an older source tree.
+3. Use each internal project's canonical GitHub Git URL and latest default-branch
+   source. Refresh version metadata, genuine lockfiles and source gitlinks, and
+   record the observed immutable commits. Keep unrelated external dependencies
+   unchanged; do not substitute an older registry release or fixed revision.
 4. Run the relevant consumer contract and application tests. Keep compile-only,
    fixture and live-device results separate. Record the tested source and
    artifact fingerprints.

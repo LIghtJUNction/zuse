@@ -164,3 +164,7 @@ zuse eval 'mouse.circle(x=320,y=220,radius=100,duration=1600,speed_variation=0.2
 ~~~
 
 Here `x,y` is the circle center, the first and last point is `(x, y - radius)`, and `duration` covers the circular trajectory. This command begins at that first circle point; use target movement or a coordinate move when the intended path must begin at the current pointer position.
+
+## Validation
+
+See the [source validation record](validation-target-motion.md) for exact local checks and platform coverage.

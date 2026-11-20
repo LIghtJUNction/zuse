@@ -28,6 +28,23 @@ fn path_for(snapshot: &str, name: &str) -> Option<String> {
     None
 }
 
+// Input submission and observation use separate X11 connections. Wait for the
+// submitted endpoint to become observable without relaxing its exact coordinate.
+fn assert_pointer_reaches(desktop: &Desktop, expected: (i32, i32)) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        let actual = desktop.position().unwrap();
+        if actual == expected {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pointer did not reach {expected:?}; last observed {actual:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
 #[test]
 #[ignore = "run through python3 tests/run_accessibility_native.py for an isolated fixture"]
 fn native_atspi_observe_edit_action_and_redaction() {
@@ -76,6 +93,7 @@ fn native_atspi_observe_edit_action_and_redaction() {
 fn verify_target_movement() {
     let mut desktop = Desktop::connect().unwrap();
     desktop.move_to(24, 30).unwrap();
+    assert_pointer_reaches(&desktop, (24, 30));
     let mut runtime = Runtime::new();
     let began = std::time::Instant::now();
     let output = runtime.execute(
@@ -89,7 +107,7 @@ fn verify_target_movement() {
         (located.bounds.x + located.bounds.width / 2.0 + 4.0).round() as i32,
         (located.bounds.y + located.bounds.height / 2.0 - 3.0).round() as i32,
     );
-    assert_eq!(desktop.position().unwrap(), expected);
+    assert_pointer_reaches(&desktop, expected);
     json::with_value(&output, |root| {
         let value = root
             .get("results")
@@ -142,6 +160,7 @@ fn verify_target_movement() {
 
     // A speed-resolved duration is charged before its first pointer event.
     desktop.move_to(24, 30).unwrap();
+    assert_pointer_reaches(&desktop, (24, 30));
     let output = runtime
         .execute(
             "mouse.move_to(text=\"Zuse action fixture\",role=\"button\",speed=300)",
@@ -179,11 +198,9 @@ fn verify_target_movement() {
         "{output}"
     );
     assert!(output.contains("\"failed_step\":1"), "{output}");
-    assert_eq!(
-        desktop.position().unwrap(),
-        (center.x.round() as i32, center.y.round() as i32)
-    );
+    assert_pointer_reaches(&desktop, (center.x.round() as i32, center.y.round() as i32));
     desktop.move_to(24, 30).unwrap();
+    assert_pointer_reaches(&desktop, (24, 30));
 
     let query = TargetQuery::button("Zuse action fixture");
     let receipt = runtime
@@ -209,9 +226,9 @@ fn verify_target_movement() {
         )
         .unwrap();
     assert_eq!(receipt.from, Point { x: 24.0, y: 30.0 });
-    assert_eq!(
-        desktop.position().unwrap(),
-        (receipt.to.x.round() as i32, receipt.to.y.round() as i32)
+    assert_pointer_reaches(
+        &desktop,
+        (receipt.to.x.round() as i32, receipt.to.y.round() as i32),
     );
     let before = desktop.position().unwrap();
     assert!(
@@ -245,12 +262,12 @@ fn verify_target_movement() {
         ..TargetQuery::button("Zuse duplicate target")
     })
     .unwrap();
-    assert_eq!(
-        desktop.position().unwrap(),
+    assert_pointer_reaches(
+        &desktop,
         (
             (selected.bounds.x + selected.bounds.width / 2.0).round() as i32,
             (selected.bounds.y + selected.bounds.height / 2.0).round() as i32,
-        )
+        ),
     );
     let mut engine = zuse::mcp::Engine::new(Options::default());
     let request = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"zuse.execute","arguments":{"code":"mouse.move_to(text=\"Zuse action waiting\",duration=0)"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}"#;
@@ -269,12 +286,12 @@ fn verify_target_movement() {
     })
     .unwrap();
     let label = target::locate(&TargetQuery::text("Zuse action waiting")).unwrap();
-    assert_eq!(
-        desktop.position().unwrap(),
+    assert_pointer_reaches(
+        &desktop,
         (
             (label.bounds.x + label.bounds.width / 2.0).round() as i32,
             (label.bounds.y + label.bounds.height / 2.0).round() as i32,
-        )
+        ),
     );
     println!(
         "target motion: native runtime, current start, offsets, timing, no-click, missing/hidden/ambiguous targets, cumulative speed budget, callback preflight, CLI buttons and MCP text passed"
