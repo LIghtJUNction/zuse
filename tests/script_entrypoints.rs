@@ -118,12 +118,24 @@ fn mcp_script_cannot_weaken_server_read_only_policy() {
     }
 }
 
-
 fn assert_capability_receipt(receipt: &str, steps: usize, truncated: bool) {
     json::with_value(receipt, |value| {
-        assert!(value.get("status").unwrap().string().unwrap().matches("completed"));
+        assert!(
+            value
+                .get("status")
+                .unwrap()
+                .string()
+                .unwrap()
+                .matches("completed")
+        );
         assert_eq!(
-            value.get("plan").unwrap().get("steps").unwrap().integer().unwrap(),
+            value
+                .get("plan")
+                .unwrap()
+                .get("steps")
+                .unwrap()
+                .integer()
+                .unwrap(),
             steps as i64
         );
         let recorded = value.get("events").unwrap().elements().count();
@@ -186,17 +198,25 @@ fn script_receipt_mcp_encodes_large_results_and_serves_the_next_request() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let responses: Vec<_> = stdout.lines().collect();
     assert_eq!(responses.len(), cases.len());
-    for (index, (response, (steps, truncated))) in
-        responses.iter().zip(cases).enumerate()
-    {
+    for (index, (response, (steps, truncated))) in responses.iter().zip(cases).enumerate() {
         json::with_value(response, |value| {
-            assert_eq!(value.get("id").unwrap().integer().unwrap(), (index + 1) as i64);
+            assert_eq!(
+                value.get("id").unwrap().integer().unwrap(),
+                (index + 1) as i64
+            );
             assert!(value.get("error").is_none());
             let result = value.get("result").unwrap();
             assert_eq!(result.get("isError").unwrap().boolean(), Some(false));
             let structured = result.get("structuredContent").unwrap();
             let text = json::text(
-                result.get("content").unwrap().elements().next().unwrap().get("text").unwrap(),
+                result
+                    .get("content")
+                    .unwrap()
+                    .elements()
+                    .next()
+                    .unwrap()
+                    .get("text")
+                    .unwrap(),
             )?;
             assert_eq!(text, structured.raw());
             assert_capability_receipt(&text, steps, truncated);

@@ -18,6 +18,7 @@ use zmcpio::{
     tools::{Content, Tool, ToolResult},
 };
 const MAX_FRAME: usize = 1024 * 1024;
+const MAX_RESULT_BYTES: usize = 32 * 1024 * 1024;
 fn limits() -> Limits {
     Limits {
         max_bytes: MAX_FRAME,
@@ -562,7 +563,7 @@ impl Engine {
                     .saturating_mul(2)
                     .saturating_add(picture.as_ref().map_or(0, String::len))
                     .saturating_add(65536);
-                if capacity > 32 * 1024 * 1024 {
+                if capacity > MAX_RESULT_BYTES {
                     return Err("MCP result exceeds 32 MiB".into());
                 }
                 out.resize(capacity, 0);
@@ -574,17 +575,34 @@ impl Engine {
                             mime_type: "image/png",
                         })
                     }
-                    self.protocol
-                        .tool_result(
+                    let encode = |output: &mut [u8]| {
+                        self.protocol.tool_result(
                             call.context,
                             ToolResult {
                                 content: &content,
                                 structured_content: Some(structured),
                                 is_error,
                             },
-                            &mut out,
+                            output,
                         )
-                        .map_err(|e| e.to_string())
+                    };
+                    match encode(&mut out) {
+                        Err(error)
+                            if error.kind == zmcpio::ErrorKind::Buffer
+                                && error.needed > out.len() =>
+                        {
+                            if error.needed > MAX_RESULT_BYTES {
+                                return Err("MCP result exceeds 32 MiB".into());
+                            }
+                            // Writer reports the exact size, including escaped
+                            // text, structured JSON, request ID and framing.
+                            // Retry serialization once; never execute the tool again.
+                            out.resize(error.needed, 0);
+                            encode(&mut out)
+                        }
+                        result => result,
+                    }
+                    .map_err(|e| e.to_string())
                 })?
             }
             Action::Extension { context, .. } => self
