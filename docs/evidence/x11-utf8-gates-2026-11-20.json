@@ -1,0 +1,91 @@
+[
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0,
+    "seconds": 0.2643154960096581,
+    "summary": []
+  },
+  {
+    "name": "library-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "--lib"
+    ],
+    "exit_code": 0,
+    "seconds": 4.8735642559913686,
+    "summary": [
+      "    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.31s",
+      "test result: ok. 77 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s"
+    ]
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--offline",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "seconds": 3.269878503997461,
+    "summary": [
+      "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.21s"
+    ]
+  },
+  {
+    "name": "core-no-std",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "--offline",
+      "--no-default-features",
+      "--lib"
+    ],
+    "exit_code": 0,
+    "seconds": 0.1642009649949614,
+    "summary": [
+      "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s"
+    ]
+  },
+  {
+    "name": "existing-x11",
+    "command": [
+      "python3",
+      "tests/native_x11.py"
+    ],
+    "exit_code": 0,
+    "seconds": 4.982271910994314,
+    "summary": [
+      "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.82s",
+      "  \"native_x11\": \"pass\","
+    ]
+  },
+  {
+    "name": "existing-atspi",
+    "command": [
+      "python3",
+      "tests/run_accessibility_native.py"
+    ],
+    "exit_code": 0,
+    "seconds": 1.6311709370056633,
+    "summary": [
+      "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+    ]
+  }
+]

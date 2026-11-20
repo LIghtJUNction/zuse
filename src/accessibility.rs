@@ -77,8 +77,22 @@ fn validate_path(path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Internal X11 fallback. The caller supplies a locally owned window's process
+/// and geometry and rechecks X focus immediately before any text mutation.
+#[cfg(target_os = "linux")]
+pub(crate) fn insert_focused_x11(
+    pid: u32,
+    bounds: (i32, i32, u32, u32),
+    frame_bounds: Option<(i32, i32, u32, u32)>,
+    text: &str,
+    still_focused: impl Fn() -> Result<()>,
+) -> Result<()> {
+    native::x11_input::insert(pid, bounds, frame_bounds, text, still_focused)
+}
+
 #[cfg(target_os = "linux")]
 mod native {
+    pub(super) mod x11_input;
     use super::*;
     use crate::platform::dylib::Library;
     use core::ffi::{c_char, c_int, c_void};
@@ -102,6 +116,11 @@ mod native {
         width: c_int,
         height: c_int,
     }
+    #[repr(C)]
+    struct TextRange {
+        start: c_int,
+        end: c_int,
+    }
     // AT-SPI owns process-global D-Bus state; its library stays loaded.
     // Every call from this module is serialized by ACCESS.
     static LIBRARY: OnceLock<std::result::Result<Api, String>> = OnceLock::new();
@@ -124,6 +143,17 @@ mod native {
         grab_focus: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
         editable_iface: unsafe extern "C" fn(Obj) -> Obj,
         set_contents: unsafe extern "C" fn(Obj, *const c_char, *mut ErrPtr) -> c_int,
+        process_id: unsafe extern "C" fn(Obj, *mut ErrPtr) -> u32,
+        clear_cache: unsafe extern "C" fn(Obj),
+        state_set: unsafe extern "C" fn(Obj) -> Obj,
+        state_contains: unsafe extern "C" fn(Obj, c_int) -> c_int,
+        caret: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
+        set_caret: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> c_int,
+        selections: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
+        selection: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> *mut TextRange,
+        remove_selection: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> c_int,
+        insert: unsafe extern "C" fn(Obj, c_int, *const c_char, c_int, *mut ErrPtr) -> c_int,
+        delete: unsafe extern "C" fn(Obj, c_int, c_int, *mut ErrPtr) -> c_int,
         free: unsafe extern "C" fn(Obj),
         unref: unsafe extern "C" fn(Obj),
         error_free: unsafe extern "C" fn(ErrPtr),
@@ -163,6 +193,19 @@ mod native {
                     grab_focus: library.symbol(c"atspi_component_grab_focus")?,
                     editable_iface: library.symbol(c"atspi_accessible_get_editable_text_iface")?,
                     set_contents: library.symbol(c"atspi_editable_text_set_text_contents")?,
+                    process_id: library.symbol(c"atspi_accessible_get_process_id")?,
+                    clear_cache: library
+                        .symbol(c"atspi_accessible_clear_cache_single")
+                        .or_else(|_| library.symbol(c"atspi_accessible_clear_cache"))?,
+                    state_set: library.symbol(c"atspi_accessible_get_state_set")?,
+                    state_contains: library.symbol(c"atspi_state_set_contains")?,
+                    caret: library.symbol(c"atspi_text_get_caret_offset")?,
+                    set_caret: library.symbol(c"atspi_text_set_caret_offset")?,
+                    selections: library.symbol(c"atspi_text_get_n_selections")?,
+                    selection: library.symbol(c"atspi_text_get_selection")?,
+                    remove_selection: library.symbol(c"atspi_text_remove_selection")?,
+                    insert: library.symbol(c"atspi_editable_text_insert_text")?,
+                    delete: library.symbol(c"atspi_editable_text_delete_text")?,
                     free: library.symbol(c"g_free")?,
                     unref: library.symbol(c"g_object_unref")?,
                     error_free: library.symbol(c"g_error_free")?,
