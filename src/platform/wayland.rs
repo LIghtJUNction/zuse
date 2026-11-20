@@ -104,7 +104,7 @@ impl Wayland {
     }
     pub fn capabilities(&self) -> String {
         format!(
-            "{{\"backend\":\"wayland\",\"compositor\":{},\"pointer\":{},\"windows\":{},\"keyboard\":{},\"capture\":{},\"nativeIpc\":{},\"inputHelper\":\"native Wayland virtual keyboard; pointer buttons/wheel use authorized ydotool daemon\",\"windowCapture\":\"composited visible region\",\"backgroundInput\":\"Hyprland targeted shortcuts\",\"backgroundText\":\"current keymap plain/Shift levels; unavailable characters rejected before input\",\"keyboardState\":\"Hyprland 0.55+: no held keys, Caps/Num off, group 0; sticky/custom modifier state unsupported\"}}",
+            "{{\"backend\":\"wayland\",\"compositor\":{},\"pointer\":{},\"windows\":{},\"keyboard\":{},\"capture\":{},\"nativeIpc\":{},\"inputHelper\":\"native Wayland virtual keyboard; pointer buttons/wheel use authorized ydotool daemon\",\"windowCapture\":\"composited visible region\",\"backgroundInput\":\"Hyprland targeted shortcuts\",\"backgroundText\":\"current keymap plain/Shift levels; unavailable characters rejected before input\",\"keyboardState\":\"Hyprland 0.55+: no held keys, Caps off, group 0; focused chords preserve verified Num Lock; text and background chords require Num off; sticky/custom modifier state unsupported\"}}",
             if self.socket.is_some() {
                 "\"hyprland\""
             } else {
@@ -164,18 +164,22 @@ impl Wayland {
         }
     }
     fn quiescent_keyboard(&self) -> Result<()> {
+        self.keyboard_state(false).map(|_| ())
+    }
+
+    fn keyboard_state(&self, allow_num_lock: bool) -> Result<KeyboardState> {
         if !self.modern {
             return Err(
                 "unsupported_state: keyboard state inspection requires Hyprland 0.55 or newer"
                     .into(),
             );
         }
-        check_keyboard_state(&self.request("j/devices")?)?;
+        let state = check_keyboard_state(&self.request("j/devices")?, allow_num_lock)?;
         // This is a read-only compositor query, including extended Linux
         // keyboard codes. It does not create a virtual input device.
         let held = self.request("/repl return (function() for code=8,775 do if hl.is_key_down(code) then return true end end return false end)()")?;
         match held.trim() {
-            "false" => Ok(()),
+            "false" => Ok(state),
             "true" => {
                 Err("unsupported_state: a keyboard key is held; release it before input".into())
             }
@@ -268,6 +272,29 @@ impl Wayland {
         }
         Ok(format!("address:0x{hex}"))
     }
+    fn require_foreground_target(&self, window: Option<&str>) -> Result<()> {
+        let Some(id) = window else {
+            return Ok(());
+        };
+        Self::selector(id)?;
+        if id == "active" {
+            return Ok(());
+        }
+        let active = self.request("j/activewindow")?;
+        let mut tokens = vec![Token::EMPTY; 8192];
+        let document = Document::parse(active.as_bytes(), &mut tokens, Limits::default())
+            .map_err(|_| "unsupported_state: cannot verify the focused target window")?;
+        if document
+            .root()
+            .get("address")
+            .and_then(|v| v.string())
+            .is_some_and(|value| value.matches(id))
+        {
+            Ok(())
+        } else {
+            Err("unsupported_state: Num Lock chords require the focused window; background modifier restoration is unavailable".into())
+        }
+    }
     fn key_target(&self, window: Option<&str>, chord: &str) -> Result<()> {
         let parts = split_chord(chord)?;
         let last = *parts.last().ok_or("empty key chord")?;
@@ -309,7 +336,22 @@ impl Wayland {
             });
         }
         if self.socket.is_some() {
-            self.quiescent_keyboard()?;
+            let state = self.keyboard_state(true)?;
+            if state.num_lock {
+                self.require_foreground_target(window)?;
+                state.require_restorable_keyboard()?;
+                return keyboard::key_with_num_lock(key, &modifiers, || {
+                    self.require_foreground_target(window)?;
+                    let current = self.keyboard_state(true)?;
+                    current.require_restorable_keyboard()?;
+                    if current != state {
+                        return Err(
+                            "unsupported_state: keyboard changed while preparing the chord".into(),
+                        );
+                    }
+                    Ok(())
+                });
+            }
             let mods = modifiers.join(" ");
             let selector = window.map(Self::selector).transpose()?.unwrap_or_default();
             let modern = if selector.is_empty() {
@@ -491,7 +533,29 @@ impl Wayland {
     }
 }
 
-fn check_keyboard_state(json: &str) -> Result<()> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeyboardState {
+    num_lock: bool,
+    main_address: String,
+    main_is_last: bool,
+}
+
+impl KeyboardState {
+    fn require_restorable_keyboard(&self) -> Result<()> {
+        // Hyprland destroys an owned virtual keyboard by selecting the last
+        // remaining native device. Restrict the Num Lock path to cases where
+        // that selection is exactly the keyboard we observed before input.
+        if !self.main_is_last || self.main_address.is_empty() {
+            return Err(
+                "unsupported_state: cannot restore the same active keyboard after a Num Lock chord"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn check_keyboard_state(json: &str, allow_num_lock: bool) -> Result<KeyboardState> {
     let mut tokens = vec![Token::EMPTY; 8192];
     let doc = Document::parse(json.as_bytes(), &mut tokens, Limits::default())
         .map_err(|_| "unsupported_state: cannot parse compositor keyboard state")?;
@@ -501,17 +565,32 @@ fn check_keyboard_state(json: &str) -> Result<()> {
         .ok_or("unsupported_state: compositor keyboard state is unavailable")?;
     let mut count = 0;
     let mut main = 0;
+    let mut main_index = 0;
+    let mut main_address = String::new();
+    let mut main_num_lock = false;
+    let mut any_num_lock = false;
     for keyboard in keyboards.elements().take(65) {
         count += 1;
         if count > 64 {
             return Err("unsupported_state: too many keyboards to inspect".into());
         }
-        if keyboard.get("main").and_then(|v| v.boolean()) == Some(true) {
+        let is_main = keyboard.get("main").and_then(|v| v.boolean()) == Some(true);
+        if is_main {
             main += 1;
+            main_index = count;
+            if let Some(address) = keyboard.get("address").and_then(|v| v.string()) {
+                main_address = address.chars().collect();
+            }
         }
         for (field, name) in [("capsLock", "Caps Lock"), ("numLock", "Num Lock")] {
             match keyboard.get(field).and_then(|v| v.boolean()) {
                 Some(false) => {}
+                Some(true) if field == "numLock" && allow_num_lock => {
+                    any_num_lock = true;
+                    if is_main {
+                        main_num_lock = true;
+                    }
+                }
                 Some(true) => {
                     return Err(format!(
                         "unsupported_state: {name} is enabled; disable it before input"
@@ -536,7 +615,16 @@ fn check_keyboard_state(json: &str) -> Result<()> {
     if count == 0 || main != 1 {
         return Err("unsupported_state: a unique main keyboard is required".into());
     }
-    Ok(())
+    if any_num_lock && !main_num_lock {
+        return Err(
+            "unsupported_state: Num Lock differs between the active and other keyboards".into(),
+        );
+    }
+    Ok(KeyboardState {
+        num_lock: main_num_lock,
+        main_address,
+        main_is_last: main_index == count,
+    })
 }
 #[cfg(test)]
 mod state_tests {
@@ -544,7 +632,7 @@ mod state_tests {
     #[test]
     fn rejects_known_nonzero_or_unknown_states() {
         let neutral = r#"{"keyboards":[{"main":true,"capsLock":false,"numLock":false,"active_layout_index":0}]}"#;
-        check_keyboard_state(neutral).unwrap();
+        check_keyboard_state(neutral, false).unwrap();
         for invalid in [
             neutral.replace("capsLock\":false", "capsLock\":true"),
             neutral.replace("numLock\":false", "numLock\":true"),
@@ -554,10 +642,61 @@ mod state_tests {
             r#"{"keyboards":[{"main":true}]}"#.into(),
         ] {
             assert!(
-                check_keyboard_state(&invalid)
+                check_keyboard_state(&invalid, false)
                     .unwrap_err()
                     .starts_with("unsupported_state:")
             );
         }
+    }
+
+    #[test]
+    fn num_lock_is_allowed_only_for_a_restorable_foreground_chord() {
+        let num = r#"{"keyboards":[{"address":"0x123","main":true,"capsLock":false,"numLock":true,"active_layout_index":0}]}"#;
+        assert!(
+            check_keyboard_state(num, false).is_err(),
+            "text remains guarded"
+        );
+        let state = check_keyboard_state(num, true).unwrap();
+        assert!(state.num_lock);
+        state.require_restorable_keyboard().unwrap();
+        for invalid in [
+            num.replace("capsLock\":false", "capsLock\":true"),
+            num.replace("active_layout_index\":0", "active_layout_index\":1"),
+            num.replace("numLock\":true", "numLock\":null"),
+        ] {
+            assert!(check_keyboard_state(&invalid, true).is_err());
+        }
+        let missing_identity = num.replace("\"address\":\"0x123\",", "");
+        assert!(
+            check_keyboard_state(&missing_identity, true)
+                .unwrap()
+                .require_restorable_keyboard()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn num_lock_does_not_silently_switch_to_another_native_keyboard() {
+        let main = r#"{"address":"0x1","main":true,"capsLock":false,"numLock":true,"active_layout_index":0}"#;
+        let other = r#"{"address":"0x2","main":false,"capsLock":false,"numLock":false,"active_layout_index":0}"#;
+        let safe = format!("{{\"keyboards\":[{other},{main}]}}");
+        check_keyboard_state(&safe, true)
+            .unwrap()
+            .require_restorable_keyboard()
+            .unwrap();
+        let unsafe_order = format!("{{\"keyboards\":[{main},{other}]}}");
+        assert!(
+            check_keyboard_state(&unsafe_order, true)
+                .unwrap()
+                .require_restorable_keyboard()
+                .is_err()
+        );
+        let mixed = safe
+            .replace("\"numLock\":true", "\"numLock\":false")
+            .replace(
+                "\"main\":false,\"capsLock\":false,\"numLock\":false",
+                "\"main\":false,\"capsLock\":false,\"numLock\":true",
+            );
+        assert!(check_keyboard_state(&mixed, true).is_err());
     }
 }

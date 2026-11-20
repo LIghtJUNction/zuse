@@ -1,5 +1,4 @@
 # Inspect a desktop without changing focus or input.
 system.capabilities()
 window.list()
-mouse.position()
 screen.capture(path="desktop.png")

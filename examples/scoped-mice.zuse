@@ -1,0 +1,37 @@
+# Validate: zuse script examples/scoped-mice.zuse --dry-run
+# Execute on Linux X11: zuse script examples/scoped-mice.zuse
+# Each mouse is independent. This example moves cursors without clicking.
+
+fn inspect_with_marker(owner) {
+    let marker = mouse(name="function-marker", color="#FFBF69", shape="crosshair", size=24);
+    parallel {
+        owner.move(x=360, y=220, duration=450, curve="smooth");
+        marker.move(x=440, y=280, duration=450, curve="bezier");
+    }
+    marker.position();
+} # marker closes; owner still belongs to its caller.
+
+let cyan = mouse(name="cyan", color="#2FE2FF", shape="arrow", glow=0.7);
+let violet = mouse(name="violet", color="#B58CFF", shape="ring", glow=0.8);
+
+parallel {
+    {
+        cyan.move(x=240, y=180, duration=600, curve="bezier", jitter=0.8, seed=42);
+        cyan.move(x=360, y=200, duration=350, via="280,140;320,160");
+    }
+    {
+        violet.move(x=520, y=320, duration=800, speed_variation=0.2, seed=7);
+        violet.position();
+    }
+}
+
+sequence {
+    cyan.move(x=300, y=240, duration=250);
+    violet.move(x=480, y=280, duration=250);
+}
+
+inspect_with_marker(cyan);
+violet.appearance(color="#FFBF69", shape="dot", size=24, glow=0.5);
+wait(ms=250);
+
+# Top-level scope exit closes cyan and violet, including after a runtime error.

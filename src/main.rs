@@ -22,11 +22,12 @@ const CLI: Command = Command::new("zuse").args(&[
     Arg::positional("words").repeat(),
 ]);
 
-const HELP: &str = r#"zuse — an agent-native computer-use shell
+const HELP: &str = r##"zuse — an agent-native computer-use shell
 
 USAGE
-  zuse eval 'mouse.position(); window.list()'
+  zuse eval 'window.list()'
   zuse run FILE                 Run a UTF-8 .zuse program; '-' reads stdin
+  zuse script FILE              Run scoped mice, functions and parallel tracks
   zuse check FILE               Validate every statement without execution
   zuse shell                    Persistent line-oriented interactive shell
   zuse doctor                   Inspect available backends and integrations
@@ -49,14 +50,20 @@ OPTIONS
   -V, --version                 Show version
 
 Programs use named calls, for example:
+  mouse.use(kind="independent", color="#2FE2FF")
   mouse.move_to(text="Save", role="button", duration=450, jitter=0.8, seed=42)
   mouse.move(x=400, y=240, duration=300, curve="bezier", jitter=1, seed=42)
   keyboard.type(text="Hello")
   human.request(kind="login", message="Please sign in in the local browser")
 
+Scoped programs use: let p = mouse(); p.move(x=400,y=240);
+Use parallel { ... } or sequence { ... } to compose tracks.
+The default mouse is independent and currently requires Linux X11 MPX.
+Explicit user_mouse(appearance="system") borrows the supported system pointer.
+
 Output is JSON. Errors and interactive prompts go to stderr.
 The shell retains browser/mobile sessions, device handles and harnesses until it exits.
-"#;
+"##;
 
 fn read_source(path: &str) -> Result<String, String> {
     let mut bytes = Vec::new();
@@ -223,6 +230,18 @@ fn run() -> Result<i32, String> {
         "run" => {
             exactly(&words, 2, "run FILE")?;
             output(Runtime::new().execute(&read_source(words[1])?, options)?)
+        }
+        "script" => {
+            exactly(&words, 2, "script FILE")?;
+            let source = read_source(words[1])?;
+            if options.dry_run {
+                output(zuse::script::check(&source, options)?)
+            } else {
+                let interrupt = zuse::script::interrupt::InterruptGuard::install()?;
+                output(zuse::script::execute_with_cancel(&source, options, || {
+                    interrupt.cancelled()
+                })?)
+            }
         }
         "check" => {
             exactly(&words, 2, "check FILE")?;

@@ -1,4 +1,6 @@
-# Execution language
+# Flat execution language
+
+This page describes `zuse eval`, `zuse run`, `zuse check`, the persistent shell, and MCP flat batches. Use [`zuse script`](scoped-mice.md) for mouse variables, block/function lifetimes, and parallel or sequential pointer tracks. Validate that separate language with `zuse script FILE --dry-run`.
 
 A program is a sequence of named calls. Newlines and semicolons separate calls; `#` and `//` start comments outside strings. Argument lists can span lines and end in a trailing comma.
 
@@ -15,7 +17,7 @@ Values are decimal numbers, booleans, quoted strings, or bare identifiers. Quote
 
 `zuse shell` accepts one complete program per input line. Use `zuse run FILE` for files containing multiline calls.
 
-The first release uses flat bounded call batches. Control flow belongs to the agent or embedding application. There are no implicit shell substitutions, JavaScript evaluation, or variable interpolation.
+This command language uses flat bounded call batches. Control flow for these batches belongs to the agent or embedding application; scoped pointer programs have their own `zuse script` entry point. There are no implicit shell substitutions, JavaScript evaluation, or variable interpolation.
 
 ## Discovery and limits
 
@@ -27,7 +29,7 @@ The entire source is parsed and validated before any effect. Fixed durations cou
 
 | Family | Operations |
 | --- | --- |
-| mouse | position, move, move_to, circle, click, down, up, scroll |
+| mouse | use, release, position, move, move_to, circle, click, down, up, scroll |
 | keyboard | type, key, optional explicit window target |
 | window / screen | list, focus, capture, text |
 | wine | windows |
@@ -42,6 +44,10 @@ The entire source is parsed and validated before any effect. Fixed durations cou
 | standalone | wait, notify |
 
 ## Input and observation
+
+Pointer actions create an independent runtime mouse by default, currently requiring native Linux X11 MPX. `mouse.use()` selects one explicitly; `mouse.use(kind="user", appearance="system")` selects the user's normal system pointer on supported desktop backends. `mouse.position()` only observes the selected handle and returns an error in a fresh runtime without one. `mouse.release()` ends its lifetime; persistent shell, MCP, and Rust runtimes otherwise retain it across completed batches. See [mouse ownership and platform limits](scoped-mice.md).
+
+`touchpad.capabilities()` reports the current gesture capabilities without a display. `touchpad.swipe`, `touchpad.pinch`, `touchpad.rotate`, and `touchpad.cancel` support validation and dry-run planning; native gesture injection is currently unsupported and fails whole-program preflight. See [gesture arguments and planning semantics](scoped-mice.md#touchpad-gesture-planning).
 
 `keyboard.key(key="ctrl+a")` sends a chord. `keyboard.type(text="...")` sends text. On backends that support targeted window events, supplying `window="ID"` directs input to that window without changing the active window. Applications can reject synthetic targeted events; accessibility actions and browser commands are preferred when the target exposes them.
 

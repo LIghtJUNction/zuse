@@ -1,5 +1,5 @@
 //! Native Wayland virtual keyboard with explicit keymap restoration.
-use super::{Result, keymap};
+use super::{Result, keymap, xkb};
 use crate::platform::dylib::Library;
 use std::{
     cell::Cell,
@@ -646,6 +646,69 @@ pub(super) fn type_text(text: &str, before_input: impl FnOnce() -> Result<()>) -
         )),
     }
 }
+
+/// Foreground chords use the original keymap and keep its verified Num Lock
+/// mask throughout input and cleanup. Unlike temporary Unicode maps, this path
+/// never invents key meanings or sends a zero locked mask to the recipient.
+pub(super) fn key_with_num_lock(
+    key: &str,
+    modifiers: &[&str],
+    before_input: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let mut connection = Connection::open()?;
+    let chord = xkb::locked_chord(key, modifiers, &connection.original)?;
+    let base = [0, 0, chord.locked, 0];
+    if connection
+        .original_modifiers
+        .is_some_and(|observed| observed != base)
+    {
+        return Err("unsupported_state: observed keyboard modifiers differ from the supported Num Lock state".into());
+    }
+    // Recheck compositor state after read-only map capture and path resolution.
+    // The caller has also verified that removing this owned keyboard restores
+    // the same active native keyboard, rather than a different device.
+    before_input()?;
+    connection.original_modifiers = Some(base);
+    connection.create_keyboard()?;
+    let result = (|| {
+        let original = std::mem::take(&mut connection.original);
+        let installed = connection.install(&original);
+        connection.original = original;
+        installed?;
+        // SAFETY: the masks were resolved against this unchanged XKB map;
+        // protocol argument order is depressed, latched, locked, group.
+        unsafe {
+            (connection.api.marshal)(
+                connection.virtual_keyboard,
+                2,
+                ptr::null(),
+                1,
+                0,
+                chord.depressed,
+                0u32,
+                chord.locked,
+                0u32,
+            );
+        }
+        connection.roundtrip()?;
+        connection.press(chord.code, 0)?;
+        connection.roundtrip()
+    })();
+    // The base mask is explicitly replayed before destruction, including when
+    // submitting the key failed. The user's original keyboard is never edited.
+    let restored = connection.restore();
+    match (result, restored) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(format!(
+            "key submitted but Num Lock state restoration failed: {error}"
+        )),
+        (Err(error), Err(cleanup)) => Err(format!(
+            "{error}; Num Lock state restoration failed: {cleanup}"
+        )),
+    }
+}
+
 pub(super) fn original_keymap() -> Result<Vec<u8>> {
     Connection::open().map(|mut c| std::mem::take(&mut c.original))
 }

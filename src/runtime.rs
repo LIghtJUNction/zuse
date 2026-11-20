@@ -3,6 +3,7 @@ use crate::{
     accessibility,
     android::Android,
     browser::Browser,
+    cursor::{CursorColor, CursorShape, CursorStyle},
     device_io,
     human::{Queue, Request},
     integrations::{self, ProcessManager},
@@ -10,10 +11,12 @@ use crate::{
     json::{self, quote},
     language::{Call, Parser, Value},
     motion::{Curve, FunctionalMotion, MAX_COORDINATE, Motion, PathOptions, Point, Rng},
+    mouse::{Mouse, MouseMode, MouseOptions},
     platform::Desktop,
     pointer::{MoveOptions, MovePlan},
     serial::{self, SerialPort},
     target::{self, LocatedTarget, TargetQuery},
+    touchpad::{self, Command as TouchpadCommand, Gesture, GestureOptions, GesturePlan},
     usb::{self, UsbDevice},
 };
 use std::{
@@ -56,6 +59,13 @@ struct Spec {
 macro_rules! spec { ($name:literal, $read:literal, [$($arg:literal:$ty:ident:$required:literal),* $(,)?]) => { Spec{name:$name,args:&[$(($arg,$ty,$required)),*],read_only:$read} }; }
 static SPECS: &[Spec] = &[
     spec!("system.capabilities", true, []),
+    spec!("touchpad.capabilities", true, []),
+    spec!("touchpad.swipe",false,["dx":N:false,"dy":N:false,"fingers":I:false,"duration":I:false,"steps":I:false]),
+    spec!("touchpad.pinch",false,["scale":N:true,"fingers":I:false,"duration":I:false,"steps":I:false]),
+    spec!("touchpad.rotate",false,["degrees":N:true,"fingers":I:false,"duration":I:false,"steps":I:false]),
+    spec!("touchpad.cancel", false, []),
+    spec!("mouse.use",false,["kind":T:false,"appearance":T:false,"color":T:false,"shape":T:false,"size":I:false,"glow":N:false,"name":T:false]),
+    spec!("mouse.release", false, []),
     spec!("mouse.position", true, []),
     spec!("mouse.move",false,["x":I:true,"y":I:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"seed":I:false]),
     spec!("mouse.move_to",false,["text":T:true,"role":T:false,"scope":T:false,"exact":B:false,"case_sensitive":B:false,"index":I:false,"duration":I:false,"speed":N:false,"steps":I:false,"curve":T:false,"jitter":N:false,"speed_variation":N:false,"seed":I:false,"offset_x":N:false,"offset_y":N:false,"via":T:false]),
@@ -245,6 +255,80 @@ fn number(call: &Call<'_>, name: &str, default: f64) -> f64 {
 fn boolean(call: &Call<'_>, name: &str, default: bool) -> bool {
     call.get(name).and_then(Value::as_bool).unwrap_or(default)
 }
+
+fn touchpad_command(call: &Call<'_>) -> Result<TouchpadCommand, String> {
+    let gesture = match call.name {
+        "touchpad.capabilities" => return Ok(TouchpadCommand::Capabilities),
+        "touchpad.cancel" => return Ok(TouchpadCommand::Cancel),
+        "touchpad.swipe" => Gesture::Swipe {
+            dx: number(call, "dx", 0.0),
+            dy: number(call, "dy", 0.0),
+        },
+        "touchpad.pinch" => Gesture::Pinch {
+            scale: number(call, "scale", 1.0),
+        },
+        "touchpad.rotate" => Gesture::Rotate {
+            degrees: number(call, "degrees", 0.0),
+        },
+        _ => return Err("unknown touchpad operation".into()),
+    };
+    let options = GestureOptions {
+        fingers: range(call, "fingers", 2, 2, 5)? as u8,
+        duration_ms: range(call, "duration", 350, 0, 60_000)? as u32,
+        steps: call
+            .get("steps")
+            .map(|_| range(call, "steps", 1, 1, 4096).map(|value| value as u32))
+            .transpose()?,
+    };
+    GesturePlan::new(gesture, options).map(TouchpadCommand::Gesture)
+}
+
+fn require_touchpad_capabilities(calls: &[Call<'_>]) -> Result<(), String> {
+    for call in calls {
+        if call.name.starts_with("touchpad.") {
+            touchpad_command(call)?
+                .require_native()
+                .map_err(|error| format!("{error} at {}:{}", call.span.line, call.span.column))?;
+        }
+    }
+    Ok(())
+}
+
+fn mouse_options(call: &Call<'_>) -> Result<MouseOptions, String> {
+    let mode = match text(call, "kind", "independent")?.as_str() {
+        "independent" => MouseMode::Independent,
+        "user" => MouseMode::User,
+        _ => return Err("mouse.use: kind must be independent or user".into()),
+    };
+    let appearance = match text(call, "appearance", "glow")?.as_str() {
+        "glow" => Some(CursorStyle {
+            color: CursorColor::parse(&text(call, "color", "#2FE2FF")?)?,
+            shape: CursorShape::parse(&text(call, "shape", "arrow")?)?,
+            size: range(call, "size", 32, 16, 96)? as u32,
+            glow: number(call, "glow", 0.7),
+        }),
+        "system" if mode == MouseMode::User => {
+            if ["color", "shape", "size", "glow"]
+                .iter()
+                .any(|name| call.get(name).is_some())
+            {
+                return Err("mouse.use: style options require appearance=\"glow\"".into());
+            }
+            None
+        }
+        "system" => return Err("mouse.use: independent mice require appearance=\"glow\"".into()),
+        _ => return Err("mouse.use: appearance must be system or glow".into()),
+    };
+    let options = MouseOptions {
+        mode,
+        name: text(call, "name", "zuse-runtime")?,
+        appearance,
+        image: None,
+        start: None,
+    };
+    options.validate()?;
+    Ok(options)
+}
 fn range(call: &Call<'_>, name: &str, default: i64, min: i64, max: i64) -> Result<i64, String> {
     let value = integer(call, name, default);
     if value < min || value > max {
@@ -362,6 +446,7 @@ fn device_payload(call: &Call<'_>, allow_text: bool) -> Result<Vec<u8>, String> 
 fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64), String> {
     let mut calls = Vec::new();
     let mut wait_budget = 0u64;
+    let mut gesture_samples = 0usize;
     for parsed in Parser::new(source) {
         let call = parsed.map_err(|e| e.to_string())?;
         if calls.len() >= options.max_steps {
@@ -405,14 +490,34 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             }
         }
         match call.name {
+            "touchpad.capabilities"
+            | "touchpad.swipe"
+            | "touchpad.pinch"
+            | "touchpad.rotate"
+            | "touchpad.cancel" => {
+                let command = touchpad_command(&call)?;
+                wait_budget =
+                    wait_budget.saturating_add(u64::from(command.scheduled_duration_ms()));
+                if let TouchpadCommand::Gesture(plan) = command {
+                    gesture_samples = gesture_samples
+                        .checked_add(plan.samples().len())
+                        .ok_or("touchpad sample budget overflow")?;
+                    if gesture_samples > touchpad::MAX_PROGRAM_SAMPLES {
+                        return Err("program touchpad samples exceed 65536".into());
+                    }
+                }
+            }
+            "mouse.use" => {
+                mouse_options(&call)?;
+            }
             "mouse.move_to" => {
                 target_args(&call)?;
                 wait_budget = wait_budget
                     .saturating_add(u64::from(move_options(&call)?.scheduled_duration_ms()));
             }
             "mouse.move" => {
-                range(&call, "x", 0, i32::MIN as i64, i32::MAX as i64)?;
-                range(&call, "y", 0, i32::MIN as i64, i32::MAX as i64)?;
+                range(&call, "x", 0, -MAX_COORDINATE as i64, MAX_COORDINATE as i64)?;
+                range(&call, "y", 0, -MAX_COORDINATE as i64, MAX_COORDINATE as i64)?;
                 let duration = range(&call, "duration", 0, 0, 60_000)?;
                 let steps = range(&call, "steps", (duration / 8).clamp(1, 4096), 1, 65536)?;
                 if (duration == 0 && steps != 1) || (duration > 0 && steps > duration) {
@@ -719,6 +824,7 @@ impl MoveReceipt {
 
 #[derive(Default)]
 pub struct Runtime {
+    mouse: Option<Mouse>,
     desktop: Option<Desktop>,
     browser: Option<Browser>,
     android: Option<Android>,
@@ -732,8 +838,9 @@ impl Runtime {
         Self::default()
     }
 
-    /// Locate an accessible target and move from the live pointer position.
-    /// Coordinates and offsets use the selected native backend's screen units.
+    /// Locate an accessible target and move from this runtime's live pointer.
+    /// An independent mouse is created lazily unless `mouse.use(kind="user")`
+    /// explicitly selected the user pointer. Coordinates use native screen units.
     pub fn move_to(
         &mut self,
         query: &TargetQuery<'_>,
@@ -754,11 +861,7 @@ impl Runtime {
     ) -> Result<MoveReceipt, String> {
         options.validate()?;
         let target = target::locate(query)?;
-        let (x, y) = self.desktop()?.position()?;
-        let from = Point {
-            x: f64::from(x),
-            y: f64::from(y),
-        };
+        let from = self.mouse()?.position()?;
         let center = target_center(&target);
         let plan = MovePlan::with_path(from, center, options, path)?;
         self.perform_move(target, plan)
@@ -771,11 +874,7 @@ impl Runtime {
     ) -> Result<(LocatedTarget, MovePlan), String> {
         options.validate()?;
         let target = target::locate(query)?;
-        let (x, y) = self.desktop()?.position()?;
-        let from = Point {
-            x: f64::from(x),
-            y: f64::from(y),
-        };
+        let from = self.mouse()?.position()?;
         let plan = MovePlan::new(from, target_center(&target), options)?;
         Ok((target, plan))
     }
@@ -785,18 +884,16 @@ impl Runtime {
         target: LocatedTarget,
         plan: MovePlan,
     ) -> Result<MoveReceipt, String> {
-        let desktop = self.desktop()?;
+        let mouse = self.mouse()?;
         let start = Instant::now();
         for (index, sample) in plan.samples().iter().enumerate() {
             let due = Duration::from_millis(u64::from(sample.at_ms));
             if let Some(delay) = due.checked_sub(start.elapsed()) {
                 std::thread::sleep(delay);
             }
-            desktop
-                .move_to(sample.point.x.round() as i32, sample.point.y.round() as i32)
-                .map_err(|error| {
-                    format!("pointer movement stopped after {index} samples: {error}")
-                })?;
+            mouse.submit(sample.point).map_err(|error| {
+                format!("pointer movement stopped after {index} samples: {error}")
+            })?;
         }
         Ok(MoveReceipt {
             target,
@@ -807,6 +904,22 @@ impl Runtime {
             samples: plan.samples().len(),
             path_length: plan.length(),
         })
+    }
+
+    fn mouse(&mut self) -> Result<&mut Mouse, String> {
+        if self.mouse.is_none() {
+            self.mouse = Some(Mouse::independent()?);
+        }
+        self.mouse
+            .as_mut()
+            .ok_or_else(|| "runtime mouse is unavailable".into())
+    }
+
+    fn release_mouse(&mut self) -> Result<(), String> {
+        if let Some(mut mouse) = self.mouse.take() {
+            mouse.close()?;
+        }
+        Ok(())
     }
 
     fn desktop(&mut self) -> Result<&mut Desktop, String> {
@@ -875,7 +988,9 @@ impl Runtime {
             max_wait_ms: options.max_wait_ms.min(saved.max_wait_ms),
         };
         // Validate the saved plan before claiming its single-use approval.
-        validate(&queue.continuation(id)?, options)?;
+        let continuation = queue.continuation(id)?;
+        let (calls, _) = validate(&continuation, options)?;
+        require_touchpad_capabilities(&calls)?;
         let source = queue.take(id)?;
         self.execute(&source, options)
     }
@@ -885,6 +1000,7 @@ impl Runtime {
             return check(source, options);
         }
         let (calls, scheduled_wait_ms) = validate(source, options)?;
+        require_touchpad_capabilities(&calls)?;
         // Speeds need the live start/target/path before their duration is known.
         // Reserve every static wait first, then debit each resolved speed plan
         // before sending its first event.
@@ -961,9 +1077,51 @@ impl Runtime {
         let done = || Ok("{\"ok\":true}".into());
         match c.name {
             "system.capabilities" => Ok(self.capabilities()),
+            "touchpad.capabilities" => Ok(touchpad::capabilities_json()),
+            "touchpad.swipe" | "touchpad.pinch" | "touchpad.rotate" => {
+                let TouchpadCommand::Gesture(plan) = touchpad_command(c)? else {
+                    return Err("invalid touchpad gesture command".into());
+                };
+                touchpad::execute(&plan)?;
+                Ok(plan.to_json())
+            }
+            "touchpad.cancel" => {
+                touchpad::cancel()?;
+                done()
+            }
+            "mouse.use" => {
+                let options = mouse_options(c)?;
+                // Validate before releasing the old handle. Release it before
+                // acquiring a replacement so shared cursor leases cannot
+                // restore over the replacement's requested appearance.
+                options.resolved_image()?;
+                self.release_mouse()?;
+                let mouse = Mouse::create(&options)?;
+                let kind = match mouse.mode() {
+                    MouseMode::Independent => "independent",
+                    MouseMode::User => "user",
+                };
+                let result = format!(
+                    "{{\"ok\":true,\"mouse_id\":{},\"kind\":{},\"device_id\":{}}}",
+                    mouse.id(),
+                    quote(kind),
+                    mouse
+                        .device_id()
+                        .map_or_else(|| "null".into(), |id| id.to_string()),
+                );
+                self.mouse = Some(mouse);
+                Ok(result)
+            }
+            "mouse.release" => {
+                self.release_mouse()?;
+                done()
+            }
             "mouse.position" => {
-                let (x, y) = self.desktop()?.position()?;
-                Ok(format!("{{\"x\":{x},\"y\":{y}}}"))
+                let mouse = self.mouse.as_ref().ok_or(
+                    "runtime mouse is unavailable; use mouse.use() or a mouse action first",
+                )?;
+                let point = mouse.position()?;
+                Ok(format!("{{\"x\":{},\"y\":{}}}", point.x, point.y))
             }
             "mouse.move_to" => {
                 let args = target_args(c)?;
@@ -986,16 +1144,14 @@ impl Runtime {
                 let duration = integer(c, "duration", 0) as u32;
                 let steps = integer(c, "steps", ((duration / 8) as i64).clamp(1, 4096)) as u32;
                 let curve = Curve::parse(&text(c, "curve", "smooth")?).ok_or("unknown curve")?;
-                let (x, y) = self.desktop()?.position()?;
+                let mouse = self.mouse()?;
+                let from = mouse.position()?;
                 let target = Point {
                     x: integer(c, "x", 0) as f64,
                     y: integer(c, "y", 0) as f64,
                 };
                 let motion = Motion::new(
-                    Point {
-                        x: x as f64,
-                        y: y as f64,
-                    },
+                    from,
                     target,
                     duration,
                     steps,
@@ -1004,14 +1160,18 @@ impl Runtime {
                     integer(c, "seed", 1) as u64,
                 )
                 .map_err(|e| format!("{e:?}"))?;
+                if motion.clone().any(|sample| {
+                    sample.point.x.abs() > MAX_COORDINATE || sample.point.y.abs() > MAX_COORDINATE
+                }) {
+                    return Err("mouse.move: jittered path exceeds the coordinate range".into());
+                }
                 let start = Instant::now();
                 for sample in motion {
                     let desired = Duration::from_millis(sample.at_ms as u64);
                     if let Some(delay) = desired.checked_sub(start.elapsed()) {
                         std::thread::sleep(delay);
                     }
-                    self.desktop()?
-                        .move_to(sample.point.x.round() as i32, sample.point.y.round() as i32)?;
+                    mouse.submit(sample.point)?;
                 }
                 Ok(format!(
                     "{{\"x\":{},\"y\":{},\"samples\":{}}}",
@@ -1037,7 +1197,7 @@ impl Runtime {
                 )
                 .map_err(|e| e.to_string())?;
                 let start = Instant::now();
-                let desktop = self.desktop()?;
+                let mouse = self.mouse()?;
                 let mut samples = 0;
                 for sample in path {
                     let sample = sample.map_err(|e| e.to_string())?;
@@ -1045,8 +1205,7 @@ impl Runtime {
                     if let Some(delay) = due.checked_sub(start.elapsed()) {
                         std::thread::sleep(delay);
                     }
-                    desktop
-                        .move_to(sample.point.x.round() as i32, sample.point.y.round() as i32)?;
+                    mouse.submit(sample.point)?;
                     samples += 1;
                 }
                 Ok(format!(
@@ -1069,12 +1228,12 @@ impl Runtime {
                             Duration::from_millis(integer(c, "interval", 80) as u64),
                         );
                     }
-                    self.desktop()?.button(button, action)?;
+                    self.mouse()?.button(button, action)?;
                 }
                 Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
             }
             "mouse.scroll" => {
-                self.desktop()?
+                self.mouse()?
                     .scroll(integer(c, "dx", 0) as i32, integer(c, "dy", 0) as i32)?;
                 Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
             }

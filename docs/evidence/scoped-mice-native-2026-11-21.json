@@ -1,0 +1,186 @@
+{
+  "date": "2026-11-21",
+  "timezone": "Asia/Taipei",
+  "candidate_branch": "feat/scoped-mice-20261121",
+  "base_commit": "a1bb8fd2cbce0a9d85134999883c578358065242",
+  "status": "unreleased source candidate",
+  "portable": {
+    "rust": "1.100.0",
+    "tests_passed": 286,
+    "tests_ignored": 5,
+    "no_std_tests_passed": 20,
+    "clippy_all_targets": "pass",
+    "format": "pass",
+    "cross_compile": [
+      "wasm32-unknown-unknown (no_std)",
+      "x86_64-pc-windows-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "aarch64-unknown-linux-gnu"
+    ]
+  },
+  "native_mpx": {
+    "status": "pass",
+    "tests": 2,
+    "display": "owned disposable Xvfb",
+    "application_events_observed": true
+  },
+  "native_accessibility": {
+    "status": "pass",
+    "tests": 1,
+    "display": "owned Xvfb and private D-Bus",
+    "toolkit": "GTK / AT-SPI"
+  },
+  "wayland": {
+    "native_wayland": "pass",
+    "compositor": "v0.57.2",
+    "binary_sha256": "17d0a6867ee3dc9d176b5d8c3921069e51f06648c29459083cee16084f326c0b",
+    "checks": {
+      "window_metadata": {
+        "ok": true,
+        "result": {
+          "owned_windows": 2,
+          "native_wayland": true
+        }
+      },
+      "pointer_motion": {
+        "ok": true,
+        "result": {
+          "coordinate_matches": true
+        }
+      },
+      "foreground_input": {
+        "ok": true,
+        "result": {
+          "text": "AZuse 42! 中文✓🙂"
+        }
+      },
+      "background_input": {
+        "ok": true,
+        "result": {
+          "text": "AZuse 42! 中文✓🙂 background!? !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~Z",
+          "focus_unchanged": true,
+          "foreground_text_unchanged": true
+        }
+      },
+      "rejected_input": {
+        "ok": true,
+        "result": {
+          "unsupported_text_rejected_before_input": true
+        }
+      },
+      "window_capture": {
+        "ok": true,
+        "result": {
+          "width": 640,
+          "height": 720,
+          "center_rgb": [
+            32,
+            160,
+            96
+          ],
+          "bytes": 18967
+        }
+      },
+      "unsupported_keyboard_states": {
+        "ok": true,
+        "result": {
+          "rejected_before_effect": [
+            "caps",
+            "group1",
+            "num_lock_text_and_background",
+            "held_key"
+          ],
+          "original_plain_letters_after_rejection": true,
+          "num_lock_foreground_shortcuts": 2,
+          "num_lock_keypad_after_shortcut": true,
+          "num_lock_original_keyboard_states_unchanged": true
+        }
+      }
+    },
+    "private_initial_held_key_count": 0,
+    "restored": {
+      "own_windows_closed": true,
+      "pointer": true,
+      "focus": true,
+      "pointer_after_focus": {
+        "x": 960,
+        "y": 360
+      },
+      "pointer_expected": {
+        "x": 400,
+        "y": 300
+      },
+      "pointer_observed": {
+        "x": 400,
+        "y": 300
+      }
+    },
+    "isolation": {
+      "mode": "owned-headless-cage-and-private-hyprland",
+      "host_display_connection": false,
+      "host_focus_or_pointer_queries": false,
+      "host_state_restoration": false,
+      "seat_backend": "seatd-with-absent-private-socket",
+      "cage_version": "Cage version 0.3.1",
+      "max_expected_ipc_path_bytes": 100,
+      "parent_protocol_versions": {
+        "wl_shm": 2,
+        "zwp_linux_dmabuf_v1": 4,
+        "wl_compositor": 6,
+        "wl_subcompositor": 1,
+        "wl_data_device_manager": 3,
+        "zwp_primary_selection_device_manager_v1": 1,
+        "wl_seat": 9,
+        "ext_idle_notifier_v1": 2,
+        "zwp_idle_inhibit_manager_v1": 1,
+        "xdg_wm_base": 6,
+        "zxdg_decoration_manager_v1": 1,
+        "org_kde_kwin_server_decoration_manager": 1,
+        "wp_viewporter": 1,
+        "wp_presentation": 2,
+        "zwlr_export_dmabuf_manager_v1": 1,
+        "zwlr_screencopy_manager_v1": 3,
+        "wp_single_pixel_buffer_manager_v1": 1,
+        "zxdg_output_manager_v1": 3,
+        "zwlr_output_manager_v1": 4,
+        "zwlr_gamma_control_manager_v1": 1,
+        "zwp_virtual_keyboard_manager_v1": 1,
+        "zwlr_virtual_pointer_manager_v1": 2,
+        "zwp_relative_pointer_manager_v1": 1,
+        "zwlr_foreign_toplevel_manager_v1": 3,
+        "xwayland_shell_v1": 1,
+        "wl_output": 4
+      },
+      "private_socket_checks": true,
+      "physical_input_or_kms_fds": 0,
+      "hyprland_version": "v0.57.2",
+      "baseline_keyboard": "owned-persistent-virtual-us-de-neutral",
+      "baseline_keyboard_initial_count": 1
+    }
+  },
+  "cli": {
+    "baseline_devices": 6,
+    "legacy_default_independent": "pass",
+    "legacy_explicit_user_release": "pass",
+    "native_scoped_mice": "pass",
+    "script_normal_exit": "pass",
+    "script_sigint": {
+      "cancel_ms": 5,
+      "exit_code": 1,
+      "status": "pass"
+    },
+    "script_sigterm": {
+      "cancel_ms": 3,
+      "exit_code": 1,
+      "status": "pass"
+    }
+  },
+  "limits": {
+    "native_independent_pointer_backend": "Linux X11",
+    "native_touchpad_injection": false,
+    "hard_kill_cleanup_guaranteed": false,
+    "live_windows_or_macos_tested": false,
+    "ssmcp_release_updated": false
+  }
+}

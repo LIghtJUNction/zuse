@@ -27,9 +27,17 @@ pub mod platform;
 pub mod runtime;
 
 #[cfg(feature = "std")]
+pub mod cursor;
+#[cfg(feature = "std")]
+pub mod mouse;
+#[cfg(feature = "std")]
 pub mod pointer;
 #[cfg(feature = "std")]
+pub mod script;
+#[cfg(feature = "std")]
 pub mod target;
+#[cfg(feature = "std")]
+pub mod touchpad;
 
 #[cfg(feature = "std")]
 pub mod device_io;

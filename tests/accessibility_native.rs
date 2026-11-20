@@ -95,6 +95,15 @@ fn verify_target_movement() {
     desktop.move_to(24, 30).unwrap();
     assert_pointer_reaches(&desktop, (24, 30));
     let mut runtime = Runtime::new();
+    // This legacy fixture observes the core pointer through Desktop. Select it
+    // explicitly; independent pointer behavior has its own private MPX tests.
+    let selected = runtime
+        .execute(
+            "mouse.use(kind=\"user\",appearance=\"system\")",
+            Options::default(),
+        )
+        .unwrap();
+    assert!(!runtime::failed(&selected), "{selected}");
     let began = std::time::Instant::now();
     let output = runtime.execute(
         "mouse.move_to(text=\"Zuse action fixture\",role=\"button\",duration=160,curve=\"bezier\",via=\"120,30\",jitter=1.5,speed_variation=0.3,offset_x=4,offset_y=-3,seed=42)",
@@ -246,10 +255,12 @@ fn verify_target_movement() {
             .is_err()
     );
     assert_eq!(desktop.position().unwrap(), before);
+    // End this process's user-pointer lease before the separate MCP Runtime.
+    drop(runtime);
 
     // Exercise the external CLI, including explicit duplicate selection.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_zuse"))
-        .args(["eval", "mouse.move_to(text=\"Zuse duplicate target\",role=\"button\",index=1,speed=800,curve=\"linear\")"])
+        .args(["eval", "mouse.use(kind=\"user\",appearance=\"system\");mouse.move_to(text=\"Zuse duplicate target\",role=\"button\",index=1,speed=800,curve=\"linear\")"])
         .output().unwrap();
     assert!(
         output.status.success(),
@@ -270,7 +281,7 @@ fn verify_target_movement() {
         ),
     );
     let mut engine = zuse::mcp::Engine::new(Options::default());
-    let request = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"zuse.execute","arguments":{"code":"mouse.move_to(text=\"Zuse action waiting\",duration=0)"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}"#;
+    let request = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"zuse.execute","arguments":{"code":"mouse.use(kind=\"user\",appearance=\"system\");mouse.move_to(text=\"Zuse action waiting\",duration=0)"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}"#;
     let response = String::from_utf8(engine.handle(request).unwrap().unwrap()).unwrap();
     json::with_value(&response, |root| {
         assert_eq!(

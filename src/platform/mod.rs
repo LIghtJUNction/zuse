@@ -10,6 +10,8 @@ mod macos;
 mod macos_focus;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod png;
+#[cfg(target_os = "linux")]
+pub(crate) mod pointer_x11;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(any(target_os = "windows", test))]

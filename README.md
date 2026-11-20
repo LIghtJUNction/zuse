@@ -4,11 +4,11 @@
 
 zuse turns small programs into desktop observations and actions. The same executor drives native windows, an isolated Chromium browser, accessibility trees, Android displays and Chrome tabs, iOS through WebDriverAgent, serial/USB devices, IDE entry points, and managed harness processes. Human assistance pauses a program and gives it an explicit continuation.
 
-[中文](README.zh-CN.md) · [Language](docs/language.md) · [Target motion](docs/target-motion.md) · [Platforms](docs/platforms.md) · [Architecture](docs/architecture.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
+[中文](README.zh-CN.md) · [Language](docs/language.md) · [Scoped mice](docs/scoped-mice.md) · [Target motion](docs/target-motion.md) · [Platforms](docs/platforms.md) · [Architecture](docs/architecture.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
 
 ## Small core, explicit effects
 
-The parser and pointer-motion kernel compile with `no_std`, use no allocator, and have no dependencies. The optional host runtime uses Rust's standard library and six Project Z crates across its dependency tree: zmcpio, zcall, zconv, zclap, z64, and zsys. Native dynamic-library loading reuses zsys 0.1.1. There is no embedded JavaScript engine or browser automation framework.
+The flat-call parser and pointer-motion kernel compile with `no_std`, use no allocator, and have no dependencies. The optional host runtime, including the scoped-script compiler and scheduler, uses Rust's standard library and six Project Z crates across its dependency tree: zmcpio, zcall, zconv, zclap, z64, and zsys. Native dynamic-library loading reuses zsys 0.1.1. There is no embedded JavaScript engine or browser automation framework.
 
 The runtime checks the entire program before its first effect. Unknown operations, wrong argument types, duplicate arguments, malformed strings, excessive steps, and excess fixed-duration wait budgets fail before execution. Speed-based target movement is charged to the remaining wait budget after its path is resolved, before sending its first pointer event. Runtime errors return completed steps and stop the remaining program. Execution records omit keyboard input contents.
 
@@ -35,17 +35,19 @@ Native archives for Linux, Windows, and macOS are published on the [Releases pag
 ## First program
 
 ~~~sh
-zuse eval 'mouse.position(); window.list()'
+zuse eval 'window.list()'
 zuse eval 'mouse.move(x=400,y=240,duration=300,curve="bezier",jitter=1,seed=42)' --dry-run
+zuse script examples/scoped-mice.zuse --dry-run
 zuse run examples/desktop.zuse
 zuse shell
 ~~~
 
-Programs use named calls separated by newlines or semicolons:
+Flat programs use named calls separated by newlines or semicolons. This example explicitly selects the user's system pointer:
 
 ~~~text
 # Observe before acting.
 window.list()
+mouse.use(kind="user", appearance="system")
 mouse.position()
 
 mouse.move(x=400, y=240, duration=350, curve="smooth", jitter=0.8, seed=42)
@@ -53,11 +55,31 @@ mouse.click(button="left")
 keyboard.type(text="Hello from zuse")
 wait(min=80, max=160, seed=42)
 screen.capture(path="desktop.png")
+mouse.release()
 ~~~
 
 `zuse check FILE` validates without executing. `--read-only` permits observation operations, including screenshot artifacts, and rejects input, evaluation, process launches, and settings changes. `zuse schema` prints every supported operation and its arguments.
 
 Motion supports linear, smoothstep, cubic ease-in/out, and curved Bezier paths. Seeded jitter tapers to zero at the endpoints. Samples use absolute time offsets so scheduling delays do not accumulate across the path.
+
+## Independent, scoped mice
+
+`zuse script` gives each mouse variable its own visible cursor, position, and button state. Independent mice are the default and require native Linux X11 with XInput2/MPX. Their glow, color, shape, size, and image are configurable. The following script moves two mice concurrently and closes both when its scope ends:
+
+~~~text
+let cyan = mouse(color="#2FE2FF", shape="arrow");
+let violet = mouse(color="#B58CFF", shape="ring");
+parallel {
+    cyan.move(x=320, y=180, duration=600);
+    violet.move(x=520, y=320, duration=600);
+}
+~~~
+
+Run the full example with `zuse script examples/scoped-mice.zuse`. Blocks and functions own their local mice; aliases and function parameters borrow existing mice. `sequence` runs operations in order, while explicit blocks inside `parallel` group each branch's sequential work. The compiler rejects conflicting parallel access to one mouse before input. Normal exit, runtime errors, and cooperative cancellation close the script's mice and release synthetic held buttons.
+
+Flat `mouse.*` actions also create an independent runtime mouse by default. Select the user pointer explicitly with `mouse.use(kind="user", appearance="system")`; a scoped script uses `user_mouse(appearance="system")`. This explicit system mode uses the existing Wayland, Windows, or macOS backend where supported. An unavailable independent backend returns an error. `mouse.position()` requires an already selected runtime handle; use `mouse.use()` first.
+
+See [scoped mice, custom paths, Rust ownership, and cleanup limits](docs/scoped-mice.md) for the complete API, including the distinction between cooperative signal handling and termination that cannot run destructors.
 
 ## Move to text or a button
 
@@ -119,6 +141,7 @@ Typical MCP client configuration:
 
 | Tool | Purpose |
 | --- | --- |
+| zuse.script | Run scoped mice, functions, and parallel tracks; close the run's mice before returning |
 | zuse.execute | Validate and run a program |
 | zuse.check | Return a plan without effects |
 | zuse.capabilities | Inspect available host capabilities |

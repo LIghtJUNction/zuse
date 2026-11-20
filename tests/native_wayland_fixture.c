@@ -14,7 +14,9 @@ static gboolean key(GtkEventControllerKey *controller, guint keyval, guint code,
                     GdkModifierType state, gpointer data) {
     (void)controller; (void)data;
     printf("KEY %u %u %u\n",keyval,code,(unsigned)state);fflush(stdout);
-    return FALSE;
+    /* A deterministic shortcut target: log Ctrl+T without letting an entry
+     * action transpose text and obscure the following keypad assertion. */
+    return keyval==GDK_KEY_t && (state&GDK_CONTROL_MASK)!=0;
 }
 static void click(GtkGestureClick *gesture, int count, double x,double y,gpointer data) {
     (void)count;(void)data;

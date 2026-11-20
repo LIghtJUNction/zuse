@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add `zuse script` and MCP `zuse.script` with owned mouse variables, lexical blocks, borrowed aliases and function parameters, bounded repeats, and cooperative parallel or sequential trajectories.
+- Create independent Linux X11 MPX mice by default, with per-device glowing cursors, configurable colors/shapes, bounded PAM images, and explicit shared user-pointer selection.
+- Expose the Rust `Mouse`, `MouseOptions`, `CursorStyle`, and `CursorImage` APIs, including validated callback paths and native resource cleanup on scope exit.
+- Make flat runtime pointer actions independent by default; add `mouse.use` and `mouse.release`, and require an existing selected handle for `mouse.position`.
+- Reject conflicting parallel access and overlapping user-pointer owners before execution; close scoped mice and release held synthetic buttons on runtime errors and cooperative cancellation.
+- Add temporary `zuse script` CLI SIGINT/SIGTERM handling on supported Unix builds and document hard-termination, application-grab, and platform limits.
+- Add bounded touchpad swipe, pinch, rotation, and cancellation planning to Rust, flat batches, and scoped scripts; report native support as unavailable and reject execution before other input.
+- Preserve verified Num Lock state for supported foreground Hyprland key chords using the original XKB map; retain explicit state errors for text, background, and unobservable configurations.
+- Keep deeply expanded function scopes progressing within the cooperative scheduler's work budget and bound accumulated execution receipts while retaining cleanup records.
 - Add `mouse.move_to` to locate an accessible text or button target and move from the live pointer position in one CLI, shell or MCP operation.
 - Support absolute waypoints, seeded smooth jitter and speed variation, easing, target offsets, duration or sampled-path average speed, and explicit selection of duplicate targets.
 - Expose typed target queries, complete pointer plans, `Runtime::move_to` and `Runtime::move_to_with` for custom Rust paths validated before native input.

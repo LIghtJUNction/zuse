@@ -4,7 +4,7 @@
 
 zuse 执行一小段可检查的代码，完成观察窗口、移动鼠标、输入文字、读取无障碍树、控制后台浏览器、Android 显示目标与手机 Chrome、iOS，以及串口和 USB 设备。遇到密码、安全密钥或账号登录时，程序可以暂停，请人类处理，再从剩余步骤继续。
 
-[English](README.md) · [语法](docs/language.md) · [文本定位与轨迹](docs/target-motion.md) · [平台能力](docs/platforms.md)
+[English](README.md) · [语法](docs/language.md) · [作用域鼠标](docs/scoped-mice.md) · [文本定位与轨迹](docs/target-motion.md) · [平台能力](docs/platforms.md)
 
 ## 安装与使用
 
@@ -12,21 +12,45 @@ zuse 执行一小段可检查的代码，完成观察窗口、移动鼠标、输
 cargo install zuse-computer --locked
 zuse doctor
 zuse schema
-zuse eval 'mouse.position(); window.list()'
+zuse eval 'window.list()'
+zuse script examples/scoped-mice.zuse --dry-run
 zuse shell
 ~~~
 
 Rust 要求 1.100 或更高版本。Cargo 包名为 `zuse-computer`，项目、库导入名和可执行文件都叫 `zuse`。crates.io 的短包名已被其他项目注册。
 
+下面的普通命令示例明确选择用户的系统鼠标：
+
 ~~~text
+mouse.use(kind="user", appearance="system")
 mouse.move(x=400, y=240, duration=350, curve="bezier", jitter=1, seed=42)
 mouse.click(button="left")
 keyboard.type(text="你好")
 wait(min=80, max=160, seed=42)
 screen.capture(path="desktop.png")
+mouse.release()
 ~~~
 
 `zuse check 文件.zuse` 或 `--dry-run` 返回执行计划；`--read-only` 拒绝输入、程序启动、JavaScript 执行和设置修改。运行时先检查整个程序，再执行第一步；执行失败时返回已完成步骤并停止。
+
+## 独立鼠标、变量生命周期与并行轨迹
+
+`zuse script` 让每个鼠标变量拥有自己的位置、按键状态和可见光标，默认创建独立鼠标。Linux 原生 X11 的 XInput2/MPX 提供独立设备身份，因此移动这些鼠标不会移动用户的鼠标。颜色、形状、大小、发光强度和自定义图像都可以设置。
+
+~~~text
+let cyan = mouse(color="#2FE2FF", shape="arrow");
+let violet = mouse(color="#B58CFF", shape="ring");
+parallel {
+    cyan.move(x=320, y=180, duration=600);
+    violet.move(x=520, y=320, duration=600);
+}
+~~~
+
+用 `zuse script examples/scoped-mice.zuse --dry-run` 检查完整示例，在支持的 X11 会话里去掉 `--dry-run` 执行。两条轨迹按时间交错推进；脚本结束时销毁两个鼠标。块和函数拥有各自创建的局部鼠标，别名与函数参数借用已有鼠标。`sequence` 串行执行；`parallel` 的每条直接子语句是一个分支，需要连续操作同一鼠标时，将这些操作放进同一个分支块。对同一鼠标的并行冲突会在输入前被拒绝。
+
+普通 `mouse.*` 动作现在也默认使用独立鼠标。要控制用户鼠标，普通命令先调用 `mouse.use(kind="user", appearance="system")`，作用域脚本使用 `user_mouse(appearance="system")`。这一显式系统模式适用于已有的 Wayland、Windows 和 macOS 后端；独立鼠标或自定义原生光标不受支持时直接报错。普通运行时的 `mouse.position()` 只观察已经选定的鼠标，需要先调用 `mouse.use()` 或执行一个鼠标动作。
+
+作用域退出、运行错误和协作取消都会触发清理，包括释放程序按住的鼠标键。支持的 Linux 构建中，`zuse script` 的 SIGINT/SIGTERM 通过取消标记走正常清理路径；SIGKILL、进程崩溃等无法运行析构函数的终止不保证清理。完整语法、Rust 接口、目标定位、外观格式和平台边界见[作用域鼠标说明](docs/scoped-mice.md)。
 
 ## 移动到文本或按钮
 
@@ -44,7 +68,7 @@ cargo run --example target_motion
 
 ## Project Z 结构
 
-语法解析器和鼠标轨迹核心支持 `no_std`，不分配堆内存、零依赖。桌面运行时使用标准库，Rust 依赖树只有 Project Z 自有的 zmcpio、zcall、zconv、zclap、z64、zsys。系统动态库加载复用 zsys 0.1.1；CLI 和 MCP 共用执行器。
+基础命令解析器和鼠标轨迹核心支持 `no_std`，不分配堆内存、零依赖。桌面运行时及作用域脚本的编译器、调度器使用标准库，Rust 依赖树只有 Project Z 自有的 zmcpio、zcall、zconv、zclap、z64、zsys。系统动态库加载复用 zsys 0.1.1；CLI 和 MCP 共用执行器。
 
 鼠标路径包含线性、平滑、缓入缓出和贝塞尔轨迹，支持种子固定的抖动与随机等待。轨迹首尾坐标准确，使用绝对时间安排采样。
 
@@ -60,7 +84,7 @@ zuse mcp --socket /run/user/1000/zuse.sock
 
 socket 路径请换成自己的运行目录。HTTP 入口为 `/mcp`，默认仅本机访问；绑定其他网卡需要配置至少 32 字节的 `ZUSE_TOKEN`。stdio/socket 支持传统初始化流程和当前协议，HTTP 使用 MCP 2026-07-28。
 
-工具包括执行、预检查、能力发现、语法查询、观察、直接返回 PNG 图片、查看人工请求、恢复执行。
+工具包括执行、预检查、能力发现、语法查询、观察、直接返回 PNG 图片、查看人工请求、恢复执行。`zuse.script` 接收完整作用域脚本及可选的 `dry_run`、`read_only`，每次调用返回前清理该次创建的鼠标；`zuse.execute` 执行普通命令批次。
 
 ## 后台浏览器与无障碍
 

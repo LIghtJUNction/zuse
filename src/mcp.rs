@@ -34,6 +34,11 @@ struct ToolDef {
 }
 const TOOLS: &[ToolDef] = &[
     ToolDef {
+        name: "zuse.script",
+        description: "Run zuse script with scoped independent mice, functions and parallel/serial tracks. All mice are released before this call returns. Explicit user_mouse opts into the user pointer. Set dry_run to validate without creating mice.",
+        schema: r#"{"type":"object","properties":{"code":{"type":"string"},"dry_run":{"type":"boolean"},"read_only":{"type":"boolean"}},"required":["code"],"additionalProperties":false}"#,
+    },
+    ToolDef {
         name: "zuse.execute",
         description: "Validate the full computer-use program before executing it. Returns ordered results or a human handoff. Typed text is omitted from execution logs.",
         schema: r#"{"type":"object","properties":{"code":{"type":"string"},"dry_run":{"type":"boolean"},"read_only":{"type":"boolean"}},"required":["code"],"additionalProperties":false}"#,
@@ -386,6 +391,12 @@ impl Engine {
                     })()
                 } else {
                     (|| match name.as_str() {
+                        "zuse.script" => {
+                            let mut options = self.options;
+                            options.dry_run |= flag(args, "dry_run")?;
+                            options.read_only |= flag(args, "read_only")?;
+                            crate::script::execute(&arg(args, "code", "")?, options)
+                        }
                         "zuse.execute" => {
                             let code = arg(args, "code", "")?;
                             if args.and_then(|v| v.get("code")).is_none() {

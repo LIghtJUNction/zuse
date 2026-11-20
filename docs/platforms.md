@@ -22,9 +22,27 @@ Capabilities are discovered at runtime. Missing permissions, system libraries, d
 
 Detailed results: [0.2.0 validation](validation-0.2.0.md), [0.1.1 validation](validation-0.1.1.md), [Android evidence](evidence/android-physical-2026-11-20.json), [Linux evidence](evidence/linux-native-2026-11-20.json).
 
+## Independent and shared mice
+
+The current repository adds [scoped mouse programs](scoped-mice.md). A native independent mouse needs a separate OS pointer identity as well as its own cursor image. Linux X11 supplies that identity through XInput2 master pointers; zuse creates and removes one master pair per owned mouse, keeps the user's pointer separate, and assigns a device-specific ARGB cursor.
+
+The [unreleased candidate validation](validation-scoped-mice.md) records the current Xvfb, GTK/AT-SPI, private Hyprland Num Lock, CLI cancellation, and cross-target results.
+
+| Requested mode | Linux native X11 | Wayland, Windows, macOS |
+| --- | --- | --- |
+| Independent mouse, including default `mouse()` and flat pointer actions | Requires XInput2/MPX, XTEST, and ARGB cursors | Unsupported; returns an error |
+| Shared user pointer with generated or custom appearance | Uses the user's master pointer and temporary per-device cursor overrides | Unsupported; returns an error |
+| Explicit user pointer with `appearance="system"` | Uses the existing system-pointer backend | Uses the existing native backend, subject to its permissions and requirements |
+
+Use `user_mouse(appearance="system")` in `zuse script`, or `mouse.use(kind="user", appearance="system")` in a flat CLI, shell, or MCP batch. The independent mode does not fall back to the user pointer. A fresh flat runtime has no selected mouse for `mouse.position()` until an explicit selection or mouse action creates a handle.
+
+Parallel independent trajectories have separate native coordinates and button state. Applications can still share focus and content, and some legacy GUI clients accept only one active drag or pointer grab. Those application limits are separate from pointer ownership. XWayland availability does not imply independent native Wayland pointers; `ZUSE_BACKEND=x11` is an explicit request to use an accessible X11 server with the required extensions.
+
+Scope cleanup releases held synthetic buttons and removes owned devices. Normal errors and cooperative cancellation follow this path. SIGKILL, abort, crashes, or a lost display connection can prevent cleanup; XInput master devices may then remain on the server. A shared styled mouse removes its own cursor overrides on close. An older per-device override installed by another XI-aware tool cannot be recovered because XInput has no query for that previous override.
+
 ## Linux libraries and helpers
 
-Native dynamic-library loading uses the exact Project Z dependency zsys 0.1.1. X11 needs libX11 and libXtst. Wayland keyboard support needs libwayland-client and libxkbcommon. AT-SPI needs libatspi and a usable accessibility D-Bus session. These libraries are loaded at runtime, with no link-time X11 dependency. Static-musl native dynamic loading is unsupported by this zsys version.
+Native dynamic-library loading uses the exact Project Z dependency zsys 0.1.1. System-pointer X11 operations need libX11 and libXtst; independent or styled mice also need libXi and libXcursor. Wayland keyboard support needs libwayland-client and libxkbcommon. AT-SPI needs libatspi and a usable accessibility D-Bus session. These libraries are loaded at runtime, with no link-time X11 dependency. Static-musl native dynamic loading is unsupported by this zsys version.
 
 Hyprland metadata, focus and targeted input use its native socket. Screen capture uses grim. Pointer buttons/wheel require an authorized ydotool daemon; pointer positioning can use Hyprland IPC. Text input no longer depends on wtype.
 
@@ -32,11 +50,17 @@ OCR uses Tesseract, notifications use notify-send, and the graphical password pr
 
 ## Wayland keyboard conditions
 
-The current keyboard path requires a Hyprland session that exposes the state queries used by the adapter, no held keys, Caps Lock and Num Lock off, and layout group 0. Known nonzero or unobservable required state returns error_code=unsupported_state before keyboard effects. Sticky modifiers and custom latched/locked state are not supported: the compositor's public interface does not expose a complete modifier snapshot to an unfocused observer.
+Keyboard input requires Hyprland 0.55 or newer with the adapter's state queries, no held keys, Caps Lock off, and layout group 0. Text input and background shortcuts also require Num Lock off. Known unsupported or unobservable required state returns `error_code=unsupported_state` before keyboard effects. Sticky modifiers and custom latched/locked state are not supported: the compositor's public interface does not expose a complete modifier snapshot to an unfocused observer.
+
+Foreground `keyboard.key` can preserve Num Lock for an ordinary mapped chord such as `Ctrl+T`. It resolves the key and modifier masks against the captured XKB map, uses an owned virtual keyboard with that same map, then explicitly restores the Num Lock mask before destroying the device. This path requires a verifiable Num Lock action, byte-identical keymap parse/serialization, and the current main keyboard to be the last device in Hyprland's keyboard list so destruction selects that same keyboard again. A named target must already be focused; the adapter does not change focus or toggle Num Lock to satisfy these conditions. Lock-changing keys and configurations outside those checks remain unsupported.
 
 Foreground typing installs a bounded Unicode keymap and restores the captured original keymap before disconnecting. Background typing leaves the live keymap intact. It resolves the whole string against the real plain/Shift levels before sending targeted shortcuts. A missing character returns error_code=unsupported_character before any character in that call is sent. This does not provide arbitrary background Unicode on every layout; a US map, for example, cannot represent Chinese or emoji through these levels.
 
 The Fcitx regression demonstrates the tested session, not every input method, preedit state, compositor or application. zuse does not toggle the operator's locks or reclaim a changed focus to make an operation pass.
+
+## Touchpad gestures
+
+`touchpad.capabilities()` reports native gesture support separately from pure planning. Current backends support bounded swipe, pinch, rotation, and cancellation plans only; every native gesture capability is false. An executable program containing a native gesture fails capability preflight before any earlier pointer action is submitted. There is no pointer-motion or wheel-event substitute. See [touchpad planning](scoped-mice.md#touchpad-gesture-planning) for the script and Rust interfaces.
 
 ## Submission and application acceptance
 

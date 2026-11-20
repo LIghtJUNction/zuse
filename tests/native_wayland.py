@@ -210,8 +210,8 @@ def main():
                 w=current_own(first)
                 point=(w["at"][0]+w["size"][0]//2,w["at"][1]+w["size"][1]//2)
                 active(first)
-                zuse(f"mouse.move(x={point[0]},y={point[1]},duration=0)")
-                position=value(zuse("mouse.position()"))
+                zuse(f'mouse.use(kind="user",appearance="system");mouse.move(x={point[0]},y={point[1]},duration=0)')
+                position=value(zuse('mouse.use(kind="user",appearance="system");mouse.position()'))
                 assert (position["x"],position["y"])==point
                 return {"coordinate_matches":True}
             evaluate("pointer_motion",pointer)
@@ -292,7 +292,6 @@ def main():
                         focus(first);active(first)
                         for mode,expected,code,character in [
                             ("caps",(True,False,0),38,"A"),
-                            ("num",(False,True,0),38,"a"),
                             ("group1",(False,False,1),29,"z"),
                         ]:
                             send(mode)
@@ -312,6 +311,64 @@ def main():
                             assert state()==expected
                             checked.append(mode)
                             send("neutral")
+                        # Num Lock is supported for foreground chords using
+                        # an unchanged XKB map. Keep this original keyboard
+                        # alive, and send a keypad key without replaying its
+                        # modifiers after each zuse chord. A lost client lock
+                        # mask turns that exact key into KP_End instead of 1.
+                        send("num")
+                        expected=(False,True,0)
+                        assert state()==expected
+                        before=text(0)
+                        other_before=text(1)
+                        before_devices=compositor("devices")["keyboards"]
+                        def device_states(rows):
+                            return sorted((k["address"],k["main"],k["capsLock"],
+                                           k["numLock"],k["active_layout_index"]) for k in rows)
+                        original_devices=device_states(before_devices)
+                        def shortcut_events():
+                            return [tuple(map(int,line.split()[1:]))
+                                    for line in (directory/"0.log").read_text().splitlines()
+                                    if line.startswith("KEY ")]
+                        for operation in [
+                            'keyboard.key(key="Ctrl+T")',
+                            "keyboard.key(window="+json.dumps(first)+',key="Ctrl+T")',
+                        ]:
+                            active(first)
+                            events_before=len(shortcut_events())
+                            zuse(operation)
+                            deadline=time.monotonic()+2
+                            while time.monotonic()<deadline:
+                                new_events=shortcut_events()[events_before:]
+                                if any(keyval==ord("t") and flags&4
+                                       for keyval,code,flags in new_events):
+                                    break
+                                time.sleep(.02)
+                            else:
+                                raise AssertionError("foreground Ctrl+T was not received")
+                            assert text(0)==before
+                            assert state()==expected
+                            assert device_states(compositor("devices")["keyboards"])==original_devices
+                            active(first)
+                            send("press 87");before+="1";wait_text(0,before)
+                            send("press 38");before+="a";wait_text(0,before)
+                            assert state()==expected
+                        zuse('keyboard.key(key="code:87")')
+                        before+="1";wait_text(0,before)
+                        send("press 87");before+="1";wait_text(0,before)
+                        assert device_states(compositor("devices")["keyboards"])==original_devices
+                        for operation in [
+                            'keyboard.type(text="SHOULD_NOT_APPEAR")',
+                            "keyboard.type(window="+json.dumps(first)+',text="SHOULD_NOT_APPEAR")',
+                            "keyboard.key(window="+json.dumps(second)+',key="Ctrl+T")',
+                        ]:
+                            active(first);rejected(operation,"unsupported_state")
+                            assert (text(0),text(1))==(before,other_before)
+                            assert state()==expected
+                        send("press 87");before+="1";wait_text(0,before)
+                        assert device_states(compositor("devices")["keyboards"])==original_devices
+                        checked.append("num_lock_text_and_background")
+                        send("neutral")
                         send("down 50")
                         before=text(0)
                         active(first);rejected('keyboard.type(text="SHOULD_NOT_APPEAR")',"unsupported_state")
@@ -319,7 +376,9 @@ def main():
                         send("up 50");send("neutral")
                         send("press 38");wait_text(0,before+"a")
                         checked.append("held_key")
-                        return {"rejected_before_effect":checked,"original_plain_letters_after_rejection":True}
+                        return {"rejected_before_effect":checked,"original_plain_letters_after_rejection":True,
+                                "num_lock_foreground_shortcuts":2,"num_lock_keypad_after_shortcut":True,
+                                "num_lock_original_keyboard_states_unchanged":True}
                     except Exception as error:
                         raise RuntimeError(str(error)+"; own fixture events="+
                                            repr((directory/"0.log").read_text()[-1500:])+
@@ -346,7 +405,7 @@ def main():
                 zuse("window.focus(id="+json.dumps(original_focus)+")")
             time.sleep(.15)
             after_focus=compositor("cursorpos")
-            zuse(f"mouse.move(x={x},y={y},duration=0)")
+            zuse(f'mouse.use(kind="user",appearance="system");mouse.move(x={x},y={y},duration=0)')
             time.sleep(.05)
             remaining=compositor("clients")
             report["restored"]={
