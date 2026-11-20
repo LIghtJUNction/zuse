@@ -9,7 +9,7 @@ use crate::{
     ios::{self, Ios},
     json::{self, quote},
     language::{Call, Parser, Value},
-    motion::{Curve, Motion, Point, Rng},
+    motion::{Curve, FunctionalMotion, MAX_COORDINATE, Motion, PathOptions, Point, Rng},
     platform::Desktop,
     serial::{self, SerialPort},
     usb::{self, UsbDevice},
@@ -56,6 +56,7 @@ static SPECS: &[Spec] = &[
     spec!("system.capabilities", true, []),
     spec!("mouse.position", true, []),
     spec!("mouse.move",false,["x":I:true,"y":I:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"seed":I:false]),
+    spec!("mouse.circle",false,["x":I:true,"y":I:true,"radius":N:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"speed_variation":N:false,"seed":I:false]),
     spec!("mouse.click",false,["button":T:false,"count":I:false,"interval":I:false]),
     spec!("mouse.down",false,["button":T:false]),
     spec!("mouse.up",false,["button":T:false]),
@@ -202,6 +203,39 @@ fn text(call: &Call<'_>, name: &str, default: &str) -> Result<String, String> {
 fn integer(call: &Call<'_>, name: &str, default: i64) -> i64 {
     call.get(name).and_then(Value::as_i64).unwrap_or(default)
 }
+fn circle_options(c: &Call<'_>) -> Result<(f64, f64, f64, PathOptions), String> {
+    let x = integer(c, "x", 0) as f64;
+    let y = integer(c, "y", 0) as f64;
+    let radius = number(c, "radius", 0.0);
+    let jitter = number(c, "jitter", 0.0);
+    let speed_variation = number(c, "speed_variation", 0.0);
+    let duration = range(c, "duration", 1000, 1, 60_000)?;
+    let steps = range(c, "steps", (duration / 8).clamp(1, 4096), 1, 4096)?;
+    if steps > duration {
+        return Err("mouse.circle: steps must fit duration in milliseconds".into());
+    }
+    if radius <= 0.0 || x.abs().max(y.abs()) + radius + jitter > MAX_COORDINATE {
+        return Err("mouse.circle: radius and jitter must fit the coordinate range".into());
+    }
+    if !(0.0..=1000.0).contains(&jitter) || !(0.0..=1.0).contains(&speed_variation) {
+        return Err("mouse.circle: jitter must be 0..1000 and speed_variation 0..1".into());
+    }
+    let easing = Curve::parse(&text(c, "curve", "smooth")?).ok_or("unknown motion curve")?;
+    Ok((
+        x,
+        y,
+        radius,
+        PathOptions {
+            duration_ms: duration as u32,
+            steps: steps as u32,
+            easing,
+            jitter,
+            speed_variation,
+            seed: integer(c, "seed", 1) as u64,
+        },
+    ))
+}
+
 fn number(call: &Call<'_>, name: &str, default: f64) -> f64 {
     call.get(name).and_then(Value::as_f64).unwrap_or(default)
 }
@@ -297,6 +331,10 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<Vec<Call<'a>>, Stri
                     return Err("jitter must be 0..1000 pixels".into());
                 }
                 wait_budget = wait_budget.saturating_add(duration as u64);
+            }
+            "mouse.circle" => {
+                let (_, _, _, options) = circle_options(&call)?;
+                wait_budget = wait_budget.saturating_add(u64::from(options.duration_ms));
             }
             "mouse.click" | "mouse.down" | "mouse.up" => {
                 if !["left", "right", "middle", "back", "forward", "1", "2", "3"]
@@ -742,6 +780,40 @@ impl Runtime {
                     target.x,
                     target.y,
                     steps + 1
+                ))
+            }
+            "mouse.circle" => {
+                let (x, y, radius, options) = circle_options(c)?;
+                let path = FunctionalMotion::new(
+                    |u| {
+                        if u == 0.0 || u == 1.0 {
+                            return Point { x, y: y - radius };
+                        }
+                        let angle = std::f64::consts::TAU * u;
+                        Point {
+                            x: x + radius * angle.sin(),
+                            y: y - radius * angle.cos(),
+                        }
+                    },
+                    options,
+                )
+                .map_err(|e| e.to_string())?;
+                let start = Instant::now();
+                let desktop = self.desktop()?;
+                let mut samples = 0;
+                for sample in path {
+                    let sample = sample.map_err(|e| e.to_string())?;
+                    let due = Duration::from_millis(u64::from(sample.at_ms));
+                    if let Some(delay) = due.checked_sub(start.elapsed()) {
+                        std::thread::sleep(delay);
+                    }
+                    desktop
+                        .move_to(sample.point.x.round() as i32, sample.point.y.round() as i32)?;
+                    samples += 1;
+                }
+                Ok(format!(
+                    "{{\"x\":{x},\"y\":{},\"samples\":{samples}}}",
+                    y - radius
                 ))
             }
             "mouse.click" | "mouse.down" | "mouse.up" => {

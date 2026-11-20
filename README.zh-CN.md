@@ -26,6 +26,12 @@ wait(min=80, max=160, seed=42)
 screen.capture(path="desktop.png")
 ~~~
 
+连续轨迹只需调用一次，由本机调度。以下示例只检查执行计划，不移动鼠标：
+
+`zuse eval 'mouse.circle(x=320,y=220,radius=100,duration=1600,speed_variation=0.25,jitter=0.7,seed=42)' --dry-run`
+
+Rust 可用 `motion::FunctionalMotion` 传入 `FnMut(f64) -> Point` 和 `PathOptions` 定义曲线。支持缓动、带种子的变速和可选平滑抖动，起点和终点不抖动。采样器不会授予桌面输入权限。
+
 `zuse check 文件.zuse` 或 `--dry-run` 返回执行计划；`--read-only` 拒绝输入、程序启动、JavaScript 执行和设置修改。运行时先检查整个程序，再执行第一步；执行失败时返回已完成步骤并停止。
 
 ## Project Z 结构

@@ -55,6 +55,12 @@ wait(min=80, max=160, seed=42)
 screen.capture(path="desktop.png")
 ~~~
 
+For a continuous, closed trajectory, the local runtime schedules all samples from one call. Inspect the plan without moving the cursor:
+
+`zuse eval 'mouse.circle(x=320,y=220,radius=100,duration=1600,speed_variation=0.25,jitter=0.7,seed=42)' --dry-run`
+
+Rust callers can pass `FnMut(f64) -> Point` and `PathOptions` to `motion::FunctionalMotion`. It supports easing, seeded speed variation, and optional smoothed jitter that preserves endpoints. Sampling does not grant desktop input access.
+
 `zuse check FILE` validates without executing. `--read-only` permits observation operations, including screenshot artifacts, and rejects input, evaluation, process launches, and settings changes. `zuse schema` prints every supported operation and its arguments.
 
 Motion supports linear, smoothstep, cubic ease-in/out, and curved Bezier paths. Seeded jitter tapers to zero at the endpoints. Samples use absolute time offsets so scheduling delays do not accumulate across the path.

@@ -54,6 +54,7 @@ pub enum MotionError {
     DurationRange,
     StepsRange,
     JitterRange,
+    SpeedRange,
     DelayRange,
 }
 
@@ -238,3 +239,133 @@ impl Iterator for Motion {
 }
 impl ExactSizeIterator for Motion {}
 impl core::iter::FusedIterator for Motion {}
+
+/// Sampling parameters for a caller-defined pointer path. Defaults target ~120 Hz
+/// for one second, with smooth acceleration and no variation or jitter.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PathOptions {
+    pub duration_ms: u32,
+    pub steps: u32,
+    pub easing: Curve,
+    pub jitter: f64,
+    /// Seeded variation in progress per unit time, in 0..=1.
+    pub speed_variation: f64,
+    pub seed: u64,
+}
+
+impl Default for PathOptions {
+    fn default() -> Self {
+        Self {
+            duration_ms: 1000,
+            steps: 120,
+            easing: Curve::Smooth,
+            jitter: 0.0,
+            speed_variation: 0.0,
+            seed: 1,
+        }
+    }
+}
+
+/// An allocation-free time sampler of a Rust function from [0, 1] to a point.
+/// Each sample has an absolute deadline. The caller owns input delivery,
+/// cancellation, and any desktop authorization, independently of the path.
+pub struct FunctionalMotion<F> {
+    path: F,
+    options: PathOptions,
+    next: u32,
+    speed_bias: f64,
+}
+
+impl<F: FnMut(f64) -> Point> FunctionalMotion<F> {
+    pub fn new(path: F, options: PathOptions) -> Result<Self, MotionError> {
+        let origin = Point::default();
+        // Reuse duration, interval and jitter bounds from the segment sampler.
+        Motion::new(
+            origin,
+            origin,
+            options.duration_ms,
+            options.steps,
+            options.easing,
+            options.jitter,
+            options.seed,
+        )?;
+        if !options.speed_variation.is_finite() {
+            return Err(MotionError::NonFinite);
+        }
+        if !(0.0..=1.0).contains(&options.speed_variation) {
+            return Err(MotionError::SpeedRange);
+        }
+        let mut rng = Rng::new(options.seed ^ 0xd6e8feb86659fd93);
+        let speed_bias = 0.8 * options.speed_variation * rng.signed_unit();
+        Ok(Self {
+            path,
+            options,
+            next: 0,
+            speed_bias,
+        })
+    }
+
+    fn smooth(v: f64) -> f64 {
+        v * v * (3.0 - 2.0 * v)
+    }
+
+    fn noise(&self, index: u32) -> (f64, f64) {
+        let mut rng =
+            Rng::new(self.options.seed ^ u64::from(index).wrapping_mul(0x9e3779b97f4a7c15));
+        (rng.signed_unit(), rng.signed_unit())
+    }
+}
+
+impl<F: FnMut(f64) -> Point> Iterator for FunctionalMotion<F> {
+    type Item = Result<Sample, MotionError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let o = self.options;
+        let i = self.next;
+        if i > o.steps {
+            return None;
+        }
+        self.next += 1;
+        let t = f64::from(i) / f64::from(o.steps);
+        // The time warp is monotone: its derivative is at least 1 - |bias|.
+        let phase = t + self.speed_bias * t * (1.0 - t);
+        let u = match o.easing {
+            Curve::Linear => phase,
+            Curve::Smooth | Curve::Bezier => Self::smooth(phase),
+            Curve::EaseInOut if phase < 0.5 => 4.0 * phase * phase * phase,
+            Curve::EaseInOut => {
+                let p = 1.0 - phase;
+                1.0 - 4.0 * p * p * p
+            }
+        };
+        let mut point = (self.path)(u);
+        if i > 0 && i < o.steps && o.jitter > 0.0 {
+            // Interpolated noise anchors, not a new independent jump each frame.
+            let bucket = t * 8.0;
+            let index = bucket as u32;
+            let alpha = Self::smooth(bucket - f64::from(index));
+            let (ax, ay) = self.noise(index);
+            let (bx, by) = self.noise(index + 1);
+            let amp = o.jitter * 4.0 * t * (1.0 - t);
+            point.x += amp * (ax + (bx - ax) * alpha);
+            point.y += amp * (ay + (by - ay) * alpha);
+        }
+        let error = if !point.x.is_finite() || !point.y.is_finite() {
+            Some(MotionError::NonFinite)
+        } else if point.x.abs() > MAX_COORDINATE || point.y.abs() > MAX_COORDINATE {
+            Some(MotionError::CoordinateRange)
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            self.next = o.steps + 1;
+            return Some(Err(error));
+        }
+        Some(Ok(Sample {
+            point,
+            at_ms: ((u64::from(o.duration_ms) * u64::from(i)) / u64::from(o.steps)) as u32,
+        }))
+    }
+}
+
+impl<F: FnMut(f64) -> Point> core::iter::FusedIterator for FunctionalMotion<F> {}
