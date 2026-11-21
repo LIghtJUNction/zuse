@@ -7,7 +7,7 @@ mod scheduler;
 pub mod syntax;
 
 use crate::runtime::Options;
-pub use modules::{ModuleSession, Prepared, ProgramMode, uses_scoped_syntax};
+pub use modules::{FunctionMetadata, ModuleSession, Prepared, ProgramMode, uses_scoped_syntax};
 pub use plan::{CompiledScript, PlanSummary};
 use std::sync::{
     Arc,

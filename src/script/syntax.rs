@@ -5,7 +5,7 @@
 //! before creating devices or submitting input.
 
 use crate::language::{DecodeError, Value};
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 pub use crate::language::Span;
 
@@ -394,8 +394,12 @@ impl<'a> Lexer<'a> {
         Ok(self.line != start_line)
     }
 
-    fn tokens(mut self) -> Result<Vec<Token>, ParseError> {
+    fn tokens(mut self) -> Result<(Vec<Token>, BTreeMap<usize, String>), ParseError> {
         let mut tokens = Vec::new();
+        let mut descriptions = BTreeMap::new();
+        let mut description = String::new();
+        let mut description_line = None;
+        let mut line_has_code = false;
         while let Some(ch) = self.peek() {
             let mut span = self.span();
             let kind = match ch {
@@ -404,22 +408,49 @@ impl<'a> Lexer<'a> {
                     continue;
                 }
                 '\r' | '\n' => {
+                    if description_line != Some(self.line) {
+                        description.clear();
+                        description_line = None;
+                    }
                     self.advance();
+                    line_has_code = false;
                     Kind::Newline
                 }
                 '#' => {
+                    description.clear();
+                    description_line = None;
+                    line_has_code = true;
                     while self.peek().is_some_and(|c| !matches!(c, '\r' | '\n')) {
                         self.advance();
                     }
                     continue;
                 }
                 '/' if self.starts("//") => {
+                    let documented = self.module_syntax
+                        && !line_has_code
+                        && self.starts("///")
+                        && !self.starts("////");
+                    let start = self.offset + 3;
                     while self.peek().is_some_and(|c| !matches!(c, '\r' | '\n')) {
                         self.advance();
                     }
+                    if documented {
+                        if description_line.is_some() {
+                            description.push('\n');
+                        }
+                        description.push_str(self.source[start..self.offset].trim());
+                        description_line = Some(self.line);
+                    } else {
+                        description.clear();
+                        description_line = None;
+                    }
+                    line_has_code = true;
                     continue;
                 }
                 '/' if self.starts("/*") => {
+                    description.clear();
+                    description_line = None;
+                    line_has_code = true;
                     if self.block_comment()? {
                         Kind::Newline
                     } else {
@@ -454,6 +485,18 @@ impl<'a> Lexer<'a> {
                     span,
                 });
             }
+            if !matches!(kind, Kind::Newline) {
+                if matches!(&kind, Kind::Name(name) if name == "fn")
+                    && description_line.is_some_and(|line| span.line == line + 1)
+                    && !line_has_code
+                {
+                    descriptions.insert(span.start, std::mem::take(&mut description));
+                } else {
+                    description.clear();
+                }
+                description_line = None;
+                line_has_code = true;
+            }
             span.end = self.offset;
             tokens.push(Token { kind, span });
         }
@@ -461,7 +504,7 @@ impl<'a> Lexer<'a> {
             kind: Kind::End,
             span: self.span(),
         });
-        Ok(tokens)
+        Ok((tokens, descriptions))
     }
 }
 
@@ -817,16 +860,26 @@ fn reserved(name: &str) -> bool {
 /// an ordinary braced child groups several statements into one sequential branch.
 /// ASCII binding names and decoded UTF-8 string values are supported.
 pub fn parse(source: &str) -> Result<Program, ParseError> {
-    parse_with_modules(source, false)
+    parse_with_modules(source, false).map(|(program, _)| program)
 }
 
 /// Parse module declarations and flat command names without changing the
 /// original scoped parser's identifier or borrowed-handle grammar.
 pub fn parse_module(source: &str) -> Result<Program, ParseError> {
+    parse_module_documented(source).map(|(program, _)| program)
+}
+
+/// Preserve lexical documentation without changing the public syntax tree.
+pub(super) fn parse_module_documented(
+    source: &str,
+) -> Result<(Program, BTreeMap<usize, String>), ParseError> {
     parse_with_modules(source, true)
 }
 
-fn parse_with_modules(source: &str, module_syntax: bool) -> Result<Program, ParseError> {
+fn parse_with_modules(
+    source: &str,
+    module_syntax: bool,
+) -> Result<(Program, BTreeMap<usize, String>), ParseError> {
     if source.len() > MAX_SCRIPT_BYTES {
         return Err(ParseError {
             kind: ErrorKind::ScriptTooLarge,
@@ -840,14 +893,17 @@ fn parse_with_modules(source: &str, module_syntax: bool) -> Result<Program, Pars
     }
     let mut lexer = Lexer::new(source);
     lexer.module_syntax = module_syntax;
-    let tokens = lexer.tokens()?;
+    let (tokens, descriptions) = lexer.tokens()?;
     let mut parser = Parser {
         tokens,
         cursor: 0,
         statements: 0,
         module_syntax,
     };
-    Ok(Program {
-        statements: parser.list(0, false)?,
-    })
+    Ok((
+        Program {
+            statements: parser.list(0, false)?,
+        },
+        descriptions,
+    ))
 }

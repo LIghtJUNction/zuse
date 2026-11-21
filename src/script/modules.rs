@@ -17,6 +17,39 @@ const MAX_FUNCTIONS: usize = 256;
 const MAX_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_IMPORT_DEPTH: usize = 16;
 const MAX_CALL_DEPTH: usize = 32;
+const MAX_DESCRIPTION_BYTES: usize = 4096;
+
+/// Callable declarations retained in one session, without executable bodies.
+/// Parameter names preserve declaration order. Descriptions are explicit source
+/// documentation, not inferred types, permissions or execution guarantees.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionMetadata {
+    pub name: String,
+    pub parameters: Vec<String>,
+    pub description: String,
+    pub source: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl FunctionMetadata {
+    pub fn to_json(&self) -> String {
+        let parameters = self
+            .parameters
+            .iter()
+            .map(|p| json::quote(p))
+            .collect::<Vec<_>>();
+        format!(
+            "{{\"name\":{},\"parameters\":[{}],\"description\":{},\"source\":{},\"line\":{},\"column\":{}}}",
+            json::quote(&self.name),
+            parameters.join(","),
+            json::quote(&self.description),
+            json::quote(&self.source),
+            self.line,
+            self.column,
+        )
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgramMode {
@@ -45,12 +78,26 @@ impl Prepared {
 
 #[derive(Clone, Debug)]
 struct Function {
+    description: String,
     params: Vec<String>,
     body: Vec<Statement>,
     namespace: String,
     origin: String,
     span: Span,
     canonical: String,
+}
+
+impl Function {
+    fn metadata(&self, name: &str) -> FunctionMetadata {
+        FunctionMetadata {
+            name: name.into(),
+            parameters: self.params.clone(),
+            description: self.description.clone(),
+            source: self.origin.clone(),
+            line: self.span.line,
+            column: self.span.column,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +124,31 @@ struct Item {
 impl ModuleSession {
     pub fn functions(&self) -> Vec<String> {
         self.functions.keys().cloned().collect()
+    }
+
+    /// Inspect retained declarations without reopening files or executing bodies.
+    pub fn function_metadata(&self) -> Vec<FunctionMetadata> {
+        self.functions
+            .iter()
+            .map(|(name, function)| function.metadata(name))
+            .collect()
+    }
+
+    /// An empty namespace selects all functions; a namespace selects descendants
+    /// at a dot boundary. Results are sorted by fully qualified function name.
+    pub fn functions_json(&self, namespace: &str) -> String {
+        let prefix = format!("{namespace}.");
+        let functions = self
+            .functions
+            .iter()
+            .filter(|(name, _)| namespace.is_empty() || name.starts_with(&prefix))
+            .map(|(name, function)| function.metadata(name).to_json())
+            .collect::<Vec<_>>();
+        format!(
+            "{{\"functions\":[{}],\"count\":{}}}",
+            functions.join(","),
+            functions.len()
+        )
     }
 
     /// Expand a flat program, or identify a scoped mouse program while keeping
@@ -117,7 +189,8 @@ impl ModuleSession {
         force_scoped: bool,
         base: Option<&Path>,
     ) -> Result<Prepared> {
-        let program = syntax::parse_module(source).map_err(|error| format!("<input>: {error}"))?;
+        let (program, descriptions) =
+            syntax::parse_module_documented(source).map_err(|error| format!("<input>: {error}"))?;
         let had_directives = program.statements.iter().any(is_directive);
         let mut loader = Loader {
             next: self.clone(),
@@ -125,7 +198,14 @@ impl ModuleSession {
             files: Vec::new(),
             depth: 0,
         };
-        let items = loader.load(program.statements, "", "<input>", base, false)?;
+        let items = loader.load(
+            program.statements,
+            &descriptions,
+            "",
+            "<input>",
+            base,
+            false,
+        )?;
         loader.next.check_limits()?;
         validate_graph(&loader.next)?;
         let reachable = reachable_functions(&loader.next, &items)?;
@@ -189,7 +269,7 @@ impl ModuleSession {
             .saturating_add(
                 self.functions
                     .values()
-                    .map(|function| function.canonical.len())
+                    .map(|function| function.canonical.len() + function.description.len())
                     .sum::<usize>(),
             );
         if bytes > MAX_SOURCE_BYTES {
@@ -263,6 +343,7 @@ impl Loader {
     fn load(
         &mut self,
         statements: Vec<Statement>,
+        descriptions: &BTreeMap<usize, String>,
         namespace: &str,
         origin: &str,
         base: Option<&Path>,
@@ -309,7 +390,19 @@ impl Loader {
                         validate_body(body, origin)?;
                         let mut output = Output::default();
                         write_function(&mut output, name, params, body)?;
+                        let description = descriptions
+                            .get(&statement.span.start)
+                            .cloned()
+                            .unwrap_or_default();
+                        if description.len() > MAX_DESCRIPTION_BYTES {
+                            return Err(at(
+                                origin,
+                                statement.span,
+                                "function description exceeds 4096 bytes",
+                            ));
+                        }
                         let function = Function {
+                            description,
                             params: params.clone(),
                             body: body.clone(),
                             namespace: namespace.into(),
@@ -318,7 +411,9 @@ impl Loader {
                             canonical: output.text,
                         };
                         if let Some(existing) = self.next.functions.get(&key) {
-                            if existing.canonical != function.canonical {
+                            if existing.canonical != function.canonical
+                                || existing.description != function.description
+                            {
                                 return Err(at(
                                     origin,
                                     statement.span,
@@ -523,11 +618,12 @@ impl Loader {
             if !fresh {
                 return Ok(Vec::new());
             }
-            let program =
-                syntax::parse_module(&source).map_err(|error| format!("{label}: {error}"))?;
+            let (program, descriptions) = syntax::parse_module_documented(&source)
+                .map_err(|error| format!("{label}: {error}"))?;
             self.files.push(canonical.clone());
             let loaded = self.load(
                 program.statements,
+                &descriptions,
                 &child_namespace,
                 &label,
                 canonical.parent(),
@@ -553,10 +649,11 @@ impl Loader {
                     return Ok(Vec::new());
                 }
             }
-            let program =
-                syntax::parse_module(&source).map_err(|error| format!("{label}: {error}"))?;
+            let (program, descriptions) = syntax::parse_module_documented(&source)
+                .map_err(|error| format!("{label}: {error}"))?;
             self.load(
                 program.statements,
+                &descriptions,
                 &child_namespace,
                 &label,
                 base,
@@ -715,51 +812,53 @@ fn validate_expression(expression: &Expr, origin: &str) -> Result<()> {
     Ok(())
 }
 
-fn collect_calls<'a>(statements: &'a [Statement], calls: &mut Vec<&'a Call>) {
-    fn expression<'a>(value: &'a Expr, calls: &mut Vec<&'a Call>) {
-        if let Expr::Call(call) = value {
-            calls.push(call);
-            for argument in &call.args {
-                expression(&argument.value, calls);
-            }
+fn visit_expression_calls(
+    expression: &Expr,
+    bound: &BTreeSet<String>,
+    visitor: &mut impl FnMut(&Call, &BTreeSet<String>) -> Result<()>,
+) -> Result<()> {
+    if let Expr::Call(call) = expression {
+        visitor(call, bound)?;
+        for argument in &call.args {
+            visit_expression_calls(&argument.value, bound, visitor)?;
         }
     }
+    Ok(())
+}
+
+/// Follow the compiler's lexical scopes and declaration order when resolving
+/// module calls. Each parallel statement has its own branch-local scope.
+fn visit_calls(
+    statements: &[Statement],
+    bound: &mut BTreeSet<String>,
+    visitor: &mut impl FnMut(&Call, &BTreeSet<String>) -> Result<()>,
+) -> Result<()> {
     for statement in statements {
         match &statement.kind {
             StatementKind::Call(call) => {
-                calls.push(call);
+                visitor(call, bound)?;
                 for argument in &call.args {
-                    expression(&argument.value, calls);
+                    visit_expression_calls(&argument.value, bound, visitor)?;
                 }
             }
-            StatementKind::Let { value, .. } => expression(value, calls),
+            StatementKind::Let { name, value } => {
+                visit_expression_calls(value, bound, visitor)?;
+                bound.insert(name.clone());
+            }
             StatementKind::Block(body)
-            | StatementKind::Parallel(body)
             | StatementKind::Sequence(body)
-            | StatementKind::Repeat { body, .. }
-            | StatementKind::Function { body, .. } => collect_calls(body, calls),
-        }
-    }
-}
-
-fn bound_names(statements: &[Statement], params: &[String]) -> BTreeSet<String> {
-    fn visit(statements: &[Statement], names: &mut BTreeSet<String>) {
-        for statement in statements {
-            match &statement.kind {
-                StatementKind::Let { name, .. } => {
-                    names.insert(name.clone());
-                }
-                StatementKind::Block(body)
-                | StatementKind::Parallel(body)
-                | StatementKind::Sequence(body)
-                | StatementKind::Repeat { body, .. } => visit(body, names),
-                _ => {}
+            | StatementKind::Repeat { body, .. } => {
+                visit_calls(body, &mut bound.clone(), visitor)?;
             }
+            StatementKind::Parallel(branches) => {
+                for branch in branches {
+                    visit_calls(std::slice::from_ref(branch), &mut bound.clone(), visitor)?;
+                }
+            }
+            StatementKind::Function { .. } => {}
         }
     }
-    let mut names = params.iter().cloned().collect();
-    visit(statements, &mut names);
-    names
+    Ok(())
 }
 
 fn resolve(
@@ -813,14 +912,13 @@ fn validate_graph(session: &ModuleSession) -> Result<()> {
         }
         stack.push(name.into());
         let function = &session.functions[name];
-        let bound = bound_names(&function.body, &function.params);
-        let mut calls = Vec::new();
-        collect_calls(&function.body, &mut calls);
-        for call in calls {
-            if let Some(next) = resolve(session, call, &function.namespace, &bound) {
+        let mut bound = function.params.iter().cloned().collect();
+        visit_calls(&function.body, &mut bound, &mut |call, bound| {
+            if let Some(next) = resolve(session, call, &function.namespace, bound) {
                 visit(&next, session, stack, done)?;
             }
-        }
+            Ok(())
+        })?;
         stack.pop();
         done.insert(name.into());
         Ok(())
@@ -837,7 +935,7 @@ fn reachable_functions(session: &ModuleSession, items: &[Item]) -> Result<BTreeS
         statements: &[Statement],
         namespace: &str,
         origin: &str,
-        bound: &BTreeSet<String>,
+        bound: &mut BTreeSet<String>,
         session: &ModuleSession,
         reached: &mut BTreeSet<String>,
         depth: usize,
@@ -858,9 +956,7 @@ fn reachable_functions(session: &ModuleSession, items: &[Item]) -> Result<BTreeS
                 format!("function call depth exceeds {MAX_CALL_DEPTH}"),
             ));
         }
-        let mut calls = Vec::new();
-        collect_calls(statements, &mut calls);
-        for call in calls {
+        visit_calls(statements, bound, &mut |call, bound| {
             if let Some(name) = resolve(session, call, namespace, bound)
                 && reached.insert(name.clone())
             {
@@ -869,27 +965,23 @@ fn reachable_functions(session: &ModuleSession, items: &[Item]) -> Result<BTreeS
                     &function.body,
                     &function.namespace,
                     &function.origin,
-                    &bound_names(&function.body, &function.params),
+                    &mut function.params.iter().cloned().collect(),
                     session,
                     reached,
                     depth + 1,
                 )?;
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
     let mut reached = BTreeSet::new();
-    let statements = items
-        .iter()
-        .map(|item| item.statement.clone())
-        .collect::<Vec<_>>();
-    let bound = bound_names(&statements, &[]);
+    let mut bound = BTreeSet::new();
     for item in items {
         visit(
             std::slice::from_ref(&item.statement),
             &item.namespace,
             &item.origin,
-            &bound,
+            &mut bound,
             session,
             &mut reached,
             0,
@@ -1033,53 +1125,70 @@ fn scoped_source(
             *call = rename_call(call, namespace, bound, session, names);
         }
     }
+    fn rename_statement(
+        statement: &Statement,
+        namespace: &str,
+        bound: &mut BTreeSet<String>,
+        session: &ModuleSession,
+        names: &BTreeMap<String, String>,
+    ) -> Statement {
+        let mut result = statement.clone();
+        match &mut result.kind {
+            StatementKind::Call(call) => {
+                *call = rename_call(call, namespace, bound, session, names)
+            }
+            StatementKind::Let { name, value } => {
+                rename_expression(value, namespace, bound, session, names);
+                bound.insert(name.clone());
+            }
+            StatementKind::Block(body)
+            | StatementKind::Sequence(body)
+            | StatementKind::Repeat { body, .. } => {
+                *body = rename(body, namespace, &mut bound.clone(), session, names);
+            }
+            StatementKind::Parallel(branches) => {
+                *branches = branches
+                    .iter()
+                    .map(|branch| {
+                        rename_statement(branch, namespace, &mut bound.clone(), session, names)
+                    })
+                    .collect();
+            }
+            StatementKind::Function { .. } => {}
+        }
+        result
+    }
     fn rename(
         statements: &[Statement],
         namespace: &str,
-        bound: &BTreeSet<String>,
+        bound: &mut BTreeSet<String>,
         session: &ModuleSession,
         names: &BTreeMap<String, String>,
     ) -> Vec<Statement> {
         statements
             .iter()
-            .map(|statement| {
-                let mut result = statement.clone();
-                match &mut result.kind {
-                    StatementKind::Call(call) => {
-                        *call = rename_call(call, namespace, bound, session, names)
-                    }
-                    StatementKind::Let { value, .. } => {
-                        rename_expression(value, namespace, bound, session, names)
-                    }
-                    StatementKind::Block(body)
-                    | StatementKind::Parallel(body)
-                    | StatementKind::Sequence(body)
-                    | StatementKind::Repeat { body, .. } => {
-                        *body = rename(body, namespace, bound, session, names)
-                    }
-                    StatementKind::Function { .. } => {}
-                }
-                result
-            })
+            .map(|statement| rename_statement(statement, namespace, bound, session, names))
             .collect()
     }
     let mut output = Output::default();
     for name in reachable {
         let function = &session.functions[name];
-        let bound = bound_names(&function.body, &function.params);
-        let body = rename(&function.body, &function.namespace, &bound, session, &names);
+        let mut bound = function.params.iter().cloned().collect();
+        let body = rename(
+            &function.body,
+            &function.namespace,
+            &mut bound,
+            session,
+            &names,
+        );
         write_function(&mut output, &names[name], &function.params, &body)?;
     }
-    let statements = items
-        .iter()
-        .map(|item| item.statement.clone())
-        .collect::<Vec<_>>();
-    let bound = bound_names(&statements, &[]);
+    let mut bound = BTreeSet::new();
     for item in items {
         let statement = rename(
             std::slice::from_ref(&item.statement),
             &item.namespace,
-            &bound,
+            &mut bound,
             session,
             &names,
         );

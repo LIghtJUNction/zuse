@@ -55,6 +55,11 @@ const TOOLS: &[ToolDef] = &[
         schema: r#"{"type":"object","properties":{},"additionalProperties":false}"#,
     },
     ToolDef {
+        name: "zuse.functions",
+        description: "Inspect retained function names, ordered parameters, explicit descriptions and source locations in this session. Optional namespace filters a module and its children. Never calls functions or reloads files.",
+        schema: r#"{"type":"object","properties":{"namespace":{"type":"string"}},"additionalProperties":false}"#,
+    },
+    ToolDef {
         name: "zuse.schema",
         description: "Get the complete executable language command and argument schema.",
         schema: r#"{"type":"object","properties":{},"additionalProperties":false}"#,
@@ -410,6 +415,9 @@ impl Engine {
                         }
                         "zuse.check" => runtime::check(&arg(args, "code", "")?, self.options),
                         "zuse.capabilities" => Ok(self.runtime.capabilities()),
+                        "zuse.functions" => {
+                            Ok(self.runtime.function_catalog(&arg(args, "namespace", "")?))
+                        }
                         "zuse.schema" => Ok(runtime::schema()),
                         "zuse.observe" => {
                             let mode = arg(args, "mode", "windows")?;
