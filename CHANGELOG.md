@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1 — Num Lock regression fixtures
+
+- Extend isolated X11/GTK fixtures to check Num Lock on/off/toggle and repeated
+  on requests, keyboard-state readback, ASCII/UTF-8 input, Caps Lock preservation
+  and state restoration. Runtime code and public APIs are unchanged.
+- Refresh the locked zmcpio default-branch revision for release-tooling path
+  fixes. Its dependency version and published source contents are unchanged.
+
 ## 0.4.0 — local programs and input-state iteration
 
 - Align the Git development lock with zmcpio 0.5.0, zcall 0.4.1 and zconv 0.4.1. A separate registry projection must preserve this dependency graph and the complete published source contents.
