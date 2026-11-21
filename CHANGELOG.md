@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 — 2026-11-22
+
+- Add `zuse -c` / `--code` for direct inline programs and `shell --idle-timeout-ms` for bounded persistent sessions. Idle shells close after 15 minutes by default; running commands do not consume idle time.
+- Add immutable scalar bindings, arithmetic, numeric comparisons, `if`/`else`, bounded integer `for` ranges, pure math helpers and recursive functions. Evaluate them before input with call-depth, expansion-work and runtime budgets; preserve lexical mouse ownership and transactional module preparation.
+- Add window-local anchors, `mouse.click_at`, `mouse.stroke`, and `draw.line/triangle/rect/circle/polygon`. Validate geometry and point budgets before input, reject stale window anchors, and release stroke buttons on completion, failure, or cancellation. Include a recursive Sierpinski example using numeric triangle vertices.
+- Add named Unix sessions with `start/serve/status/script/observe/result/cancel/close` and a public JSON-lines v1 protocol. Retain Runtime state across clients, distinguish accepted jobs from results, support bounded request replay and revision checks, and exclude running work from idle expiry. Execute flat and expanded numeric programs; scoped mouse programs support dry-run preflight in this channel.
+- Extend native `keyboard.hold` to slash, period, M and N, with explicit `allow_other_keys=true` for concurrent ordinary keys. Preserve the other player's held keys, reject modifiers and an already-held target key, and keep cancellation, focus checks and owned-key release. Treat the hold's end as normal completion when its final read-only target check reaches that deadline; transport failures remain errors.
+- For explicit concurrent holds on Hyprland, support the existing native keyboard when a temporary virtual device cannot restore the same active keyboard. Require unique compositor/kernel identity, existing permissions, key capability and ownership; retain one verified evdev descriptor and report `transport: "native_evdev"` on success.
+- Send one target sample for zero-duration pointer moves instead of querying the old position and sending a redundant initial sample.
+- Default flat/scoped point moves, Rust `MoveOptions` and `mouse.click_at` approaches to 350 ms, smooth easing and 0.6 px jitter. Keep explicit instant movement available and add click-at motion overrides; drawing-stroke trajectories retain their existing behavior.
+- Add Git-backed `pkg init/add/install/update/remove/list/publish`, strict manifests, immutable commit locks, bounded transitive dependencies, and local checkout verification. Publication plans and pushes version tags without creating repositories or pushing branches.
+- Add declaration-only `pkg:NAME` and `pkg:NAME/EXPORT` imports from locally installed packages. Keep the entry project's lock context through nested imports; imports never install dependencies or fetch source.
+- Document the separately versioned [standard library](https://github.com/LIghtJUNction/zuse-std) and include three focused skills for computer operation, package development/publication, and package discovery/use.
+
 ## 0.5.0 — 2026-11-22
 
 - Add bounded direction-key holds for Linux X11, Hyprland and selected Chromium pages. Hold duration counts toward the program's wait budget; cancellation, permission revocation and target changes attempt to release the owned key.

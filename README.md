@@ -2,9 +2,9 @@
 
 **An agent-native computer-use shell, Rust library, and MCP server.**
 
-zuse turns small programs into desktop observations and actions. The same executor drives native windows, an isolated Chromium browser, accessibility trees, Android displays and Chrome tabs, iOS through WebDriverAgent, serial/USB devices, IDE entry points, and managed harness processes. Human assistance pauses a program and gives it an explicit continuation.
+zuse turns small programs into desktop observations and actions. The same executor drives native windows, Chromium, accessibility trees, mobile devices, serial/USB devices and managed harness processes. Programs calculate coordinates and expand bounded control flow before input; persistent sessions keep runtime state available to external controllers.
 
-[中文](README.zh-CN.md) · [Language](docs/language.md) · [Functions and local observation](docs/local-programs.md) · [Scoped mice](docs/scoped-mice.md) · [Target motion](docs/target-motion.md) · [Platforms](docs/platforms.md) · [Architecture](docs/architecture.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
+[中文](README.zh-CN.md) · [Language](docs/language.md) · [Numeric programs](docs/scalar-programs.md) · [Sessions](docs/sessions.md) · [Protocol v1](docs/session-protocol.md) · [Platforms](docs/platforms.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
 
 ## Small core, explicit effects
 
@@ -17,18 +17,12 @@ The runtime checks the entire program before its first effect. Unknown operation
 Rust 1.100 or newer:
 
 ~~~sh
-cargo install zuse-computer --version 0.4.2 --locked
+cargo install --git https://github.com/LIghtJUNction/zuse --locked
 zuse --version
 zuse doctor
 ~~~
 
 The Cargo package is **zuse-computer**; the executable and Rust library are named **zuse**. The short package name was already registered by another project.
-
-To install from this repository:
-
-~~~sh
-cargo install --git https://github.com/LIghtJUNction/zuse --locked
-~~~
 
 Native archives for Linux, Windows, and macOS are published on the [Releases page](https://github.com/LIghtJUNction/zuse/releases). Extract the matching archive and place its zuse executable on your PATH. Remove that executable to uninstall; Cargo installations use `cargo uninstall zuse-computer`.
 
@@ -40,9 +34,7 @@ zuse update --dry-run     # Show the exact update command; do not install
 zuse update              # Update a tracked user Cargo installation
 ~~~
 
-The updater needs `curl` for HTTPS metadata and Cargo for installation. It verifies the `zuse-computer` ownership record beside the running executable, preserves that installation's root, features, profile and target, and delegates replacement to Cargo. Registry installations use an exact stable version from crates.io; official Git installations use an existing stable release tag from the Zuse repository. Newer development versions are kept.
-
-System and AUR installations use their package manager. Portable archives, untracked executables, custom registry sources and explicitly pinned Git branches/revisions receive a manual-update explanation. The command never chooses another installation prefix or invokes privilege escalation. JSON goes to stdout; progress and failures go to stderr. See [update behavior and verification](docs/update.md).
+The updater uses `curl` and Cargo, verifies installation ownership, and preserves its root, features, profile and target. It selects an exact stable registry version or official Git release tag and keeps newer development versions. System/AUR installs use their package manager; portable, custom and pinned installs receive manual instructions. JSON goes to stdout; progress and failures go to stderr. See [update behavior and verification](docs/update.md).
 
 ## Project Z dependencies
 
@@ -52,7 +44,7 @@ Project Z dependencies use their GitHub repositories directly. Each currently us
 
 ~~~sh
 zuse eval 'window.list()'
-zuse eval 'mouse.move(x=400,y=240,duration=300,curve="bezier",jitter=1,seed=42)' --dry-run
+zuse eval 'mouse.move(x=400,y=240,duration=350,curve="smooth",jitter=0.6,seed=42)' --dry-run
 zuse script examples/scoped-mice.zuse --dry-run
 zuse run examples/desktop.zuse
 zuse shell
@@ -66,7 +58,7 @@ window.list()
 mouse.use(kind="user", appearance="system")
 mouse.position()
 
-mouse.move(x=400, y=240, duration=350, curve="smooth", jitter=0.8, seed=42)
+mouse.move(x=400, y=240, duration=350, curve="smooth", jitter=0.6, seed=42)
 mouse.click(button="left")
 keyboard.type(text="Hello from zuse")
 wait(min=80, max=160, seed=42)
@@ -76,15 +68,71 @@ mouse.release()
 
 `zuse check FILE` validates without executing. `--read-only` permits observation operations, including screenshot artifacts, and rejects input, page JavaScript, process launches, and settings changes. `zuse schema` prints every supported operation and its arguments.
 
-Motion supports linear, smoothstep, cubic ease-in/out, and curved Bezier paths. Seeded jitter tapers to zero at the endpoints. Samples use absolute time offsets so scheduling delays do not accumulate across the path.
+Point moves and `mouse.click_at` default to 350 ms, `curve="smooth"` and 0.6 px jitter. Jitter tapers to zero at the endpoints; timed samples avoid accumulated scheduling drift. `duration=0` remains an explicit instant-move option. Improve throughput by batching operations while keeping ordinary pointer movement smooth.
+
+### Bounded programs and drawing
+
+Use `zuse -c 'CODE'` for inline source or `zuse script -` for stdin. Immutable `let` values, arithmetic, comparisons, `if`/`else`, integer `for` ranges, pure math helpers and recursive functions expand before execution. A loop permits 4,096 iterations and calls nest at most 32 levels; preparation visits at most 16,384 statements, expressions and loop iterations. Invalid arithmetic fails before input.
+
+~~~sh
+zuse script - --dry-run <<'ZUSE'
+let size = 80
+for i in 0..3 {
+    let x = 40 + i*100
+    draw.triangle(x1=x,y1=100,x2=x+size,y2=100,x3=x+size/2,y3=20)
+}
+ZUSE
+~~~
+
+`draw.triangle` draws one closed stroke through three numeric vertices. Choose the application's brush and an observed window anchor before drawing. `mouse.click_at`, `mouse.stroke` and `draw.*` check the anchor's window identity, geometry, scale and focus. Tabs share a native window ID: stop input and observe again when the user changes pages. See [drawing](docs/drawing.md), [numeric programs](docs/scalar-programs.md) and the [recursive Sierpinski example](examples/fractal-sierpinski.zuse).
+
+### Persistent sessions and external decisions
+
+On Unix, a named session keeps functions, devices and anchors across client invocations:
+
+~~~sh
+zuse session start board --idle-timeout-ms 900000
+zuse session observe board - <<'ZUSE'
+window.list()
+ZUSE
+zuse session result board
+~~~
+
+Wait for the observation result, decide the next action externally, submit a short program through `zuse session script board -`, then query its `job_id` and observe again. `accepted` acknowledges submission; the result records completion or failure. One job runs at a time. `status`, `result`, `cancel` and `close` remain available; cancellation is cooperative and cleanup is confirmed separately.
+
+The public [JSON-lines protocol v1](docs/session-protocol.md) uses the private Unix socket returned by `start`. Stable request IDs support bounded retries; `--expect-revision` checks Zuse session state. Confirm application content through fresh observations. Sessions execute flat Runtime programs, including expanded numeric code; scoped mouse programs support dry-run preflight only. Idle sessions close after 15 minutes by default, with running work excluded. See [sessions](docs/sessions.md). `zuse shell` remains available for one retained stdin stream.
+
+The bundled [Python controller example](examples/session_client.py) submits stdin source once and waits for its result on the same connection. It uses only the Python standard library and accepts the observed socket path, execution budgets and an optional expected revision.
+
+### Packages and the standard library
+
+Git packages declare entry modules, exports and dependencies; `zuse.lock.json` pins full commits. Imports load installed local declarations; explicit function calls execute them.
+
+In a new project directory:
+
+~~~sh
+zuse pkg init my-drawing
+zuse pkg add https://github.com/LIghtJUNction/zuse-std.git --rev v0.1.0
+zuse -c 'import(path="pkg:std",as="std"); functions(namespace="std")'
+~~~
+
+Commit the manifest and lockfile; restore with `zuse pkg install --locked`. The [standard library](https://github.com/LIghtJUNction/zuse-std) provides desktop, drawing, text-input and timing functions. See [package management](docs/packages.md) for dependency checks and publication.
+
+### Agent skills
+
+The repository includes three small skills that can be distributed with Zuse:
+
+- [Operate the computer](skills/zuse/SKILL.md): direct CLI programs, observed targets, batched input and session reuse.
+- [Develop and publish packages](skills/zuse-publish-package/SKILL.md): source modules, validation, version tags and GitHub topics.
+- [Find and use packages](skills/zuse-find-package/SKILL.md): repository discovery, source review, locked installation and import preflight.
 
 ## Reusable functions and local events
 
 Import a `.zuse` module once in `zuse shell`, then reuse its functions across submissions:
 
 ~~~text
-import(source="fn pause(ms){wait(ms=ms)}", as="local")
-local.pause(ms=10)
+import(source="fn delay(ms){wait(ms=ms)}", as="local")
+local.delay(ms=10)
 eval(source="fn clock(){timer.status()}", as="tools")
 tools.clock()
 ~~~
@@ -229,9 +277,7 @@ android.tap(x=240, y=160)
 android.start(component="com.example.app/.MainActivity")
 ~~~
 
-The Android adapter implements the ADB smart-socket and shell-v2 wire protocols directly in Rust. It does not spawn adb for commands. Start an authorized ADB server first. Select a serial explicitly; an omitted serial is accepted only when the complete device inventory has one ready device.
-
-Foreground/preempt mode uses display 0. Background mode requires an existing nonzero logical display. Input and app launch stay bound to that display. Capture resolves the separate SurfaceFlinger display ID and fails if the mapping is absent or ambiguous. Automatic virtual-display creation is outside this release. Device permissions and available platform commands determine accessibility and capture support. Text input accepts printable ASCII, excluding the ADB-reserved literal sequence %s, with a 4096-byte limit. Unsupported text and malformed key/component arguments fail during whole-program validation.
+The native ADB client requires an authorized ADB server. Select a serial explicitly; omission requires exactly one ready device. Foreground mode uses display 0; background mode selects an existing nonzero display and binds input, launch and capture to it. Ambiguous capture mappings fail. Text accepts up to 4096 bytes of printable ASCII, excluding `%s`; unsupported input fails during preflight. See the platform guide for permissions and display setup.
 
 Physical Android 16 testing covered foreground input, all 95 printable ASCII characters, exact screenshot pixels, and a fixture-owned secondary display whose input left the primary fixture unchanged. See [native acceptance testing](docs/native-testing.md) and the [device evidence](docs/evidence/android-physical-2026-11-20.json).
 
@@ -246,23 +292,9 @@ browser.capture(path="phone-browser.png")
 browser.close()
 ~~~
 
-Android Chrome uses a native ADB tunnel without a forwarded TCP listener. The
-connection creates one owned tab in the existing Chrome profile. Mobile
-`browser.tabs` exposes only that tab, and selection of other tabs is rejected.
-Chrome must already expose a responsive debugging socket; a listed socket alone
-does not prove readiness. See [mobile browser control](docs/mobile-browser.md)
-for setup, ownership and observed background behavior.
+Android Chrome uses a native ADB tunnel and one owned tab in the existing profile. It requires a responsive debugging socket; mobile tab selection stays within that owned tab. See [mobile browser control](docs/mobile-browser.md).
 
-iOS connects to an explicitly configured local WebDriverAgent endpoint. It
-supports touch, Unicode input, native UI observations, screenshots, application
-launch and opening HTTP(S) URLs. No iPhone was available for this release:
-protocol fixtures pass, but real-device validation remains outstanding.
-[The iOS guide](docs/ios.md) explains WDA preparation, session ownership, secure
-field redaction and the distinction between UIKit points and screenshot pixels.
-
-The MCP `zuse.screenshot` tool accepts `source=desktop`, `browser`, `android`
-or `ios`; mobile sources use the device already connected in that persistent
-runtime.
+iOS uses an explicitly configured local WebDriverAgent endpoint for touch, Unicode input, observation, screenshots and application launch. Protocol fixtures pass; physical iPhone validation remains outstanding. The [iOS guide](docs/ios.md) covers preparation, ownership, redaction and coordinates. MCP screenshots support `desktop`, `browser`, `android` and `ios` sources from the connected runtime.
 
 ## Serial and USB devices
 
@@ -307,7 +339,7 @@ X11 text outside the keyboard layout requires a confirmed local AT-SPI editable 
 
 ~~~toml
 [dependencies]
-zuse = { package = "zuse-computer", version = "0.2.2", default-features = false }
+zuse = { package = "zuse-computer", git = "https://github.com/LIghtJUNction/zuse", tag = "v0.6.0", default-features = false }
 ~~~
 
 ~~~rust

@@ -17,7 +17,7 @@ Values are decimal numbers, booleans, quoted strings, or bare identifiers. Quote
 
 `zuse shell` accepts one complete program per input line. Use `zuse run FILE` for files containing multiline calls.
 
-This command language uses flat bounded call batches. Control flow for these batches belongs to the agent or embedding application; scoped pointer programs have their own `zuse script` entry point. There are no implicit shell substitutions, JavaScript evaluation, or variable interpolation.
+This command language executes flat bounded call batches. [Scalar programs](scalar-programs.md) add immutable values, arithmetic, branches, bounded loops and recursion; preparation expands them before whole-program preflight. Controllers can then use the [persistent session](sessions.md) to observe and choose the next batch. Scoped pointer programs retain their own `zuse script` entry point. There are no implicit shell substitutions or JavaScript evaluation.
 
 ## Discovery and limits
 
@@ -47,6 +47,8 @@ The entire source is parsed and validated before any effect. Fixed durations cou
 
 Pointer actions create an independent runtime mouse by default, currently requiring native Linux X11 MPX. `mouse.use()` selects one explicitly; `mouse.use(kind="user", appearance="system")` selects the user's normal system pointer on supported desktop backends. `mouse.position()` only observes the selected handle and returns an error in a fresh runtime without one. `mouse.release()` ends its lifetime; persistent shell, MCP, and Rust runtimes otherwise retain it across completed batches. See [mouse ownership and platform limits](scoped-mice.md).
 
+Target movements use 350 ms, smooth acceleration and deceleration, and up to 0.6 native coordinate units of jitter per axis by default. This applies to `mouse.move`, `mouse.move_to`, and the movement inside `mouse.click_at`. Endpoints remain exact. Explicit `duration=0` selects immediate movement; `jitter=0` disables displacement. The default 350 ms contributes to preflight's wait budget, and `click_at` adds its default 30 ms settling time before pressing and releasing the button.
+
 `touchpad.capabilities()` reports the current gesture capabilities without a display. `touchpad.swipe`, `touchpad.pinch`, `touchpad.rotate`, and `touchpad.cancel` support validation and dry-run planning; native gesture injection is currently unsupported and fails whole-program preflight. See [gesture arguments and planning semantics](scoped-mice.md#touchpad-gesture-planning).
 
 `keyboard.key(key="ctrl+a")` sends a chord. `keyboard.type(text="...")` sends text. On backends that support targeted window events, supplying `window="ID"` directs input to that window without changing the active window. Applications can reject synthetic targeted events; accessibility actions and browser commands are preferred when the target exposes them.
@@ -57,7 +59,7 @@ Native accessibility snapshots contain bounded tree paths. Pass a path from the 
 
 ## Targeted pointer movement
 
-`mouse.move_to` finds an accessible name or text and moves from the current pointer position to that node's center. It does not click. Its default is an exact, case-sensitive, unique match and a 350 ms smooth movement.
+`mouse.move_to` finds an accessible name or text and moves from the current pointer position to that node's center. It does not click. Its default is an exact, case-sensitive, unique match and a 350 ms smooth movement with 0.6 units of jitter.
 
 ~~~text
 mouse.move_to(

@@ -1,3 +1,5 @@
+#[path = "wayland_evdev.rs"]
+mod evdev;
 #[path = "wayland_keyboard.rs"]
 mod keyboard;
 #[path = "wayland_keymap.rs"]
@@ -13,7 +15,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-use zmcpio::json::{Document, Limits, Token};
+use zmcpio::json::{Document, Kind, Limits, Token};
 
 pub(super) struct Wayland {
     socket: Option<PathBuf>,
@@ -123,30 +125,42 @@ impl Wayland {
         self.request_until(command, Instant::now() + Duration::from_secs(5))
     }
     fn request_until(&self, command: &str, deadline: Instant) -> Result<String> {
+        self.request_checked(command, crate::key_hold::CheckDeadline::transport(deadline))?
+            .ok_or_else(|| "timeout: Hyprland IPC deadline reached".into())
+    }
+    fn request_checked(
+        &self,
+        command: &str,
+        deadline: crate::key_hold::CheckDeadline,
+    ) -> Result<Option<String>> {
+        const TIMEOUT: &str = "timeout: Hyprland IPC deadline reached";
         let socket=self.socket.as_ref().ok_or("this operation requires Hyprland IPC; other Wayland compositors need their accessibility/portal backend")?;
         let mut stream = UnixStream::connect(socket).map_err(|e| format!("Hyprland IPC: {e}"))?;
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .ok_or("timeout: Hyprland IPC deadline reached")?;
+        let Some(remaining) = deadline.remaining(TIMEOUT)? else {
+            return Ok(None);
+        };
         stream
             .set_read_timeout(Some(remaining))
             .map_err(|e| e.to_string())?;
         stream
             .set_write_timeout(Some(remaining))
             .map_err(|e| e.to_string())?;
-        stream
-            .write_all(command.as_bytes())
-            .map_err(|e| e.to_string())?;
+        if let Err(error) = stream.write_all(command.as_bytes()) {
+            return deadline.io_failure(error, TIMEOUT);
+        }
         let mut bytes = Vec::new();
         let mut buffer = [0; 8192];
         loop {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .ok_or("timeout: Hyprland IPC deadline reached")?;
+            let Some(remaining) = deadline.remaining(TIMEOUT)? else {
+                return Ok(None);
+            };
             stream
                 .set_read_timeout(Some(remaining))
                 .map_err(|e| e.to_string())?;
-            let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+            let count = match stream.read(&mut buffer) {
+                Ok(count) => count,
+                Err(error) => return deadline.io_failure(error, TIMEOUT),
+            };
             if count == 0 {
                 break;
             }
@@ -155,7 +169,9 @@ impl Wayland {
             }
             bytes.extend_from_slice(&buffer[..count]);
         }
-        String::from_utf8(bytes).map_err(|e| e.to_string())
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|e| e.to_string())
     }
     fn dispatch(&self, legacy: &str, modern: &str) -> Result<()> {
         let response = self.request(&if self.modern {
@@ -272,6 +288,15 @@ impl Wayland {
             Ok(state)
         }
     }
+    fn hold_keyboard_state(&self, allow_other_keys: bool) -> Result<KeyboardState> {
+        if !allow_other_keys {
+            return self.keyboard_state(true);
+        }
+        self.require_keyboard_inspection()?;
+        // Key ownership and ordinary-key classification are checked against
+        // the captured native map immediately before the actual press.
+        check_keyboard_state(&self.request("j/devices")?, true)
+    }
     pub fn position(&self) -> Result<(i32, i32)> {
         let json = self.request("j/cursorpos")?;
         let mut tokens = [Token::EMPTY; 32];
@@ -351,47 +376,115 @@ impl Wayland {
         key: &str,
         duration_ms: u64,
         window: &str,
+        allow_other_keys: bool,
         cancellation: &crate::observation::Cancellation,
     ) -> Result<String> {
-        use crate::{key_hold::Direction, target::TargetWindow};
-        let direction = Direction::parse(key)?;
+        use crate::{
+            key_hold::{self, NativeKey},
+            target::TargetWindow,
+        };
+        let key = NativeKey::parse(key)?;
         crate::key_hold::validate_duration(duration_ms)?;
-        let state = self.keyboard_state(true)?;
-        state.require_restorable_keyboard()?;
+        let state = self.hold_keyboard_state(allow_other_keys)?;
+        let native = if allow_other_keys && !state.main_is_last {
+            let devices = self.request("j/devices")?;
+            if check_keyboard_state(&devices, true)? != state {
+                return Err(
+                    "stale_target: keyboard changed before native key hold preparation".into(),
+                );
+            }
+            Some(native_hold_identity(&devices, &state.main_address)?)
+        } else {
+            state.require_restorable_keyboard()?;
+            None
+        };
         let expected = TargetWindow::from_windows(&self.windows()?, window)?;
         if !expected.focused {
             return Err("stale_target: key holds require the currently focused window".into());
         }
-        keyboard::hold_arrow(
-            direction,
-            duration_ms,
-            state.num_lock,
-            cancellation,
-            || {
-                if self.keyboard_state(true)? != state {
+        let before_input = || {
+            if self.hold_keyboard_state(allow_other_keys)? != state {
+                return Err("stale_target: keyboard changed while preparing the key hold".into());
+            }
+            Ok(())
+        };
+        let verify_target = |deadline, held_code, pressed_by_us, ordinary: &[u32]| {
+            let Some(active) = self.request_checked("j/activewindow", deadline)? else {
+                return Ok(());
+            };
+            let Some(monitors) = self.request_checked("j/monitors", deadline)? else {
+                return Ok(());
+            };
+            let snapshot = window_rows(&format!("[{active}]"), &monitors, &active)?;
+            let current = TargetWindow::from_windows(&snapshot, &expected.id)?;
+            if current != expected || !current.focused {
+                return Err("stale_target: window identity, geometry, scale or focus changed during the key hold".into());
+            }
+            if allow_other_keys {
+                let Some(devices) = self.request_checked("j/devices", deadline)? else {
+                    return Ok(());
+                };
+                let current = check_keyboard_state(&devices, true)?;
+                if current.num_lock != state.num_lock {
                     return Err(
-                        "stale_target: keyboard changed while preparing the key hold".into(),
+                        "stale_target: keyboard lock state changed during the key hold".into(),
                     );
                 }
-                Ok(())
-            },
-            |deadline, held_code| {
-                let active = self.request_until("j/activewindow", deadline)?;
-                let monitors = self.request_until("j/monitors", deadline)?;
-                let snapshot = window_rows(&format!("[{active}]"), &monitors, &active)?;
-                let current = TargetWindow::from_windows(&snapshot, &expected.id)?;
-                if current != expected || !current.focused {
-                    return Err("stale_target: window identity, geometry, scale or focus changed during the key hold".into());
+                if let Some((name, _)) = &native
+                    && (current.main_address != state.main_address
+                        || native_hold_identity(&devices, &state.main_address)?.0 != *name)
+                {
+                    return Err(
+                        "stale_target: native keyboard identity changed during the key hold".into(),
+                    );
                 }
-                let other = self.request_until(&format!(
-                "/repl return (function() for code=8,775 do if code~={held_code} and hl.is_key_down(code) then return true end end return false end)()"
-            ), deadline)?;
-                if parse_held_keys(&other)? {
-                    return Err("stale_target: another key was pressed during the key hold".into());
-                }
-                Ok(())
-            },
-        )
+            }
+            // Returning the first disallowed code keeps the IPC response
+            // bounded, while allowing ordinary user keys to remain down.
+            let allowed = ordinary
+                .iter()
+                .map(|code| format!("[{code}]=true"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let Some(other) = self.request_checked(&format!(
+                    "/repl return (function() local allowed={{{allowed}}} for code=8,775 do if hl.is_key_down(code) then if code=={held_code} then if not {pressed_by_us} then return code end elseif not allowed[code] then return code end end end return 0 end)()"
+                ), deadline)? else { return Ok(()); };
+            let other = other
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| "unsupported_state: cannot inspect held keyboard keys")?;
+            if other > 775 || (other != 0 && other < 8) {
+                return Err("unsupported_state: invalid held keyboard key code".into());
+            }
+            key_hold::check_pressed_keys(
+                allow_other_keys,
+                pressed_by_us,
+                held_code,
+                (other != 0).then_some(other),
+                |code| ordinary.binary_search(&code).is_ok(),
+            )
+        };
+        if let Some((name, devices)) = &native {
+            keyboard::hold_evdev(
+                key,
+                duration_ms,
+                state.num_lock,
+                (name, devices),
+                cancellation,
+                before_input,
+                verify_target,
+            )
+        } else {
+            keyboard::hold_key(
+                key,
+                duration_ms,
+                state.num_lock,
+                allow_other_keys,
+                cancellation,
+                before_input,
+                verify_target,
+            )
+        }
     }
     fn selector(id: &str) -> Result<String> {
         if id == "active" {
@@ -727,6 +820,58 @@ fn window_rows(clients: &str, monitors: &str, active: &str) -> Result<String> {
     Ok(format!("[{}]", rows.join(",")))
 }
 
+// Hyprland de-duplicates device names across every HID category, not just
+// keyboards. Fail closed if an unnamed tablet pad/tool hides that inventory.
+fn native_hold_identity(snapshot: &str, address: &str) -> Result<(String, Vec<String>)> {
+    if address.is_empty() {
+        return Err(
+            "unsupported_state: native key holds require the current keyboard identity".into(),
+        );
+    }
+    crate::json::with_value(snapshot, |root| {
+        let mut names = Vec::new();
+        let mut selected = None;
+        for category in ["mice", "keyboards", "tablets", "touch"] {
+            let devices = root
+                .get(category)
+                .filter(|value| value.kind() == Kind::Array)
+                .ok_or("unsupported_state: complete compositor device names are unavailable")?;
+            for device in devices.elements() {
+                if names.len() >= 128 {
+                    return Err(
+                        "unsupported_state: too many compositor input devices to inspect".into(),
+                    );
+                }
+                let name = device
+                    .get("name")
+                    .and_then(|value| value.string())
+                    .map(|value| value.chars().collect::<String>())
+                    .filter(|value| !value.is_empty() && value.len() <= 255 && value.is_ascii())
+                    .ok_or(
+                        "unsupported_state: compositor device identity is missing or unsupported",
+                    )?;
+                if category == "keyboards"
+                    && device.get("main").and_then(|value| value.boolean()) == Some(true)
+                {
+                    if selected.is_some()
+                        || !device
+                            .get("address")
+                            .and_then(|value| value.string())
+                            .is_some_and(|value| value.matches(address))
+                    {
+                        return Err("stale_target: native keyboard selection changed".into());
+                    }
+                    selected = Some(name.clone());
+                }
+                names.push(name);
+            }
+        }
+        let name = selected.ok_or("unsupported_state: no unique current native keyboard")?;
+        evdev::check_compositor_names(&name, &names)?;
+        Ok((name, names))
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct KeyboardState {
     num_lock: bool,
@@ -866,9 +1011,74 @@ fn keyboard_status_json(json: &str, held: bool) -> Result<String> {
 #[cfg(test)]
 mod state_tests {
     use super::{
-        canonical_keyboard_address, check_keyboard_state, keyboard_status_json, parse_held_keys,
-        window_rows,
+        canonical_keyboard_address, check_keyboard_state, keyboard_status_json,
+        native_hold_identity, parse_held_keys, window_rows,
     };
+    #[test]
+    fn native_identity_requires_complete_globally_unique_device_inventory() {
+        let devices = r#"{"mice":[{"name":"pointer"}],"keyboards":[{"name":"at-translated-set-2-keyboard","address":"0x1","main":true},{"name":"hl-virtual-keyboard-fcitx5","address":"0x2","main":false}],"tablets":[],"touch":[]}"#;
+        assert_eq!(
+            native_hold_identity(devices, "0x1").unwrap().0,
+            "at-translated-set-2-keyboard"
+        );
+        assert!(native_hold_identity(devices, "0x2").is_err());
+        assert!(
+            native_hold_identity(
+                &devices.replace("pointer", "at-translated-set-2-keyboard-1"),
+                "0x1"
+            )
+            .is_err()
+        );
+        assert!(
+            native_hold_identity(
+                &devices.replace("\"tablets\":[]", "\"tablets\":[{\"type\":\"tabletTool\"}]"),
+                "0x1"
+            )
+            .is_err()
+        );
+        assert!(
+            native_hold_identity(&devices.replace("\"touch\":[]", "\"touch\":null"), "0x1")
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[ignore = "opt-in read-only native identity/capability preflight; opens the existing device without submitting input"]
+    fn native_evdev_preflight_current_keyboard_without_input() -> super::Result<()> {
+        let wayland = super::Wayland::connect()?;
+        let snapshot = wayland.request("j/devices")?;
+        let state = check_keyboard_state(&snapshot, true)?;
+        let name = crate::json::with_value(&snapshot, |root| {
+            let keyboards = root.get("keyboards").ok_or("missing keyboards")?;
+            let current = keyboards
+                .elements()
+                .find(|device| device.get("main").and_then(|v| v.boolean()) == Some(true))
+                .ok_or("missing main keyboard")?;
+            crate::json::text(current.get("name").ok_or("missing keyboard name")?)
+        })?;
+        if name.starts_with("hl-virtual-") || name == "wl_keyboard" {
+            eprintln!("SKIP: current keyboard is virtual; no device selection or input performed");
+            return Ok(());
+        }
+        let (name, inventory) = native_hold_identity(&snapshot, &state.main_address)?;
+        let keymap = super::keyboard::original_keymap()?;
+        let chord = super::xkb::chord_in_state("Right", &[], &keymap, state.num_lock)?;
+        let device = super::evdev::Keyboard::open_unique(&name, &inventory, chord.code)?;
+        device.verify()?;
+        let _ = device.held_codes()?; // Read the bitmap, never log the user's keys.
+        let after = wayland.request("j/devices")?;
+        if check_keyboard_state(&after, true)? != state
+            || native_hold_identity(&after, &state.main_address)?.0 != name
+        {
+            return Err("stale_target: current keyboard changed during read-only preflight".into());
+        }
+        assert!(!device.pressed_by_us());
+        eprintln!(
+            "PASS: exact native identity, capability and same-FD verification; input_events=0"
+        );
+        Ok(())
+    }
+
     #[test]
     fn rejects_known_nonzero_or_unknown_states() {
         let neutral = r#"{"keyboards":[{"main":true,"capsLock":false,"numLock":false,"active_layout_index":0}]}"#;

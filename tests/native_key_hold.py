@@ -79,7 +79,7 @@ def run_private_holds(binary, env, directory, first, second, focus, compositor, 
                 assert process.returncode != 0 and receipt["status"] == "failed", receipt
                 assert receipt["error_code"] == ("cancelled" if stop == "cancel" else "stale_target"), receipt
             else:
-                assert process.returncode == 0 and receipt["status"] == "completed", (receipt, stderr)
+                assert process.returncode == 0 and receipt["status"] == "completed", (key, stop, receipt, stderr)
                 assert receipt["results"][0]["value"]["released"] is True, receipt
             return {"key": key, "receiver_events": received, "receiver_hold_ms": elapsed,
                     "compositor_keys_released": True, "receipt": receipt}
@@ -113,8 +113,76 @@ def run_private_holds(binary, env, directory, first, second, focus, compositor, 
     def device_states():
         return sorted((k["address"], k["main"], k["capsLock"], k["numLock"], k["active_layout_index"])
                       for k in compositor("devices")["keyboards"])
+
+    def concurrent_game_keys():
+        """The second player's input must leave the first player's key down."""
+        focus(first)
+        send("neutral")
+        send("down 25")  # The fixture's own W key, not the host keyboard.
+        wait_for(lambda: set(private_held()) == {25})
+        baseline_devices = device_states()
+        evidence = {}
+
+        def submit(key, allow):
+            option = ",allow_other_keys=true" if allow else ""
+            source = (f'keyboard.hold(key={json.dumps(key)},duration=180,'
+                      f'window={json.dumps(first)}{option})')
+            result = subprocess.run([str(binary), "script", "-"], input=source,
+                                    env=env, capture_output=True, text=True, timeout=5)
+            assert result.stdout.strip(), (result.returncode, result.stderr)
+            return result, json.loads(result.stdout)
+
+        try:
+            for key, symbol in (("Right", 0xff53), ("slash", 0x2f),
+                                ("period", 0x2e), ("m", 0x6d), ("n", 0x6e)):
+                before = len(events())
+                result, receipt = submit(key, True)
+                assert result.returncode == 0 and receipt["status"] == "completed", (key, "concurrent_game", receipt, result.stderr)
+                wait_for(lambda: set(private_held()) == {25})
+                wait_for(lambda: any(e["action"] == "UP" and e["key"] == symbol
+                                    for e in events()[before:]))
+                received = events()[before:]
+                downs = [e for e in received if e["action"] == "DOWN" and e["key"] == symbol]
+                ups = [e for e in received if e["action"] == "UP" and e["key"] == symbol]
+                assert downs and len(ups) == 1, received
+                assert not any(e["action"] == "UP" and e["code"] == 25 for e in received), received
+                assert device_states() == baseline_devices
+                elapsed = (ups[0]["micros"] - downs[0]["micros"]) / 1000
+                assert 140 <= elapsed <= 800, (key, elapsed, received)
+                evidence[key] = {"receiver_hold_ms": elapsed,
+                                 "other_player_key_still_down": True,
+                                 "receiver_events": received, "receipt": receipt}
+
+            # The default remains exclusive; opting in does not permit a
+            # modifier chord or taking ownership of an already-held target.
+            for name, extra in (("default_exclusive", None),
+                                ("modifier_rejected", 50),  # Shift_L
+                                ("target_already_held", 114)):  # Right
+                if extra is not None:
+                    send(f"down {extra}")
+                expected = {25} | ({extra} if extra is not None else set())
+                try:
+                    wait_for(lambda: set(private_held()) == expected)
+                    before = len(events())
+                    result, receipt = submit("Right", name != "default_exclusive")
+                    assert result.returncode != 0 and receipt["status"] == "failed", receipt
+                    assert set(private_held()) == expected
+                    received = events()[before:]
+                    assert not any(e["action"] == "UP" and e["code"] in expected for e in received), received
+                    if extra != 114:
+                        assert not any(e["action"] == "DOWN" and e["key"] == 0xff53 for e in received), received
+                    evidence[name] = {"held_keys_preserved": sorted(expected), "receipt": receipt}
+                finally:
+                    if extra is not None:
+                        send(f"up {extra}")
+            return evidence
+        finally:
+            send("up 25")
+            wait_for(lambda: not private_held())
+
     try:
         response("READY")
+        results["concurrent_game_keys"] = concurrent_game_keys()
         for mode in ("neutral", "num"):
             send(mode)
             before_devices = device_states()

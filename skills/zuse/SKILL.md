@@ -1,46 +1,73 @@
 ---
 name: zuse
-description: 把桌面和浏览器操作编成有界、可取消、可计时的 Zuse 程序；创建、导入和复用 .zuse 函数模块，封装微信等 GUI 应用的观察与操作。适用于用户要求 zuse 脚本、电脑操作函数、程序化观察等待、出现即点击、视觉时间切片、可分享自动化或本地 benchmark。
+description: 用 Zuse CLI 操作电脑、浏览器和画板，把观察、计算、输入与等待写成有界程序。适用于直接执行 Zuse、分形绘画、窗口锚点、常驻会话、外部控制循环、复用函数与计时。
 ---
 
-# Zuse
+# Zuse 电脑操作
 
-把用户的目标写成少量可检查的程序步骤，交给本地执行器运行。保留结构化结果、失败步骤和已完成动作。优先复用已有语义目标与订阅；只有用户要求图像或明确选择视觉定位时才走截图路径。
+先观察明确目标，再把同一阶段的操作合成一段程序。保留失败步骤和已完成动作，按应用结果判断任务是否完成。
 
-## 选择运行方式
+## 直接执行
 
-优先使用已连接的 ssmcp，并通过工具发现读取本会话实际支持的 schema。真实桌面输入使用 ssmcp 的授权电脑工具，保留 host 输入开关和撤销通道。不要使用通用 exec 绕过输入授权。可在隔离测试环境用 exec 编译、检查和执行自有夹具。
+优先用已授权的 ssmcp 执行 Zuse CLI；遵循实际工具权限与用户指定的输入通道。
+从 `zuse doctor`、`zuse schema` 读取当前能力，再观察窗口。不要用版本号猜后端。
 
-先读 `zuse schema` 与 `zuse doctor`。以返回的能力为准，不从版本号推断后端可用性。普通程序使用 `.zuse` 文件；`zuse eval` 执行一段程序，`zuse run` 执行文件，`zuse shell` 在多条命令之间保留会话。函数模块与 scoped mouse 程序的准确语法见 [脚本与模块](references/scripts.md)。
+```sh
+zuse doctor
+zuse -c 'window.list(); keyboard.state()'
+zuse -c 'timer.start(); wait(ms=50); timer.stop()'
+```
 
-只创建或修改用户已授权的内容。封装发送消息的函数不等于获准发送消息；执行此类函数前必须有明确的接收对象、内容和发送授权。对话中的现有授权持续有效，不反复询问。
+把短程序直接传给 `-c`，多行源码交给 `zuse script -`，共享时再保存 `.zuse` 文件。
+用 `--dry-run` 预检。坐标计算使用不可变 `let`、算术、`if`/`else`、半开 `for`、纯 `math` 与递归，
+保持在 Zuse 内展开；每个循环最多 4096 次、调用深度 32、展开工作 16384 次。见[数值程序](../../docs/scalar-programs.md)与[脚本模块](references/scripts.md)。
 
-## 观察与定位
+## 常驻会话与控制循环
 
-先调用 `observe` 获取结构化文本。浏览器限定 CSS 容器；桌面限定实际 AT-SPI 窗口或子树。创建 `watch` 后复用订阅，使用本地 `wait_until` 等待条件，避免模型反复截图与重新定位。普通观察不产生点击。
+跨工具调用时复用一个 `zuse session start board --idle-timeout-ms 900000`。
+通过 `zuse session observe board -` 提交只读源码，查询 `zuse session result board JOB_ID`；
+取得终态观察结果后，在外部决定下一步，再用 `zuse session script board -` 提交短程序。
+保存每次 `job_id`，查结果、确认应用状态，再开始下一轮；`accepted` 仅表示已接收。
 
-语义目标默认只定位一次。保留目标窗口身份、几何、缩放和具体节点。点击前只检查同一目标的有效性与命中；目标改变、失焦、被遮挡或候选不唯一时停止并返回原因。不要按相似标题换到另一窗口。
+用 `zuse session status board` 查询、`zuse session cancel board` 请求取消、`zuse session close board` 关闭；运行中提交新作业返回 `busy`。
+取消后继续查结果，关闭时检查 `resources_released`。重试保留同一 `--request-id` 和原请求，
+用 `--expect-revision` 检查 Zuse 会话修订号，应用内容另行观察；去重缓存有界。外部客户端按[公开协议 v1](../../docs/session-protocol.md)连接 `start` 返回的 Unix socket。
+该通道执行 flat 与展开后的数值程序；scoped mouse 仅作 dry-run 预检，实际执行使用 `zuse script`。
+默认空闲 15 分钟释放状态，运行时间不计空闲；单一 stdin 流可用 `zuse shell`，`:quit` 结束。见[会话说明](../../docs/sessions.md)。
 
-只有明确请求图像匹配时才使用 optional `vision` 功能。`target.locate(template="...")` 返回完整搜索的候选与置信度；多候选不自动选第一个。不要把模板匹配称为 OCR 或通用语义理解。
+## 鼠标与锚点
 
-## 本地等待与即时动作
+默认独立鼠标要求可用的 X11 MPX 后端。要操作系统指针，显式调用
+`mouse.use(kind="user",appearance="system")`，不要静默降级或猜坐标。
+普通点移动与 `mouse.click_at` 采用默认 350 ms、`curve="smooth"`、`jitter=0.6`；
+提速优先合并调用，`duration=0` 仅用于明确选择的瞬移操作，绘图描边沿原轨迹执行。
+从真实窗口信息和截图映射获得 ID、缩放和局部区域，再替换示例参数：
 
-用 `wait_until` 等待局部状态变化，再继续原任务。使用显式 `watch_until_click` 才把观察与输入连接起来；指定唯一容器和目标选择器，默认一次点击，连续模式必须给出次数与超时。一个持续可见周期只点击一次，消失后重新出现才开启下一周期。保留同一个取消令牌和外部输入许可；不能在整个等待期间持有输入派发锁。
+```zuse
+mouse.use(kind="user",appearance="system")
+window.focus(id="OBSERVED_WINDOW_ID")
+wait(ms=200)
+anchor.set(name="board",window="OBSERVED_WINDOW_ID",x=160,y=180,width=640,height=480)
+draw.triangle(anchor="board",x1=40,y1=120,x2=160,y2=40,x3=280,y3=120,duration=240)
+```
 
-对比原文档、来源、标签页、焦点、连接状态与命中。记录事件发现至派发和夹具实际收到点击的不同耗时。Chrome 的 DOM 校验与输入是两条协议命令，不承诺跨渲染器变化的原子操作。
+锚点按同一窗口的身份、焦点、几何和缩放校验。遇到 `stale_anchor` 时读失败原因；
+明确恢复已知窗口的焦点，几何改变则重新观察和绑定，不按相似标题换窗。
+锚点绑定原生窗口，同窗标签页共用 ID；DOM、标签页及页面内滚动/缩放后的内容需重新观察。
+发现用户切页就停止后续输入，取消在跑的批次，再确认目标。操作前释放实际残留的修饰键。
 
-## 函数、模块与分享
+## 批处理与确认
 
-把应用行为拆成小函数：观察会话、定位输入区、准备文本、发送、等待结果。将观察与发送分开，保留参数中的窗口、联系人和消息文本。不要硬编码用户的联系人或私密内容。文件导入只注册函数，不在导入时发送输入。
+按颜色、图层或界面阶段合并点按和笔画，复用 `mouse.click_at`、`mouse.stroke` 与 `draw.*`；`draw.triangle` 用三个数值顶点完成一笔闭合描边。
+把截图放在批次边界或失败之后，避免每个点都观察。只在需要图像时使用截图或模板匹配。
+优先用 `observe`、局部 `watch` 和有超时的 `wait_until` 等待状态；已有订阅继续复用。
+`watch_until_click` 才会把观察连接到输入，显式给出目标、次数和超时。
+以应用观察确认输入效果；失败后核对已完成步骤，避免重复绘制或重复提交。
 
-使用 [示例模块](assets) 的 `.zuse` 源文件作为起点。参数化应用标题、节点路径、目标名称与超时；通过导入加载函数，再显式调用。共享源码与必要的小型资源，避免把截图、聊天记录、凭据或可执行文件放进模块。分享技能本身由用户在技能页面操作。
+用 `timer.start()` / `timer.stop()` 测量同一会话，依据实际耗时优化工具往返与输入节奏。
+只执行用户已授权的行为；导入发送函数不等于获准发送消息，现有授权无需反复询问。
 
-微信示例只封装原语，不自动核对窗口或联系人，也不确认发送结果。调用前从实际应用检查这些条件；发送按钮的动作索引必须显式传入并来自真实节点。不要把这些调用前检查描述成示例内部已有的保证。
+## 复用
 
-## 计时与验证
-
-用 `timer.start()` 开始，`timer.reset()` 重置，`timer.stop()` 结束。开启后读取每条命令的 `command_us`、`total_elapsed_us` 与 `command_total_us`；总经过时间包含命令之间的空闲，执行累计只累加命令本身。跨命令计时要保留同一 Runtime 或 shell 会话。
-
-先用检查命令预检全部步骤，再在自有夹具验证成功路径、取消、歧义和目标失效。不要为验证接管用户正在使用的桌面。报告真实完成项、证据与能力限制；输入提交成功不等于应用已经处理成功。
-
-需要平台能力、视觉时间切片或复跑方法时读 [运行说明](references/runtime.md)。
+导入只注册声明，显式调用才执行。找现成包用 `$zuse-find-package`，开发发布用 `$zuse-publish-package`。
+本地函数例子见 [assets](assets)；平台、观察等待和视觉时间切片见 [运行说明](references/runtime.md)。

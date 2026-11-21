@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     cursor::{CursorColor, CursorImage, CursorShape, CursorStyle},
-    motion::{Curve, MAX_COORDINATE, Point},
+    motion::{Curve, DEFAULT_MOVE_DURATION_MS, DEFAULT_MOVE_JITTER, MAX_COORDINATE, Point},
     mouse::{MouseMode, MouseOptions},
     pointer::MoveOptions,
     runtime::Options,
@@ -91,7 +91,6 @@ struct Scope {
 struct Function<'a> {
     params: &'a [String],
     body: &'a [Statement],
-    span: Span,
 }
 
 struct Compiler<'a> {
@@ -115,7 +114,6 @@ pub(super) fn compile(source: &str, options: Options) -> Result<CompiledScript> 
     let program = syntax::parse(source).map_err(|error| error.to_string())?;
     let mut functions = BTreeMap::new();
     declarations(&program.statements, true, &mut functions)?;
-    validate_function_graph(&functions)?;
     let span = program.statements.first().map_or(
         Span {
             start: 0,
@@ -190,11 +188,7 @@ fn declarations<'a>(
                 if params.iter().any(|param| param == "touchpad") {
                     return Err(at(statement.span, "touchpad is a reserved global receiver"));
                 }
-                let function = Function {
-                    params,
-                    body,
-                    span: statement.span,
-                };
+                let function = Function { params, body };
                 if functions.insert(name, function).is_some() {
                     return Err(at(statement.span, format!("duplicate function {name:?}")));
                 }
@@ -204,80 +198,17 @@ fn declarations<'a>(
             | StatementKind::Parallel(body)
             | StatementKind::Sequence(body)
             | StatementKind::Repeat { body, .. } => declarations(body, false, functions)?,
+            StatementKind::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                declarations(then_body, false, functions)?;
+                declarations(else_body, false, functions)?;
+            }
+            StatementKind::For { body, .. } => declarations(body, false, functions)?,
             StatementKind::Let { .. } | StatementKind::Call(_) => {}
         }
-    }
-    Ok(())
-}
-
-fn calls<'a>(statements: &'a [Statement], result: &mut Vec<&'a Call>) {
-    for statement in statements {
-        match &statement.kind {
-            StatementKind::Call(call) => {
-                result.push(call);
-                for argument in &call.args {
-                    expression_calls(&argument.value, result);
-                }
-            }
-            StatementKind::Let { value, .. } => expression_calls(value, result),
-            StatementKind::Block(body)
-            | StatementKind::Parallel(body)
-            | StatementKind::Sequence(body)
-            | StatementKind::Function { body, .. }
-            | StatementKind::Repeat { body, .. } => calls(body, result),
-        }
-    }
-}
-
-fn expression_calls<'a>(expression: &'a Expr, result: &mut Vec<&'a Call>) {
-    if let Expr::Call(call) = expression {
-        result.push(call);
-        for argument in &call.args {
-            expression_calls(&argument.value, result);
-        }
-    }
-}
-
-fn validate_function_graph(functions: &BTreeMap<&str, Function<'_>>) -> Result<()> {
-    fn visit<'a>(
-        name: &'a str,
-        functions: &BTreeMap<&'a str, Function<'a>>,
-        visiting: &mut Vec<&'a str>,
-        visited: &mut BTreeSet<&'a str>,
-    ) -> Result<()> {
-        let function = functions[name];
-        if visiting.contains(&name) {
-            return Err(at(
-                function.span,
-                format!("recursive function {name:?} is not supported"),
-            ));
-        }
-        if visited.contains(name) {
-            return Ok(());
-        }
-        if visiting.len() >= MAX_CALL_DEPTH {
-            return Err(at(
-                function.span,
-                format!("function call depth exceeds {MAX_CALL_DEPTH}"),
-            ));
-        }
-        visiting.push(name);
-        let mut nested = Vec::new();
-        calls(function.body, &mut nested);
-        for call in nested {
-            if call.receiver.is_none() && functions.contains_key(call.name.as_str()) {
-                visit(call.name.as_str(), functions, visiting, visited)?;
-            }
-        }
-        visiting.pop();
-        visited.insert(name);
-        Ok(())
-    }
-
-    let mut visiting = Vec::new();
-    let mut visited = BTreeSet::new();
-    for name in functions.keys() {
-        visit(name, functions, &mut visiting, &mut visited)?;
     }
     Ok(())
 }
@@ -394,6 +325,12 @@ impl<'a> Compiler<'a> {
         let span = statement.span;
         Ok(match &statement.kind {
             StatementKind::Function { .. } => None,
+            StatementKind::If { .. } | StatementKind::For { .. } => {
+                return Err(at(
+                    span,
+                    "scalar control must be expanded before scoped compilation",
+                ));
+            }
             StatementKind::Let { name, value } => {
                 if name == "touchpad" {
                     return Err(at(span, "touchpad is a reserved global receiver"));
@@ -607,12 +544,6 @@ impl<'a> Compiler<'a> {
             .get(call.name.as_str())
             .copied()
             .ok_or_else(|| at(call.span, format!("unknown function {:?}", call.name)))?;
-        if self.stack.contains(&call.name.as_str()) {
-            return Err(at(
-                call.span,
-                format!("recursive function {:?} is not supported", call.name),
-            ));
-        }
         if self.stack.len() >= MAX_CALL_DEPTH {
             return Err(at(
                 call.span,
@@ -1125,7 +1056,7 @@ fn movement(args: &Args<'_>) -> Result<MoveOptions> {
         duration_ms: args
             .has("duration")
             .then(|| {
-                args.unsigned("duration", 350, 0, 60_000)
+                args.unsigned("duration", u64::from(DEFAULT_MOVE_DURATION_MS), 0, 60_000)
                     .map(|value| value as u32)
             })
             .transpose()?,
@@ -1139,7 +1070,7 @@ fn movement(args: &Args<'_>) -> Result<MoveOptions> {
             .transpose()?,
         curve: Curve::parse(&args.text("curve", "smooth")?)
             .ok_or_else(|| args.bad("curve", "is not a supported motion curve"))?,
-        jitter: args.number("jitter", 0.0)?,
+        jitter: args.number("jitter", DEFAULT_MOVE_JITTER)?,
         speed_variation: args.number("speed_variation", 0.0)?,
         seed: args.unsigned("seed", 1, 0, u64::MAX)?,
         offset: Point {

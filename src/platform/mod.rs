@@ -35,6 +35,16 @@ impl Desktop {
         _window: &str,
         _cancellation: &crate::observation::Cancellation,
     ) -> Result<String> {
+        self.hold_key_with_other_keys(_key, _duration_ms, _window, false, _cancellation)
+    }
+    pub fn hold_key_with_other_keys(
+        &mut self,
+        _key: &str,
+        _duration_ms: u64,
+        _window: &str,
+        _allow_other_keys: bool,
+        _cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
         Err("unsupported_state: native key holds currently require Linux X11 or Hyprland; use browser.hold for an explicitly connected browser page".into())
     }
     pub fn window_hit_test(&self, _id: &str, _x: i32, _y: i32) -> Result<bool> {

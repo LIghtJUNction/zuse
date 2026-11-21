@@ -26,11 +26,29 @@ fn default_plan_keeps_current_start_and_target_offset() {
 }
 
 #[test]
+fn default_target_motion_eases_with_small_jitter_and_exact_endpoints() {
+    let plan = MovePlan::new(point(0.0, 0.0), point(200.0, 0.0), &MoveOptions::default()).unwrap();
+    let samples = plan.samples();
+    assert_eq!(plan.duration_ms(), 350);
+    assert_eq!(samples.first().unwrap().point, point(0.0, 0.0));
+    assert_eq!(samples.last().unwrap().point, point(200.0, 0.0));
+    assert!(samples.iter().any(|s| s.point.y.abs() > 0.01));
+    assert!(samples.iter().all(|s| s.point.y.abs() <= 0.6));
+    let first = samples[1].point.x - samples[0].point.x;
+    let middle = samples[samples.len() / 2 + 1].point.x - samples[samples.len() / 2].point.x;
+    assert!(
+        middle > first * 2.0,
+        "default motion must accelerate rather than move at a constant rate"
+    );
+}
+
+#[test]
 fn piecewise_geometry_uses_absolute_waypoints_and_ignores_duplicate_knots() {
     let options = MoveOptions {
         duration_ms: Some(400),
         steps: Some(4),
         curve: Curve::Linear,
+        jitter: 0.0,
         via: vec![point(-40.0, 0.0), point(0.0, 0.0), point(0.0, 0.0)],
         ..MoveOptions::default()
     };
@@ -83,6 +101,7 @@ fn average_speed_uses_the_whole_sampled_route() {
     let options = MoveOptions {
         speed: Some(100.0),
         curve: Curve::Linear,
+        jitter: 0.0,
         ..MoveOptions::default()
     };
     let from = point(0.0, 0.0);
@@ -131,6 +150,7 @@ fn curve_and_seeded_time_warp_control_the_path() {
     let base = MoveOptions {
         steps: Some(4),
         curve: Curve::Linear,
+        jitter: 0.0,
         ..MoveOptions::default()
     };
     let from = point(0.0, 0.0);
@@ -290,6 +310,7 @@ fn callback_is_sampled_once_and_receives_current_start_and_offset_target() {
         steps: Some(4),
         curve: Curve::Linear,
         offset: point(0.0, 10.0),
+        jitter: 0.0,
         ..MoveOptions::default()
     };
     let mut seen = Vec::new();
@@ -362,6 +383,7 @@ fn coincident_endpoints_and_immediate_paths_remain_finite() {
     let at = point(-10.0, 20.0);
     let options = MoveOptions {
         via: vec![at, at],
+        jitter: 0.0,
         ..MoveOptions::default()
     };
     let stationary = MovePlan::new(at, at, &options).unwrap();
@@ -383,6 +405,7 @@ fn coincident_endpoints_and_immediate_paths_remain_finite() {
         at,
         &MoveOptions {
             speed: Some(100.0),
+            jitter: 0.0,
             ..MoveOptions::default()
         },
     )

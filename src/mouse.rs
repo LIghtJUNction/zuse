@@ -352,6 +352,10 @@ impl Mouse {
         self.button(button, "click")
     }
 
+    pub(crate) fn holds_button(&self, button: &str) -> bool {
+        self.held.contains(button)
+    }
+
     pub fn scroll(&mut self, dx: i32, dy: i32) -> Result<(), String> {
         if dx.unsigned_abs() > 1000 || dy.unsigned_abs() > 1000 {
             return Err("scroll x/y must be -1000..1000".into());

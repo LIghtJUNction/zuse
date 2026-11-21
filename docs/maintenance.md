@@ -30,6 +30,8 @@ does not end at the upstream release boundary.
 
 ## Current release records
 
+- [0.6.0 delivery and dependency status](delivery-0.6.0.md)
+- [0.6.0 source and native validation](validation-0.6.0.md)
 - [0.2.2 delivery and dependency status](delivery-0.2.2.zh-CN.md)
 - [0.2.2 release integrity](evidence/release-0.2.2.json)
 - [0.2.2 source validation](validation-0.2.2.md)

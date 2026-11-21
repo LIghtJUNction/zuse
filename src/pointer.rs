@@ -5,7 +5,8 @@
 //! resolves a target, and submits the resulting samples against one start time.
 
 use crate::motion::{
-    Curve, FunctionalMotion, MAX_COORDINATE, MAX_JITTER, PathOptions, Point, Sample,
+    Curve, DEFAULT_MOVE_DURATION_MS, DEFAULT_MOVE_JITTER, FunctionalMotion, MAX_COORDINATE,
+    MAX_JITTER, PathOptions, Point, Sample,
 };
 
 pub const MAX_MOVE_DURATION_MS: u32 = 60_000;
@@ -43,7 +44,7 @@ impl Default for MoveOptions {
             speed: None,
             steps: None,
             curve: Curve::Smooth,
-            jitter: 0.0,
+            jitter: DEFAULT_MOVE_JITTER,
             speed_variation: 0.0,
             seed: 1,
             offset: Point::default(),
@@ -96,7 +97,7 @@ impl MoveOptions {
         if self.speed.is_some() {
             0
         } else {
-            self.duration_ms.unwrap_or(350)
+            self.duration_ms.unwrap_or(DEFAULT_MOVE_DURATION_MS)
         }
     }
 

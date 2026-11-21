@@ -48,6 +48,17 @@ pub enum StatementKind {
         count: u32,
         body: Vec<Statement>,
     },
+    If {
+        condition: Expr,
+        then_body: Vec<Statement>,
+        else_body: Vec<Statement>,
+    },
+    For {
+        name: String,
+        start: Expr,
+        end: Expr,
+        body: Vec<Statement>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,6 +85,53 @@ pub enum Expr {
     Bool(bool),
     Identifier(String),
     Call(Call),
+    Neg(Box<Expr>),
+    Binary {
+        left: Box<Expr>,
+        op: BinaryOp,
+        right: Box<Expr>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl BinaryOp {
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Rem => "%",
+            Self::Eq => "==",
+            Self::Ne => "!=",
+            Self::Lt => "<",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Ge => ">=",
+        }
+    }
+
+    const fn precedence(self) -> u8 {
+        match self {
+            Self::Eq | Self::Ne | Self::Lt | Self::Le | Self::Gt | Self::Ge => 1,
+            Self::Add | Self::Sub => 2,
+            Self::Mul | Self::Div | Self::Rem => 3,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +165,8 @@ pub enum ErrorKind {
     DuplicateParameter,
     InvalidRepeatCount,
     UnexpectedCloseBrace,
+    ExpectedIn,
+    ExpectedRange,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +207,8 @@ impl ParseError {
             ErrorKind::DuplicateParameter => "duplicate function parameter",
             ErrorKind::InvalidRepeatCount => "repeat requires an integer from 0 through 4096",
             ErrorKind::UnexpectedCloseBrace => "unexpected }",
+            ErrorKind::ExpectedIn => "for requires 'in' after its variable",
+            ErrorKind::ExpectedRange => "for requires a half-open start..end range",
         }
     }
 }
@@ -177,6 +239,8 @@ enum Kind {
     CloseBrace,
     Comma,
     Dot,
+    Range,
+    Operator(BinaryOp),
     Equals,
     Semicolon,
     Newline,
@@ -260,9 +324,10 @@ impl<'a> Lexer<'a> {
 
     fn name(&mut self) -> Result<Kind, ParseError> {
         let start = self.offset;
-        while self.peek().is_some_and(|c| {
-            c.is_ascii_alphanumeric() || c == '_' || (self.module_syntax && c == '-')
-        }) {
+        while self
+            .peek()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
             self.advance();
         }
         if self.offset - start > MAX_NAME_BYTES {
@@ -287,7 +352,7 @@ impl<'a> Lexer<'a> {
             }
             _ => return Err(self.error(ErrorKind::InvalidNumber)),
         }
-        if self.peek() == Some('.') {
+        if self.peek() == Some('.') && !self.starts("..") {
             self.advance();
             if !self.peek().is_some_and(|c| c.is_ascii_digit()) {
                 return Err(self.error(ErrorKind::InvalidNumber));
@@ -308,10 +373,9 @@ impl<'a> Lexer<'a> {
                 self.advance();
             }
         }
-        if self
-            .peek()
-            .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'))
-        {
+        if self.peek().is_some_and(|c| {
+            c.is_ascii_alphanumeric() || c == '_' || (c == '.' && !self.starts(".."))
+        }) {
             return Err(self.error(ErrorKind::InvalidNumber));
         }
         let raw = &self.source[start..self.offset];
@@ -458,7 +522,7 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 'a'..='z' | 'A'..='Z' | '_' => self.name()?,
-                '-' | '0'..='9' => self.number()?,
+                '0'..='9' => self.number()?,
                 '"' | '\'' => self.quoted()?,
                 _ => {
                     let kind = match ch {
@@ -467,8 +531,35 @@ impl<'a> Lexer<'a> {
                         '{' => Kind::OpenBrace,
                         '}' => Kind::CloseBrace,
                         ',' => Kind::Comma,
+                        '.' if self.starts("..") => {
+                            self.advance();
+                            Kind::Range
+                        }
                         '.' => Kind::Dot,
+                        '=' if self.starts("==") => {
+                            self.advance();
+                            Kind::Operator(BinaryOp::Eq)
+                        }
                         '=' => Kind::Equals,
+                        '!' if self.starts("!=") => {
+                            self.advance();
+                            Kind::Operator(BinaryOp::Ne)
+                        }
+                        '<' if self.starts("<=") => {
+                            self.advance();
+                            Kind::Operator(BinaryOp::Le)
+                        }
+                        '>' if self.starts(">=") => {
+                            self.advance();
+                            Kind::Operator(BinaryOp::Ge)
+                        }
+                        '<' => Kind::Operator(BinaryOp::Lt),
+                        '>' => Kind::Operator(BinaryOp::Gt),
+                        '+' => Kind::Operator(BinaryOp::Add),
+                        '-' => Kind::Operator(BinaryOp::Sub),
+                        '*' => Kind::Operator(BinaryOp::Mul),
+                        '/' => Kind::Operator(BinaryOp::Div),
+                        '%' => Kind::Operator(BinaryOp::Rem),
                         ';' => Kind::Semicolon,
                         _ if ch.is_control() => {
                             return Err(self.error(ErrorKind::ControlCharacter));
@@ -725,6 +816,55 @@ impl Parser {
                 compound = true;
                 StatementKind::Repeat { count, body }
             }
+            Kind::Name(name) if name == "if" => {
+                self.take();
+                self.newlines();
+                let condition = self.expression(depth + 1)?;
+                let then_body = self.body(depth + 1)?;
+                self.newlines();
+                let else_body = if matches!(&self.current().kind, Kind::Name(name) if name == "else")
+                {
+                    self.take();
+                    self.newlines();
+                    if matches!(&self.current().kind, Kind::Name(name) if name == "if") {
+                        vec![self.statement(depth + 1)?]
+                    } else {
+                        self.body(depth + 1)?
+                    }
+                } else {
+                    Vec::new()
+                };
+                compound = true;
+                StatementKind::If {
+                    condition,
+                    then_body,
+                    else_body,
+                }
+            }
+            Kind::Name(name) if name == "for" => {
+                self.take();
+                self.newlines();
+                let name = self.binding_name()?;
+                self.newlines();
+                if !matches!(&self.current().kind, Kind::Name(name) if name == "in") {
+                    return Err(self.error(ErrorKind::ExpectedIn));
+                }
+                self.take();
+                self.newlines();
+                let start = self.expression(depth + 1)?;
+                self.newlines();
+                self.expect(Kind::Range, ErrorKind::ExpectedRange)?;
+                self.newlines();
+                let end = self.expression(depth + 1)?;
+                let body = self.body(depth + 1)?;
+                compound = true;
+                StatementKind::For {
+                    name,
+                    start,
+                    end,
+                    body,
+                }
+            }
             Kind::OpenBrace => {
                 let body = self.body(depth + 1)?;
                 compound = true;
@@ -748,9 +888,64 @@ impl Parser {
     }
 
     fn expression(&mut self, depth: usize) -> Result<Expr, ParseError> {
+        self.binary_expression(depth, 0)
+    }
+
+    fn binary_expression(&mut self, depth: usize, precedence: u8) -> Result<Expr, ParseError> {
+        self.check_depth(depth)?;
+        let mut left = if self.is(&Kind::Operator(BinaryOp::Sub)) {
+            let sign = self.take();
+            self.newlines();
+            if matches!(
+                self.current().kind,
+                Kind::CloseParen | Kind::CloseBrace | Kind::End | Kind::Comma | Kind::Semicolon
+            ) {
+                return Err(ParseError {
+                    kind: ErrorKind::InvalidNumber,
+                    span: sign.span,
+                });
+            }
+            match self.binary_expression(depth + 1, 4)? {
+                Expr::Number(value) => Expr::Number(
+                    value
+                        .strip_prefix('-')
+                        .map_or_else(|| format!("-{value}"), str::to_owned),
+                ),
+                value => Expr::Neg(Box::new(value)),
+            }
+        } else {
+            self.primary_expression(depth)?
+        };
+        let mut chain = 0;
+        while let Kind::Operator(op) = self.current().kind {
+            if op.precedence() < precedence {
+                break;
+            }
+            chain += 1;
+            self.check_depth(depth + chain)?;
+            self.take();
+            self.newlines();
+            let right = self.binary_expression(depth + 1, op.precedence() + 1)?;
+            left = Expr::Binary {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn primary_expression(&mut self, depth: usize) -> Result<Expr, ParseError> {
         self.check_depth(depth)?;
         let token = self.take();
         let name = match token.kind {
+            Kind::OpenParen => {
+                self.newlines();
+                let value = self.expression(depth + 1)?;
+                self.newlines();
+                self.expect(Kind::CloseParen, ErrorKind::ExpectedCloseParen)?;
+                return Ok(value);
+            }
             Kind::Number(value) => return Ok(Expr::Number(value)),
             Kind::Text(value) => return Ok(Expr::String(value)),
             Kind::Name(name) if name == "true" => return Ok(Expr::Bool(true)),
@@ -849,7 +1044,18 @@ impl Parser {
 fn reserved(name: &str) -> bool {
     matches!(
         name,
-        "let" | "fn" | "parallel" | "sequence" | "serial" | "repeat" | "true" | "false"
+        "let"
+            | "fn"
+            | "parallel"
+            | "sequence"
+            | "serial"
+            | "repeat"
+            | "true"
+            | "false"
+            | "if"
+            | "else"
+            | "for"
+            | "in"
     )
 }
 

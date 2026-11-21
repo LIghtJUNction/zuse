@@ -10,7 +10,7 @@ Validate a request without reading the desktop or moving the pointer:
 zuse eval 'mouse.move_to(text="Save",role="button",duration=650,curve="bezier",jitter=1.2,speed_variation=0.25,seed=42,offset_x=4,offset_y=-3)' --dry-run
 ~~~
 
-Remove `--dry-run` to locate the live target and execute the movement. A plain request uses a 350 ms smooth path:
+Remove `--dry-run` to locate the live target and execute the movement. A plain request uses a 350 ms smooth path with gentle acceleration, deceleration, and 0.6 units of jitter:
 
 ~~~text
 mouse.move_to(text="Save", role="button")
@@ -45,7 +45,7 @@ All coordinates use the selected native desktop backend's screen coordinate spac
 | `speed` | Unset | Finite value greater than zero, in sampled screen-coordinate units per second. Exclusive with `duration`. |
 | `steps` | `clamp(duration / 8, 1, 4096)`, or 120 with `speed` | Sampling intervals, 1..4096; the path has `steps + 1` samples. A positive explicit duration requires `steps <= duration`; zero duration requires one interval. |
 | `curve` | `"smooth"` | `"linear"`, `"smooth"`, `"ease-in-out"`, or `"bezier"`. |
-| `jitter` | 0 | Maximum per-axis displacement, 0..1000 screen-coordinate units. Smoothed seeded noise tapers to zero at both endpoints. |
+| `jitter` | 0.6 | Maximum per-axis displacement, 0..1000 screen-coordinate units. Smoothed seeded noise tapers to zero at both endpoints; set 0 for an exact unperturbed path. |
 | `speed_variation` | 0 | Seeded variation in path progress, 0..1. Progress remains monotone. |
 | `seed` | 1 | Integer seed. Identical inputs and options reproduce the same sample path. |
 | `offset_x`, `offset_y` | 0 | Offset added to the target center. |

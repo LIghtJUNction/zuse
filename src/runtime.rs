@@ -5,19 +5,23 @@ use crate::{
     browser::Browser,
     cursor::{CursorColor, CursorShape, CursorStyle},
     device_io,
+    drawing::{self, Anchor},
     human::{Queue, Request},
     integrations::{self, ProcessManager},
     ios::{self, Ios},
     json::{self, quote},
     language::{Call, Parser, Value},
-    motion::{Curve, FunctionalMotion, MAX_COORDINATE, Motion, PathOptions, Point, Rng},
+    motion::{
+        Curve, DEFAULT_MOVE_DURATION_MS, DEFAULT_MOVE_JITTER, FunctionalMotion, MAX_COORDINATE,
+        Motion, PathOptions, Point, Rng,
+    },
     mouse::{Mouse, MouseMode, MouseOptions},
     observation::{Cancellation, Condition, Observer, Query as ObservationQuery},
     platform::Desktop,
     pointer::{MoveOptions, MovePlan},
     script::{FunctionMetadata, ModuleSession, Prepared, ProgramMode},
     serial::{self, SerialPort},
-    target::{self, LocatedTarget, TargetQuery, TargetWindow, WindowTarget},
+    target::{self, Bounds, LocatedTarget, TargetQuery, TargetWindow, WindowTarget},
     touchpad::{self, Command as TouchpadCommand, Gesture, GestureOptions, GesturePlan},
     usb::{self, UsbDevice},
 };
@@ -87,6 +91,15 @@ static SPECS: &[Spec] = &[
     spec!("mouse.release", false, []),
     spec!("mouse.position", true, []),
     spec!("target.locate",true,["text":T:false,"template":T:false,"mode":T:false,"scales":T:false,"min_score":N:false,"min_margin":N:false,"role":T:false,"scope":T:false,"exact":B:false,"case_sensitive":B:false,"index":I:false,"window":T:false,"name":T:false]),
+    spec!("anchor.set",true,["name":T:true,"window":T:true,"x":I:false,"y":I:false,"width":I:true,"height":I:true]),
+    spec!("anchor.clear",true,["name":T:true]),
+    spec!("mouse.click_at",false,["x":I:true,"y":I:true,"duration":I:false,"curve":T:false,"jitter":N:false,"seed":I:false,"button":T:false,"settle":I:false,"anchor":T:false]),
+    spec!("mouse.stroke",false,["points":T:true,"duration":I:false,"settle":I:false,"button":T:false,"anchor":T:false]),
+    spec!("draw.line",false,["x1":N:true,"y1":N:true,"x2":N:true,"y2":N:true,"duration":I:false,"settle":I:false,"button":T:false,"anchor":T:false]),
+    spec!("draw.triangle",false,["x1":N:true,"y1":N:true,"x2":N:true,"y2":N:true,"x3":N:true,"y3":N:true,"duration":I:false,"settle":I:false,"button":T:false,"anchor":T:false]),
+    spec!("draw.rect",false,["x":N:true,"y":N:true,"width":N:true,"height":N:true,"duration":I:false,"settle":I:false,"button":T:false,"anchor":T:false]),
+    spec!("draw.circle",false,["x":N:true,"y":N:true,"radius":N:true,"steps":I:false,"duration":I:false,"settle":I:false,"button":T:false,"anchor":T:false]),
+    spec!("draw.polygon",false,["points":T:true,"duration":I:false,"settle":I:false,"button":T:false,"anchor":T:false]),
     spec!("mouse.move",false,["x":I:true,"y":I:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"seed":I:false]),
     spec!("mouse.move_to",false,["text":T:true,"role":T:false,"scope":T:false,"exact":B:false,"case_sensitive":B:false,"index":I:false,"duration":I:false,"speed":N:false,"steps":I:false,"curve":T:false,"jitter":N:false,"speed_variation":N:false,"seed":I:false,"offset_x":N:false,"offset_y":N:false,"via":T:false]),
     spec!("mouse.circle",false,["x":I:true,"y":I:true,"radius":N:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"speed_variation":N:false,"seed":I:false]),
@@ -96,7 +109,7 @@ static SPECS: &[Spec] = &[
     spec!("mouse.scroll",false,["dx":I:false,"dy":I:false]),
     spec!("keyboard.type",false,["text":T:true,"window":T:false]),
     spec!("keyboard.key",false,["key":T:true,"window":T:false]),
-    spec!("keyboard.hold",false,["key":T:true,"duration":I:true,"window":T:false]),
+    spec!("keyboard.hold",false,["key":T:true,"duration":I:true,"window":T:false,"allow_other_keys":B:false]),
     spec!("keyboard.state", true, []),
     spec!("keyboard.num_lock",false,["state":T:true]),
     spec!("window.list", true, []),
@@ -439,6 +452,63 @@ fn range(call: &Call<'_>, name: &str, default: i64, min: i64, max: i64) -> Resul
     }
 }
 
+fn drawing_button(call: &Call<'_>) -> Result<String, String> {
+    let button = text(call, "button", "left")?;
+    Ok(match button.as_str() {
+        "1" | "left" => "left",
+        "2" | "middle" => "middle",
+        "3" | "right" => "right",
+        "back" => "back",
+        "forward" => "forward",
+        _ => return Err("unknown mouse button".into()),
+    }
+    .into())
+}
+
+fn drawing_point(call: &Call<'_>) -> Result<Point, String> {
+    Ok(Point {
+        x: range(call, "x", 0, -MAX_COORDINATE as i64, MAX_COORDINATE as i64)? as f64,
+        y: range(call, "y", 0, -MAX_COORDINATE as i64, MAX_COORDINATE as i64)? as f64,
+    })
+}
+
+fn drawing_path(call: &Call<'_>) -> Result<Vec<Point>, String> {
+    let point = |x, y| Point {
+        x: number(call, x, 0.0),
+        y: number(call, y, 0.0),
+    };
+    match call.name {
+        "mouse.stroke" => drawing::parse_points(&text(call, "points", "")?),
+        "draw.line" => drawing::line(point("x1", "y1"), point("x2", "y2")),
+        "draw.triangle" => {
+            drawing::triangle(point("x1", "y1"), point("x2", "y2"), point("x3", "y3"))
+        }
+        "draw.rect" => drawing::rect(
+            point("x", "y"),
+            number(call, "width", 0.0),
+            number(call, "height", 0.0),
+        ),
+        "draw.circle" => drawing::circle(
+            point("x", "y"),
+            number(call, "radius", 0.0),
+            range(call, "steps", 64, 3, (drawing::MAX_POINTS - 1) as i64)? as usize,
+        ),
+        "draw.polygon" => drawing::polygon(&text(call, "points", "")?),
+        _ => Err("unknown drawing path".into()),
+    }
+}
+
+fn anchor_region(call: &Call<'_>) -> Result<Bounds, String> {
+    let region = Bounds {
+        x: range(call, "x", 0, 0, MAX_COORDINATE as i64)? as f64,
+        y: range(call, "y", 0, 0, MAX_COORDINATE as i64)? as f64,
+        width: range(call, "width", 0, 1, MAX_COORDINATE as i64)? as f64,
+        height: range(call, "height", 0, 1, MAX_COORDINATE as i64)? as f64,
+    };
+    Anchor::validate_region(region)?;
+    Ok(region)
+}
+
 struct TargetArgs {
     text: String,
     role: Option<String>,
@@ -504,7 +574,16 @@ fn move_options(c: &Call<'_>) -> Result<MoveOptions, String> {
     let options = MoveOptions {
         duration_ms: c
             .get("duration")
-            .map(|_| range(c, "duration", 350, 0, 60_000).map(|v| v as u32))
+            .map(|_| {
+                range(
+                    c,
+                    "duration",
+                    i64::from(DEFAULT_MOVE_DURATION_MS),
+                    0,
+                    60_000,
+                )
+                .map(|v| v as u32)
+            })
             .transpose()?,
         speed: c.get("speed").map(|_| number(c, "speed", 0.0)),
         steps: c
@@ -512,7 +591,7 @@ fn move_options(c: &Call<'_>) -> Result<MoveOptions, String> {
             .map(|_| range(c, "steps", 1, 1, 4096).map(|v| v as u32))
             .transpose()?,
         curve: Curve::parse(&text(c, "curve", "smooth")?).ok_or("unknown motion curve")?,
-        jitter: number(c, "jitter", 0.0),
+        jitter: number(c, "jitter", DEFAULT_MOVE_JITTER),
         speed_variation: number(c, "speed_variation", 0.0),
         seed: integer(c, "seed", 1) as u64,
         offset: Point {
@@ -523,6 +602,67 @@ fn move_options(c: &Call<'_>) -> Result<MoveOptions, String> {
     };
     options.validate()?;
     Ok(options)
+}
+
+/// Flat coordinate moves and click_at share one timing and path preflight.
+fn point_move_options(call: &Call<'_>) -> Result<PathOptions, String> {
+    let duration = range(
+        call,
+        "duration",
+        i64::from(DEFAULT_MOVE_DURATION_MS),
+        0,
+        60_000,
+    )? as u32;
+    let steps = range(
+        call,
+        "steps",
+        i64::from((duration / 8).clamp(1, 4096)),
+        1,
+        65_536,
+    )? as u32;
+    let easing = Curve::parse(&text(call, "curve", "smooth")?).ok_or("unknown motion curve")?;
+    let jitter = number(call, "jitter", DEFAULT_MOVE_JITTER);
+    let seed = integer(call, "seed", 1) as u64;
+    Motion::new(
+        Point::default(),
+        Point::default(),
+        duration,
+        steps,
+        easing,
+        jitter,
+        seed,
+    )
+    .map_err(|error| format!("{}: {error}", call.name))?;
+    Ok(PathOptions {
+        duration_ms: duration,
+        steps,
+        easing,
+        jitter,
+        speed_variation: 0.0,
+        seed,
+    })
+}
+
+fn coordinate_motion(
+    mouse: &Mouse,
+    target: Point,
+    options: PathOptions,
+) -> Result<std::iter::Skip<Motion>, String> {
+    // An explicit immediate move needs neither a position read nor a duplicate
+    // start event. Timed moves start at the handle's observed position.
+    let immediate = options.duration_ms == 0;
+    let from = if immediate { target } else { mouse.position()? };
+    Motion::new(
+        from,
+        target,
+        options.duration_ms,
+        options.steps,
+        options.easing,
+        options.jitter,
+        options.seed,
+    )
+    .map(|motion| motion.skip(usize::from(immediate)))
+    .map_err(|error| error.to_string())
 }
 
 fn device_payload(call: &Call<'_>, allow_text: bool) -> Result<Vec<u8>, String> {
@@ -548,6 +688,7 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
     let mut calls = Vec::new();
     let mut wait_budget = 0u64;
     let mut gesture_samples = 0usize;
+    let mut drawing_points = 0usize;
     for parsed in Parser::new(source) {
         let call = parsed.map_err(|e| e.to_string())?;
         if calls.len() >= options.max_steps {
@@ -689,6 +830,48 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             "mouse.use" => {
                 mouse_options(&call)?;
             }
+            "anchor.set" | "anchor.clear" => {
+                drawing::validate_name(&text(&call, "name", "")?)?;
+                if call.name == "anchor.set" {
+                    let window = text(&call, "window", "")?;
+                    if window.trim().is_empty() || window == "active" || window.len() > 1024 {
+                        return Err(
+                            "anchor.set requires an explicit observed native window ID".into()
+                        );
+                    }
+                    anchor_region(&call)?;
+                }
+            }
+            "mouse.stroke" | "mouse.click_at" | "draw.line" | "draw.triangle" | "draw.rect"
+            | "draw.circle" | "draw.polygon" => {
+                drawing_button(&call)?;
+                if call.get("anchor").is_some() {
+                    drawing::validate_name(&text(&call, "anchor", "")?)?;
+                }
+                let settle = range(&call, "settle", 30, 0, 1000)? as u64;
+                let (points, waits) = if call.name != "mouse.click_at" {
+                    let points = drawing_path(&call)?;
+                    let duration = range(&call, "duration", 300, 0, 60_000)? as u64;
+                    if duration != 0 && duration < (points.len() - 1) as u64 {
+                        return Err(format!(
+                            "{}: duration must allow at least one millisecond per segment; use duration=0 for explicitly immediate input",
+                            call.name
+                        ));
+                    }
+                    (points.len(), duration + 2 * settle)
+                } else {
+                    drawing_point(&call)?;
+                    (
+                        1,
+                        settle + u64::from(point_move_options(&call)?.duration_ms),
+                    )
+                };
+                drawing_points = drawing_points.saturating_add(points);
+                if drawing_points > drawing::MAX_PROGRAM_POINTS {
+                    return Err("program drawing points exceed 65536".into());
+                }
+                wait_budget = wait_budget.saturating_add(waits);
+            }
             "target.locate" => {
                 if call.get("template").is_some() {
                     #[cfg(not(feature = "vision"))]
@@ -741,18 +924,8 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             "mouse.move" => {
                 range(&call, "x", 0, -MAX_COORDINATE as i64, MAX_COORDINATE as i64)?;
                 range(&call, "y", 0, -MAX_COORDINATE as i64, MAX_COORDINATE as i64)?;
-                let duration = range(&call, "duration", 0, 0, 60_000)?;
-                let steps = range(&call, "steps", (duration / 8).clamp(1, 4096), 1, 65536)?;
-                if (duration == 0 && steps != 1) || (duration > 0 && steps > duration) {
-                    return Err("mouse.move: steps must fit duration in milliseconds".into());
-                }
-                if Curve::parse(&text(&call, "curve", "smooth")?).is_none() {
-                    return Err("unknown motion curve".into());
-                }
-                if !(0.0..=1000.0).contains(&number(&call, "jitter", 0.0)) {
-                    return Err("jitter must be 0..1000 pixels".into());
-                }
-                wait_budget = wait_budget.saturating_add(duration as u64);
+                wait_budget =
+                    wait_budget.saturating_add(u64::from(point_move_options(&call)?.duration_ms));
             }
             "mouse.circle" => {
                 let (_, _, _, options) = circle_options(&call)?;
@@ -963,7 +1136,11 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
                 crate::platform::split_chord(&text(&call, "key", "")?)?;
             }
             "keyboard.hold" | "browser.hold" => {
-                crate::key_hold::Direction::parse(&text(&call, "key", "")?)?;
+                if call.name == "keyboard.hold" {
+                    crate::key_hold::NativeKey::parse(&text(&call, "key", "")?)?;
+                } else {
+                    crate::key_hold::Direction::parse(&text(&call, "key", "")?)?;
+                }
                 let duration = range(&call, "duration", 0, 1, crate::key_hold::MAX_HOLD_MS as i64)?;
                 wait_budget = wait_budget.saturating_add(duration as u64);
             }
@@ -1088,6 +1265,7 @@ pub struct Runtime {
     cancellation: Cancellation,
     timer: crate::timing::Timer,
     targets: BTreeMap<String, WindowTarget>,
+    anchors: BTreeMap<String, Anchor>,
     #[cfg(feature = "vision")]
     vision: crate::vision_runtime::VisionRuntime,
     mouse: Option<Mouse>,
@@ -1244,6 +1422,24 @@ impl Runtime {
         self.mouse
             .as_mut()
             .ok_or_else(|| "runtime mouse is unavailable".into())
+    }
+
+    fn drawing_points(
+        &mut self,
+        call: &Call<'_>,
+        points: Vec<Point>,
+    ) -> Result<Vec<Point>, String> {
+        if call.get("anchor").is_none() {
+            return Ok(points);
+        }
+        let name = text(call, "anchor", "")?;
+        let anchor = self
+            .anchors
+            .get(&name)
+            .cloned()
+            .ok_or("unknown anchor; observe the window and call anchor.set first")?;
+        anchor.verify(&self.desktop()?.windows()?)?;
+        anchor.resolve(&points)
     }
 
     fn release_mouse(&mut self) -> Result<(), String> {
@@ -1681,44 +1877,79 @@ impl Runtime {
                 self.perform_move(target, plan)
                     .map(|receipt| receipt.to_json())
             }
-            "mouse.move" => {
-                let duration = integer(c, "duration", 0) as u32;
-                let steps = integer(c, "steps", ((duration / 8) as i64).clamp(1, 4096)) as u32;
-                let curve = Curve::parse(&text(c, "curve", "smooth")?).ok_or("unknown curve")?;
+            "anchor.set" => {
+                let name = text(c, "name", "")?;
+                // A failed observed replacement must not retain the old region.
+                self.anchors.remove(&name);
+                if self.anchors.len() >= 128 {
+                    return Err("anchor limit exceeded (128); clear unused anchors".into());
+                }
+                let window = text(c, "window", "")?;
+                let window = TargetWindow::from_windows(&self.desktop()?.windows()?, &window)?;
+                let anchor = Anchor::new(window, anchor_region(c)?)?;
+                let region = anchor.region;
+                let result = format!(
+                    "{{\"name\":{},\"window\":{},\"region\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\"coordinate_space\":\"window_local_native\",\"recognition\":\"caller_observed_region\"}}",
+                    quote(&name),
+                    anchor.window.to_json(),
+                    region.x,
+                    region.y,
+                    region.width,
+                    region.height
+                );
+                self.anchors.insert(name, anchor);
+                Ok(result)
+            }
+            "anchor.clear" => {
+                let name = text(c, "name", "")?;
+                let removed = self.anchors.remove(&name).is_some();
+                Ok(format!("{{\"removed\":{removed}}}"))
+            }
+            "mouse.stroke" | "draw.line" | "draw.triangle" | "draw.rect" | "draw.circle"
+            | "draw.polygon" => {
+                let points = drawing_path(c)?;
+                let points = self.drawing_points(c, points)?;
+                let button = drawing_button(c)?;
+                let duration = integer(c, "duration", 300) as u32;
+                let settle = integer(c, "settle", 30) as u32;
+                let samples = drawing::stroke(
+                    self.mouse()?,
+                    &points,
+                    duration,
+                    settle,
+                    &button,
+                    &cancellation,
+                )?;
+                Ok(format!(
+                    "{{\"points\":{samples},\"duration_ms\":{duration},\"button_released\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}"
+                ))
+            }
+            "mouse.click_at" => {
+                let points = self.drawing_points(c, vec![drawing_point(c)?])?;
+                let point = points[0];
+                let button = drawing_button(c)?;
+                let settle = integer(c, "settle", 30) as u32;
+                let options = point_move_options(c)?;
                 let mouse = self.mouse()?;
-                let from = mouse.position()?;
+                let path = coordinate_motion(mouse, point, options)?;
+                let samples = drawing::click_at(mouse, path, settle, &button, &cancellation)?;
+                Ok(format!(
+                    "{{\"x\":{},\"y\":{},\"samples\":{samples},\"duration_ms\":{},\"button_released\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}}",
+                    point.x, point.y, options.duration_ms
+                ))
+            }
+            "mouse.move" => {
+                let options = point_move_options(c)?;
+                let mouse = self.mouse()?;
                 let target = Point {
                     x: integer(c, "x", 0) as f64,
                     y: integer(c, "y", 0) as f64,
                 };
-                let motion = Motion::new(
-                    from,
-                    target,
-                    duration,
-                    steps,
-                    curve,
-                    number(c, "jitter", 0.0),
-                    integer(c, "seed", 1) as u64,
-                )
-                .map_err(|e| format!("{e:?}"))?;
-                if motion.clone().any(|sample| {
-                    sample.point.x.abs() > MAX_COORDINATE || sample.point.y.abs() > MAX_COORDINATE
-                }) {
-                    return Err("mouse.move: jittered path exceeds the coordinate range".into());
-                }
-                let start = Instant::now();
-                for sample in motion {
-                    let desired = Duration::from_millis(sample.at_ms as u64);
-                    if let Some(delay) = desired.checked_sub(start.elapsed()) {
-                        cancellation.sleep(delay)?;
-                    }
-                    cancellation.dispatch(|| mouse.submit(sample.point))?;
-                }
+                let motion = coordinate_motion(mouse, target, options)?;
+                let samples = drawing::move_path(mouse, motion, &cancellation)?;
                 Ok(format!(
                     "{{\"x\":{},\"y\":{},\"samples\":{}}}",
-                    target.x,
-                    target.y,
-                    steps + 1
+                    target.x, target.y, samples
                 ))
             }
             "mouse.circle" => {
@@ -1833,10 +2064,11 @@ impl Runtime {
             "keyboard.hold" => {
                 let key = text(c, "key", "")?;
                 let window = text(c, "window", "active")?;
-                self.desktop()?.hold_key(
+                self.desktop()?.hold_key_with_other_keys(
                     &key,
                     integer(c, "duration", 0) as u64,
                     &window,
+                    boolean(c, "allow_other_keys", false),
                     &cancellation,
                 )
             }

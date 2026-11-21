@@ -280,6 +280,31 @@ pub(super) fn chord_in_state(
     })
 }
 
+/// Classify simultaneous keys from their actions in the actual map, not from
+/// assumed evdev positions. Remapped modifiers and layout/lock actions stay out.
+pub(super) fn ordinary_keycodes(original: &[u8], num_lock: bool) -> Result<Vec<u32>> {
+    let map = Map::open(original)?;
+    let locked = if num_lock { map.num_lock_mask()? } else { 0 };
+    let mut ordinary = Vec::new();
+    for code in 8..=255 {
+        // Only this private XKB state is changed; this submits no input.
+        unsafe {
+            (map.api.update_mask)(map.state, 0, 0, locked, 0, 0, 0);
+            let symbol = (map.api.one_sym)(map.state, code);
+            let down_changes = (map.api.update_key)(map.state, code, 1);
+            let up_changes = (map.api.update_key)(map.state, code, 0);
+            if symbol != 0
+                && !crate::key_hold::modifier_keysym(symbol)
+                && down_changes == 0
+                && up_changes == 0
+            {
+                ordinary.push(code);
+            }
+        }
+    }
+    Ok(ordinary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,6 +347,37 @@ mod tests {
         .to_vec();
         bytes.push(0);
         Map::open(&bytes).unwrap().canonical_bytes().unwrap()
+    }
+
+    #[test]
+    fn concurrent_hold_classifies_actual_map_actions_and_excludes_modifiers() {
+        if Library::open(c"libxkbcommon.so.0").is_err() {
+            return;
+        }
+        let original = num_keymap();
+        for num_lock in [false, true] {
+            let ordinary = ordinary_keycodes(&original, num_lock).unwrap();
+            assert!(ordinary.contains(&28)); // T has no modifier action.
+            assert!(ordinary.contains(&87)); // Keypad key, in either lock state.
+            for code in [8, 37, 50, 77] {
+                assert!(
+                    !ordinary.contains(&code),
+                    "unmapped/modifier/lock code {code}"
+                );
+            }
+        }
+        // A printable symbol with an explicit lock action is not ordinary.
+        let custom = br#"xkb_keymap {
+            xkb_keycodes "test" { minimum=8; maximum=255; <K001>=25; };
+            xkb_types "test" { type "ONE_LEVEL" { modifiers=None; map[None]=Level1; }; };
+            xkb_compatibility "test" {};
+            xkb_symbols "test" {
+                key <K001> { type="ONE_LEVEL", symbols[Group1]=[w], actions[Group1]=[LockMods(modifiers=Shift)] };
+            };
+        };"#;
+        let mut bytes = custom.to_vec();
+        bytes.push(0);
+        assert!(!ordinary_keycodes(&bytes, false).unwrap().contains(&25));
     }
 
     #[test]

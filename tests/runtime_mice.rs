@@ -43,7 +43,7 @@ fn mouse_modes_and_styles_are_validated_without_native_side_effects() {
         r#"mouse.use(kind="user",appearance="system")"#,
         r##"mouse.use(kind="user",color="#FF884488",shape="ring",size=16,glow=0)"##,
         r##"mouse.use(name="agent one",color="#00aaff",shape="crosshair",size=96,glow=1)"##,
-        r#"mouse.use(shape="dot");mouse.move(x=2,y=3);mouse.release()"#,
+        r#"mouse.use(shape="dot");mouse.move(x=2,y=3,duration=0);mouse.release()"#,
     ] {
         let options = Options {
             dry_run: true,

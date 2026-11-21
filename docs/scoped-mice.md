@@ -61,9 +61,9 @@ inspect(alias);
 main.move(x=360, y=240, duration=250);
 ~~~
 
-Functions are declared at the script's top level and accept mouse variables as parameters. A function reads caller-owned mice through those explicit parameters. It has its own local scope, does not return values or mice, and cannot recurse. This keeps each native mouse's owner known before execution. `repeat 3 { ... }` runs a bounded literal number of iterations, with a new local scope for each iteration.
+Functions are declared at the script's top level and accept mouse variables and scalar values as explicit parameters. Each function has its own local scope and does not return values or mice. Bounded recursion and scalar control flow are expanded before the mouse ownership checks; see [scalar programs](scalar-programs.md). `repeat 3 { ... }` runs a bounded literal number of iterations, with a new local scope for each iteration.
 
-An out-of-scope variable, duplicate binding in one scope, unsupported argument, or recursive function is a compilation error. The default limits are 256 expanded actions and creations, 60 seconds of cumulative scheduled waits, 32 simultaneously live mice, and 256 created mice per script. `--max-steps` and `--max-wait-ms` adjust the execution budgets within the parser and compiler's hard bounds.
+An out-of-scope variable, duplicate binding in one scope, unsupported argument, or expansion beyond the recursion limit is a compilation error. The default limits are 256 expanded actions and creations, 60 seconds of cumulative scheduled waits, 32 simultaneously live mice, and 256 created mice per script. `--max-steps` and `--max-wait-ms` adjust the execution budgets within the parser and compiler's hard bounds.
 
 ## Parallel and sequential work
 
@@ -132,7 +132,7 @@ Appearance methods require a handle created with a generated or custom appearanc
 
 ### Path and target controls
 
-Both `move` and `move_to` accept `duration`, `speed`, `steps`, `curve`, `jitter`, `speed_variation`, `seed`, `offset_x`, `offset_y`, and `via`. The default is a 350 ms smooth path. `duration` is milliseconds; `speed` is average sampled-path length per second, and the two are mutually exclusive. Coordinates use the selected backend's native screen units.
+Both `move` and `move_to` accept `duration`, `speed`, `steps`, `curve`, `jitter`, `speed_variation`, `seed`, `offset_x`, `offset_y`, and `via`. The default is a 350 ms smooth path with acceleration, deceleration, and up to 0.6 units of jitter per axis. Endpoints remain exact; explicit `duration=0` is immediate and `jitter=0` removes displacement. `duration` is milliseconds; `speed` is average sampled-path length per second, and the two are mutually exclusive. Coordinates use the selected backend's native screen units.
 
 ~~~text
 let p = mouse(color="#2FE2FF");

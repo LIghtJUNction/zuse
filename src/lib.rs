@@ -26,9 +26,13 @@ pub mod mcp;
 #[cfg(feature = "std")]
 pub mod observation;
 #[cfg(feature = "std")]
+pub mod packages;
+#[cfg(feature = "std")]
 pub mod platform;
 #[cfg(feature = "std")]
 pub mod runtime;
+#[cfg(feature = "std")]
+pub mod session;
 #[cfg(feature = "std")]
 mod timing;
 #[cfg(feature = "vision")]
@@ -53,6 +57,9 @@ pub mod touchpad;
 
 #[cfg(feature = "std")]
 pub mod device_io;
+
+#[cfg(feature = "std")]
+pub mod drawing;
 
 #[cfg(feature = "std")]
 pub mod ios;

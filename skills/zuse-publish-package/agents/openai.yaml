@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zuse Package Publishing"
+  short_description: "Build and publish reusable Zuse source packages"
+  default_prompt: "Use $zuse-publish-package to build and publish a versioned Zuse source package."

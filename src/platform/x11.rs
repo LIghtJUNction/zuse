@@ -503,31 +503,32 @@ impl X11 {
         key: &str,
         duration_ms: u64,
         window: &str,
+        allow_other_keys: bool,
         cancellation: &crate::observation::Cancellation,
     ) -> Result<String> {
         use crate::{
-            key_hold::{self, Direction, Event},
+            key_hold::{self, Event, NativeKey},
             target::TargetWindow,
         };
-        let direction = Direction::parse(key)?;
+        let key = NativeKey::parse(key)?;
         key_hold::validate_duration(duration_ms)?;
         let expected = hold_target_window(&self.windows()?, window)?;
         if !expected.focused {
             return Err("stale_target: key holds require the currently focused window".into());
         }
         let (state, held, _, _) = self.keyboard_state()?;
-        if held || state.base_mods != 0 || state.latched_mods != 0 || state.group != 0 {
+        if (held && !allow_other_keys)
+            || state.base_mods != 0
+            || state.latched_mods != 0
+            || state.group != 0
+        {
             return Err(
                 "unsupported_state: release held keys and use layout group zero before a key hold"
                     .into(),
             );
         }
-        let symbol = match direction {
-            Direction::Left => 0xff51,
-            Direction::Up => 0xff52,
-            Direction::Right => 0xff53,
-            Direction::Down => 0xff54,
-        };
+        let name = CString::new(key.native()).map_err(|_| "invalid hold key")?;
+        let symbol = unsafe { (self.api.XStringToKeysym)(name.as_ptr()) };
         // Resolve the effective symbol in the current lock state. This avoids
         // treating Num Lock's keypad numbers as directional keys.
         let code = (8..=255u8)
@@ -544,11 +545,32 @@ impl X11 {
                         && found == symbol
                 }
             })
-            .ok_or("unsupported_state: direction is absent from the current X11 keymap")?;
+            .ok_or("unsupported_state: hold key is absent from the current X11 keymap")?;
+        let ordinary = |code: u32| {
+            let (mut consumed, mut symbol) = (0, 0);
+            unsafe {
+                (self.api.XkbLookupKeySym)(
+                    self.display,
+                    code as u8,
+                    u32::from(state.locked_mods),
+                    &mut consumed,
+                    &mut symbol,
+                ) != 0
+                    && symbol != 0
+                    && !key_hold::modifier_keysym(symbol as u32)
+                    && (self.api.XkbKeysymToModifiers)(self.display, symbol) == 0
+            }
+        };
+        if !ordinary(u32::from(code)) {
+            return Err(
+                "unsupported_state: the requested key is a modifier in the current map".into(),
+            );
+        }
         let test = self
             .test
             .as_ref()
             .ok_or("XTest extension library unavailable")?;
+        let mut pressed_by_us = false;
         let elapsed = key_hold::run(duration_ms, cancellation, |event| {
             match event {
                 Event::Check { .. } => {
@@ -570,15 +592,21 @@ impl X11 {
                     unsafe {
                         (self.api.XQueryKeymap)(self.display, keys.as_mut_ptr());
                     }
-                    keys[usize::from(code / 8)] &= !(1u8 << (code % 8)) as c_char;
-                    if keys.iter().any(|&value| value != 0) {
-                        return Err(
-                            "stale_target: another key was pressed during the key hold".into()
-                        );
-                    }
+                    key_hold::check_pressed_keys(
+                        allow_other_keys,
+                        pressed_by_us,
+                        u32::from(code),
+                        (8..=255u32).filter(|&key| {
+                            keys[(key / 8) as usize] as u8 & (1u8 << (key % 8)) != 0
+                        }),
+                        ordinary,
+                    )?;
                 }
                 Event::Press { .. } | Event::Release { .. } => {
                     let down = i32::from(matches!(event, Event::Press { .. }));
+                    if down != 0 {
+                        pressed_by_us = true;
+                    }
                     let sent = unsafe { (test.key)(self.display, u32::from(code), down, 0) };
                     self.flush();
                     if sent == 0 {
@@ -588,7 +616,7 @@ impl X11 {
             }
             Ok(())
         })?;
-        Ok(key_hold::receipt(direction, duration_ms, elapsed))
+        Ok(key_hold::native_receipt(key, duration_ms, elapsed))
     }
     pub fn type_text(&mut self, text: &str) -> Result<()> {
         self.type_common(None, text)

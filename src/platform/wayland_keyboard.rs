@@ -1,5 +1,5 @@
 //! Native Wayland virtual keyboard with explicit keymap restoration.
-use super::{Result, keymap, xkb};
+use super::{Result, evdev, keymap, xkb};
 use crate::platform::dylib::Library;
 use std::{
     cell::Cell,
@@ -485,6 +485,14 @@ impl Connection {
         }
     }
     fn roundtrip(&mut self) -> Result<()> {
+        self.roundtrip_checked(crate::key_hold::CheckDeadline::transport(self.deadline))?
+            .ok_or_else(|| "Wayland input exceeded its deadline".into())
+    }
+    fn roundtrip_checked(
+        &mut self,
+        deadline: crate::key_hold::CheckDeadline,
+    ) -> Result<Option<()>> {
+        const TIMEOUT: &str = "Wayland input exceeded its deadline";
         let done = Cell::new(false);
         let listener = [sync_done as *const c_void];
         let callback = unsafe {
@@ -518,9 +526,9 @@ impl Connection {
                 if done.get() {
                     break;
                 }
-                if Instant::now() >= self.deadline {
-                    return Err("Wayland input exceeded its deadline".into());
-                }
+                let Some(remaining) = deadline.remaining(TIMEOUT)? else {
+                    return Ok(None);
+                };
                 if unsafe { (self.api.prepare_read)(self.display) } != 0 {
                     continue;
                 }
@@ -533,11 +541,7 @@ impl Connection {
                     }
                     return Err("Wayland write failed".into());
                 }
-                let remaining = self
-                    .deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis()
-                    .clamp(1, 15_000) as c_int;
+                let remaining = remaining.as_millis().clamp(1, 15_000) as c_int;
                 let mut pfd = PollFd {
                     fd: unsafe { (self.api.fd)(self.display) },
                     events: 1 | if needs_write { 4 } else { 0 },
@@ -555,15 +559,27 @@ impl Connection {
                     if ready < 0 && std::io::Error::last_os_error().raw_os_error() == Some(4) {
                         continue;
                     }
-                    if ready <= 0 {
-                        return Err("Wayland input exceeded its deadline".into());
+                    if ready < 0 {
+                        return Err(format!(
+                            "Wayland poll failed: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
+                    if ready == 0 {
+                        // poll uses whole milliseconds and may return just
+                        // before the actual bound. Retry only the remaining
+                        // observation time; a hold boundary ends the check.
+                        if deadline.remaining(TIMEOUT)?.is_none() {
+                            return Ok(None);
+                        }
+                        continue;
                     }
                     if pfd.revents & (8 | 16 | 32) != 0 {
                         return Err("Wayland display disconnected".into());
                     }
                 }
             }
-            Ok(())
+            Ok(Some(()))
         })();
         // Destroying the callback also removes pending events referring to the
         // stack listener/data before this function returns on an error.
@@ -832,21 +848,26 @@ pub(super) fn original_keymap() -> Result<Vec<u8>> {
     Connection::open().map(|mut c| std::mem::take(&mut c.original))
 }
 
-/// Hold one arrow in the unchanged native map. The owned keyboard is removed
+/// Hold one permitted game key in the unchanged native map. The owned keyboard is removed
 /// after releasing the key, with the original modifier state restored.
-pub(super) fn hold_arrow(
-    direction: crate::key_hold::Direction,
+pub(super) fn hold_key(
+    key: crate::key_hold::NativeKey,
     duration_ms: u64,
     num_lock: bool,
+    allow_other_keys: bool,
     cancellation: &crate::observation::Cancellation,
     before_input: impl FnOnce() -> Result<()>,
-    mut verify_target: impl FnMut(Instant, u32) -> Result<()>,
+    mut verify_target: impl FnMut(crate::key_hold::CheckDeadline, u32, bool, &[u32]) -> Result<()>,
 ) -> Result<String> {
     use crate::key_hold::{self, Event};
     key_hold::validate_duration(duration_ms)?;
     cancellation.check()?;
     let mut connection = Connection::open()?;
-    let chord = xkb::chord_in_state(direction.native(), &[], &connection.original, num_lock)?;
+    let chord = xkb::chord_in_state(key.native(), &[], &connection.original, num_lock)?;
+    let ordinary = xkb::ordinary_keycodes(&connection.original, num_lock)?;
+    if ordinary.binary_search(&chord.code).is_err() {
+        return Err("unsupported_state: the requested key changes modifiers, locks or layout in the current map".into());
+    }
     let base = [0, 0, chord.locked, 0];
     if connection
         .original_modifiers
@@ -859,6 +880,7 @@ pub(super) fn hold_arrow(
     before_input()?;
     connection.original_modifiers = Some(base);
     let mut pending_press = false;
+    let mut pressed_by_us = false;
     let started = Instant::now();
     let result = key_hold::run(duration_ms, cancellation, |event| match event {
         Event::Press { .. } => {
@@ -881,16 +903,27 @@ pub(super) fn hold_arrow(
                 );
             }
             pending_press = true;
+            pressed_by_us = true;
             connection.key_event(chord.code, started.elapsed().as_millis() as u32, true)
         }
         Event::Check { deadline } => {
-            let deadline = deadline.min(Instant::now() + Duration::from_millis(100));
+            let deadline = key_hold::CheckDeadline::for_hold(
+                deadline,
+                Instant::now() + Duration::from_millis(100),
+                pressed_by_us,
+            );
             if pending_press {
-                connection.deadline = deadline;
-                connection.roundtrip()?;
+                if connection.roundtrip_checked(deadline)?.is_none() {
+                    return Ok(());
+                }
                 pending_press = false;
             }
-            verify_target(deadline, chord.code)
+            verify_target(
+                deadline,
+                chord.code,
+                pressed_by_us,
+                if allow_other_keys { &ordinary } else { &[] },
+            )
         }
         Event::Release { deadline } => {
             if connection.virtual_keyboard.is_null() {
@@ -903,7 +936,7 @@ pub(super) fn hold_arrow(
     });
     let restored = connection.restore();
     match (result, restored) {
-        (Ok(elapsed), Ok(())) => Ok(key_hold::receipt(direction, duration_ms, elapsed)),
+        (Ok(elapsed), Ok(())) => Ok(key_hold::native_receipt(key, duration_ms, elapsed)),
         (Err(error), Ok(())) => Err(error),
         (Ok(_), Err(error)) => Err(format!(
             "key released but keyboard state restoration failed: {error}"
@@ -912,6 +945,72 @@ pub(super) fn hold_arrow(
             "{error}; keyboard state restoration failed: {cleanup}"
         )),
     }
+}
+
+/// Submit through the already selected native device without creating or
+/// switching keyboards. The Wayland connection only captures the actual XKB
+/// map; all state checks and cancellation still use the shared hold loop.
+pub(super) fn hold_evdev(
+    key: crate::key_hold::NativeKey,
+    duration_ms: u64,
+    num_lock: bool,
+    target: (&str, &[String]),
+    cancellation: &crate::observation::Cancellation,
+    before_input: impl FnOnce() -> Result<()>,
+    mut verify_target: impl FnMut(crate::key_hold::CheckDeadline, u32, bool, &[u32]) -> Result<()>,
+) -> Result<String> {
+    use crate::key_hold::{self, Event};
+    key_hold::validate_duration(duration_ms)?;
+    cancellation.check()?;
+    let connection = Connection::open()?;
+    let chord = xkb::chord_in_state(key.native(), &[], &connection.original, num_lock)?;
+    let ordinary = xkb::ordinary_keycodes(&connection.original, num_lock)?;
+    if ordinary.binary_search(&chord.code).is_err() {
+        return Err("unsupported_state: the requested key changes modifiers, locks or layout in the current map".into());
+    }
+    if connection
+        .original_modifiers
+        .is_some_and(|observed| observed != [0, 0, chord.locked, 0])
+    {
+        return Err(
+            "unsupported_state: observed keyboard modifiers changed before the native key hold"
+                .into(),
+        );
+    }
+    let mut device = evdev::Keyboard::open_unique(target.0, target.1, chord.code)?;
+    before_input()?;
+    let elapsed = key_hold::run(duration_ms, cancellation, |event| match event {
+        Event::Press { .. } => device.press(),
+        Event::Release { .. } => device.release(),
+        Event::Check { deadline } => {
+            device.verify()?;
+            let pressed = device.pressed_by_us();
+            key_hold::check_pressed_keys(
+                true,
+                pressed,
+                chord.code,
+                device.held_codes()?,
+                |code| ordinary.binary_search(&code).is_ok(),
+            )?;
+            verify_target(
+                key_hold::CheckDeadline::for_hold(
+                    deadline,
+                    Instant::now() + Duration::from_millis(100),
+                    pressed,
+                ),
+                chord.code,
+                pressed,
+                &ordinary,
+            )
+        }
+    })?;
+    Ok(
+        key_hold::native_receipt(key, duration_ms, elapsed).replacen(
+            '{',
+            "{\"transport\":\"native_evdev\",",
+            1,
+        ),
+    )
 }
 
 pub(super) fn probe() -> Result<()> {

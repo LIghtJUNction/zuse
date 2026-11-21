@@ -1,5 +1,7 @@
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::Duration;
 use zclap::{Arg, Command, Event};
 use zuse::{
     human, json,
@@ -10,14 +12,18 @@ use zuse::{
 
 mod update;
 
+const DEFAULT_SHELL_IDLE_TIMEOUT_MS: u64 = 900_000;
+
 const CLI: Command = Command::new("zuse").args(&[
     Arg::flag("help").short('h'),
     Arg::flag("version").short('V'),
+    Arg::value("code").short('c'),
     Arg::flag("read-only"),
     Arg::flag("dry-run"),
     Arg::flag("check").conflicts("dry-run"),
     Arg::value("max-steps"),
     Arg::value("max-wait-ms"),
+    Arg::value("idle-timeout-ms"),
     Arg::flag("stdio").conflicts_with(&["host", "port", "socket"]),
     Arg::value("host").conflicts("socket"),
     Arg::value("port").conflicts("socket"),
@@ -28,15 +34,18 @@ const CLI: Command = Command::new("zuse").args(&[
 const HELP: &str = r##"zuse — an agent-native computer-use shell
 
 USAGE
+  zuse -c 'window.list()'        Run a program directly from the command line
   zuse eval 'window.list()'
   zuse run FILE                 Run a UTF-8 .zuse program; '-' reads stdin
   zuse script FILE              Run functions, imports and scoped mouse tracks
   zuse check FILE               Validate every statement without execution
   zuse shell                    Persistent line-oriented interactive shell
+  zuse session help             Persistent externally controlled Runtime sessions
   zuse doctor                   Inspect available backends and integrations
   zuse update                   Update a tracked user Cargo installation
   zuse update --check           Check the latest stable version without installing
   zuse schema                   Print the supported commands and arguments
+  zuse pkg help                 Manage locked Git packages and publish version tags
   zuse resume REQUEST_ID        Continue after completed human assistance
   zuse human list
   zuse human assist REQUEST_ID   Open a trusted local approval prompt
@@ -47,20 +56,25 @@ USAGE
   zuse mcp --socket /path/to/zuse.sock
 
 OPTIONS
+  -c, --code CODE               Execute CODE with the same options as eval
   --dry-run                     Validate and return an execution plan
   --check                       Only check for an update (zuse update)
   --read-only                   Permit observation commands only
   --max-steps NUMBER             Bound statements per execution
   --max-wait-ms NUMBER           Bound an execution's cumulative wait budget
+  --idle-timeout-ms NUMBER       Close an idle shell (default 900000; must be positive)
   -h, --help                    Show help
   -V, --version                 Show version
 
 Programs use named calls, for example:
-  mouse.use(kind="independent", color="#2FE2FF")
+  mouse.use(kind="user", appearance="system")
   mouse.move_to(text="Save", role="button", duration=450, jitter=0.8, seed=42)
   mouse.move(x=400, y=240, duration=300, curve="bezier", jitter=1, seed=42)
   keyboard.type(text="Hello")
   human.request(kind="login", message="Please sign in in the local browser")
+
+Run multiple calls without a script file:
+  zuse -c 'mouse.use(kind="user",appearance="system"); mouse.move(x=400,y=240)'
 
 Reusable functions can be loaded once in the persistent shell:
   import(path="wechat.zuse", as="wechat")
@@ -78,6 +92,7 @@ Explicit user_mouse(appearance="system") borrows the supported system pointer.
 
 Output is JSON. Errors and interactive prompts go to stderr.
 The shell retains functions, browser/mobile sessions, device handles and harnesses until it exits.
+Idle shells close after 15 minutes by default. Command execution does not count toward idle time.
 "##;
 
 fn read_source(path: &str) -> Result<String, String> {
@@ -191,28 +206,62 @@ fn execute_file(
     }
 }
 
-fn repl(options: Options) -> Result<i32, String> {
+fn shell_input() -> Result<Receiver<Result<String, String>>, String> {
+    let (lines, input) = mpsc::sync_channel(1);
+    // Reading a partial line may block indefinitely. The shell owns the Runtime
+    // on its main thread and can drop it without waiting for this reader.
+    let _reader = std::thread::Builder::new()
+        .name("zuse-stdin".into())
+        .spawn(move || {
+            let mut input = io::stdin().lock();
+            loop {
+                let mut line = String::new();
+                let result = match input
+                    .by_ref()
+                    .take(MAX_SCRIPT_BYTES as u64 + 1)
+                    .read_line(&mut line)
+                {
+                    Ok(0) => break,
+                    Ok(_) if line.len() > MAX_SCRIPT_BYTES => {
+                        Err("shell line exceeds the 1 MiB limit".into())
+                    }
+                    Ok(_) => Ok(line),
+                    Err(error) => Err(error.to_string()),
+                };
+                let failed = result.is_err();
+                if lines.send(result).is_err() || failed {
+                    break;
+                }
+            }
+        })
+        .map_err(|error| format!("cannot start shell input reader: {error}"))?;
+    Ok(input)
+}
+
+fn repl(options: Options, idle_timeout: Duration) -> Result<i32, String> {
     let interactive = io::stdin().is_terminal();
     let mut machine = Runtime::new();
-    let mut input = io::stdin().lock();
+    let input = shell_input()?;
     let mut failed = false;
     loop {
         if interactive {
             eprint!("zuse> ");
             io::stderr().flush().map_err(|e| e.to_string())?;
         }
-        let mut line = String::new();
-        let count = input
-            .by_ref()
-            .take(MAX_SCRIPT_BYTES as u64 + 1)
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?;
-        if count == 0 {
-            break;
-        }
-        if line.len() > MAX_SCRIPT_BYTES {
-            return Err("shell line exceeds the 1 MiB limit".into());
-        }
+        let line = match input.recv_timeout(idle_timeout) {
+            Ok(line) => line?,
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {
+                if interactive {
+                    eprintln!();
+                }
+                eprintln!(
+                    "zuse shell: idle timeout after {} ms",
+                    idle_timeout.as_millis()
+                );
+                break;
+            }
+        };
         match line.trim() {
             "" => continue,
             ":quit" | ":exit" => break,
@@ -248,13 +297,22 @@ fn run() -> Result<i32, String> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     let argv = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    if argv.first() == Some(&"pkg") {
+        return output(zuse::packages::run(&argv[1..])?);
+    }
+    if argv.first() == Some(&"session") {
+        // Reading a failed job receipt is a successful controller request.
+        return output(zuse::session::run(&argv[1..])?).map(|_| 0);
+    }
     let mut parser = CLI.parse(&argv);
     let mut words = Vec::new();
+    let mut code = None;
     let mut options = Options::default();
     let mut stdio = false;
     let mut host = None;
     let mut port = None;
     let mut socket = None;
+    let mut idle_timeout_ms = None;
     let mut update_check = false;
     while let Some(event) = parser.next().map_err(|e| e.to_string())? {
         match event {
@@ -270,6 +328,11 @@ fn run() -> Result<i32, String> {
             Event::Flag { arg: "dry-run" } => options.dry_run = true,
             Event::Flag { arg: "check" } => update_check = true,
             Event::Flag { arg: "stdio" } => stdio = true,
+            Event::Value { arg: "code", value } => {
+                if code.replace(value).is_some() {
+                    return Err("-c/--code may only be provided once".into());
+                }
+            }
             Event::Value {
                 arg: "max-steps",
                 value,
@@ -287,6 +350,18 @@ fn run() -> Result<i32, String> {
                     .map_err(|_| "max-wait-ms must be an integer".to_string())?
             }
             Event::Value { arg: "host", value } => host = Some(value),
+            Event::Value {
+                arg: "idle-timeout-ms",
+                value,
+            } => {
+                let timeout = value
+                    .parse::<u64>()
+                    .map_err(|_| "idle-timeout-ms must be a positive integer".to_string())?;
+                if timeout == 0 {
+                    return Err("idle-timeout-ms must be a positive integer".into());
+                }
+                idle_timeout_ms = Some(timeout);
+            }
             Event::Value { arg: "port", value } => {
                 port = Some(
                     value
@@ -306,12 +381,23 @@ fn run() -> Result<i32, String> {
         }
     }
     parser.finish().map_err(|e| e.to_string())?;
+    if let Some(source) = code {
+        if !words.is_empty() {
+            return Err(
+                "-c/--code cannot be combined with a command or positional arguments".into(),
+            );
+        }
+        words.extend(["eval", source]);
+    }
     let command = words.first().copied().unwrap_or("help");
     if command != "mcp" && (stdio || host.is_some() || port.is_some() || socket.is_some()) {
         return Err("transport options are only valid for zuse mcp".into());
     }
     if command != "update" && update_check {
         return Err("--check is only valid for zuse update".into());
+    }
+    if command != "shell" && idle_timeout_ms.is_some() {
+        return Err("--idle-timeout-ms is only valid for zuse shell".into());
     }
     match command {
         "help" => {
@@ -338,7 +424,10 @@ fn run() -> Result<i32, String> {
         }
         "shell" => {
             exactly(&words, 1, "shell")?;
-            repl(options)
+            repl(
+                options,
+                Duration::from_millis(idle_timeout_ms.unwrap_or(DEFAULT_SHELL_IDLE_TIMEOUT_MS)),
+            )
         }
         "doctor" => {
             exactly(&words, 1, "doctor")?;

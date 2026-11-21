@@ -51,6 +51,15 @@ impl Cancellation {
         {
             let _guard = self.0.dispatch.lock().unwrap_or_else(|e| e.into_inner());
         }
+        self.wake_waiters();
+    }
+    /// Request cancellation without waiting for an active native dispatch.
+    /// Controllers must wait for execution to finish before confirming cleanup.
+    pub(crate) fn request_cancel(&self) {
+        self.0.cancelled.store(true, Ordering::Release);
+        self.wake_waiters();
+    }
+    fn wake_waiters(&self) {
         let wake = self
             .0
             .wake
@@ -676,6 +685,41 @@ mod tests {
                 .starts_with("cancelled:")
         );
         assert!(!sent);
+    }
+    #[test]
+    fn cancellation_request_wakes_waiters_without_waiting_for_dispatch() {
+        use std::{sync::mpsc, thread};
+        let token = Cancellation::default();
+        let woke = Arc::new(AtomicBool::new(false));
+        let observed = woke.clone();
+        let _wake = token.on_cancel(move || {
+            observed.store(true, Ordering::Release);
+        });
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let active = token.clone();
+        let dispatch = thread::spawn(move || {
+            active.dispatch(|| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let requested = token.clone();
+        let request = thread::spawn(move || {
+            requested.request_cancel();
+            done_tx.send(()).unwrap();
+        });
+        let nonblocking = done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+        let woke_before_drain = woke.load(Ordering::Acquire);
+        // Always release the fixture before assertions, even on a regression.
+        release_tx.send(()).unwrap();
+        dispatch.join().unwrap().unwrap();
+        request.join().unwrap();
+        assert!(nonblocking && woke_before_drain);
+        assert!(token.dispatch(|| Ok(())).is_err());
     }
     #[test]
     fn cancellation_wakes_a_local_sleep_without_polling() {

@@ -9,6 +9,9 @@ pub const MAX_DURATION_MS: u32 = 3_600_000;
 pub const MAX_STEPS: u32 = 65_536;
 pub const MAX_COORDINATE: f64 = 16_777_216.0;
 pub const MAX_JITTER: f64 = 1_000.0;
+/// Shared defaults for moving to a target, distinct from drawing geometry.
+pub const DEFAULT_MOVE_DURATION_MS: u32 = 350;
+pub const DEFAULT_MOVE_JITTER: f64 = 0.6;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Find Zuse Packages"
+  short_description: "Find, inspect, pin, and import reusable Zuse packages"
+  default_prompt: "Use $zuse-find-package to find and install a suitable Zuse package, then inspect its exported functions."

@@ -228,10 +228,15 @@ fn cycles_missing_paths_and_nonliteral_imports_are_visible_errors() {
             "{source}"
         );
     }
-    let error = session
+    let declared = session
         .prepare("fn a(){b()} fn b(){a()}", Options::default())
+        .unwrap();
+    assert!(declared.source.is_empty());
+    let error = declared
+        .next_session
+        .prepare("a()", Options::default())
         .unwrap_err();
-    assert!(error.contains("recursive function cycle"), "{error}");
+    assert!(error.contains("function call depth exceeds"), "{error}");
     assert!(session.functions().is_empty());
 }
 
@@ -451,13 +456,15 @@ fn scoped_module_functions_keep_local_and_parameter_shadowing() {
 }
 
 #[test]
-fn module_alias_shadowing_does_not_hide_function_cycles() {
+fn module_alias_shadowing_does_not_hide_called_function_cycles() {
     let source = r#"
         import(source="fn b(){a()}",as="ops");
         fn a(){ops.b();{let ops=mouse();}}
     "#;
-    let error = ModuleSession::default()
+    let declared = ModuleSession::default()
         .prepare(source, Options::default())
-        .unwrap_err();
-    assert!(error.contains("recursive function cycle"), "{error}");
+        .unwrap();
+    assert!(declared.source.is_empty());
+    let error = script::compile(&format!("{source}\na()"), Options::default()).unwrap_err();
+    assert!(error.contains("function call depth exceeds"), "{error}");
 }

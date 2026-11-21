@@ -1,0 +1,20 @@
+/// Move player two for a bounded interval, then fire a bounded burst.
+/// Supply the native ID of the observed, focused game window.
+/// The caller must confirm the game's arrow-key and slash-key controls.
+fn move_and_fire(window, direction, move_ms, shots) {
+    keyboard.hold(key=direction, duration=move_ms, window=window, allow_other_keys=true)
+    for i in 0..shots {
+        keyboard.hold(key="slash", duration=80, window=window, allow_other_keys=true)
+        wait(ms=60)
+    }
+}
+
+/// Rotate the turret, then fire after releasing the rotation key.
+/// Confirm that this game's turret key is period before calling.
+fn turn_and_fire(window, turn_ms, shots) {
+    keyboard.hold(key="period", duration=turn_ms, window=window, allow_other_keys=true)
+    for i in 0..shots {
+        keyboard.hold(key="slash", duration=80, window=window, allow_other_keys=true)
+        wait(ms=60)
+    }
+}

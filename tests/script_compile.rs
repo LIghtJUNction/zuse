@@ -85,6 +85,27 @@ fn aliases_and_function_parameters_borrow_without_creating_mice() {
 }
 
 #[test]
+fn scalar_expansion_keeps_owned_lifetimes_and_borrowed_handles() {
+    let plan = script::compile(
+        "fn temporary(x){let p=mouse();p.move(x=x,y=0,duration=0)} for i in 0..40 {temporary(i)}",
+        options(),
+    )
+    .unwrap();
+    // Forty creations are legal only when each local mouse closes on return;
+    // flattening ownership into one scope would exceed the 32-live-mouse limit.
+    assert_eq!(plan.summary.mice, 40);
+    assert_eq!(plan.summary.steps, 80);
+    let plan = script::compile(
+        "let p=user_mouse();for i in 0..40 {let alias=p;alias.position()}p.position()",
+        options(),
+    )
+    .unwrap();
+    assert_eq!(plan.summary.mice, 1);
+    assert_eq!(plan.summary.shared_mice, 1);
+    assert_eq!(plan.summary.steps, 42);
+}
+
+#[test]
 fn nested_scopes_allow_shadowing_and_restore_the_outer_binding() {
     let plan = script::compile(
         "let a=mouse(); { let a=mouse(); a.position(); } a.position();",
@@ -135,10 +156,22 @@ fn duplicate_bindings_and_invalid_function_declarations_are_rejected() {
 }
 
 #[test]
-fn recursion_is_rejected_even_when_the_function_is_not_called() {
-    rejected("fn cycle() { cycle(); }", "recursive function");
-    rejected("fn a(p) { b(p); } fn b(q) { a(q); }", "recursive function");
-    rejected("fn a() { repeat 0 { a(); } }", "recursive function");
+fn recursive_declarations_are_allowed_and_actual_expansion_is_bounded() {
+    for source in [
+        "fn cycle() { cycle(); }",
+        "fn a(p) { b(p); } fn b(q) { a(q); }",
+        "fn a() { repeat 0 { a(); } } a()",
+    ] {
+        assert_eq!(script::compile(source, options()).unwrap().summary.steps, 0);
+    }
+    rejected(
+        "fn cycle() { cycle(); } cycle()",
+        "function call depth exceeds",
+    );
+    rejected(
+        "fn a(p) { b(p); } fn b(q) { a(q); } let p=mouse();a(p)",
+        "function call depth exceeds",
+    );
 }
 
 #[test]
@@ -181,16 +214,22 @@ fn function_expansion_and_lexical_blocks_share_a_tree_depth_limit() {
 }
 
 #[test]
-fn function_values_and_arguments_must_be_explicit_mouse_borrows() {
+fn functions_accept_scalars_and_borrow_handles_but_do_not_return_desktop_values() {
+    assert_eq!(
+        script::compile("let a=1; fn f(p) {} f(a); f(3);", options())
+            .unwrap()
+            .summary
+            .steps,
+        0
+    );
     for (source, error) in [
         ("missing();", "unknown function"),
         ("mouse();", "must be bound with let"),
-        ("let a=1;", "let requires"),
-        ("let a=mouse(); let b=a.position();", "let requires"),
-        ("fn f() {} let a=f();", "let requires"),
+        ("let a=mouse(); let b=a.position();", "only pure math"),
+        ("fn f() {} let a=f();", "only pure math"),
         ("fn f(p) {} f();", "requires p"),
-        ("fn f(p) {} f(mouse());", "must be mouse variables"),
-        ("fn f(p) {} f(3);", "must be mouse variables"),
+        ("fn f(p) {} f(mouse());", "only pure math"),
+        ("fn f(p) {p.position()} f(3);", "is a scalar"),
         ("fn f(p) {} f(missing);", "unknown or out-of-scope"),
         ("fn f(p) {} let a=mouse(); f(q=a);", "has no argument"),
         ("fn f(p) {} let a=mouse(); f(a,p=a);", "duplicate value"),

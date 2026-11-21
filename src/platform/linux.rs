@@ -80,9 +80,22 @@ impl Desktop {
         window: &str,
         cancellation: &crate::observation::Cancellation,
     ) -> Result<String> {
+        self.hold_key_with_other_keys(key, duration_ms, window, false, cancellation)
+    }
+    /// Opt in to other ordinary keys while retaining target and ownership checks.
+    pub fn hold_key_with_other_keys(
+        &mut self,
+        key: &str,
+        duration_ms: u64,
+        window: &str,
+        allow_other_keys: bool,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
         match &mut self.inner {
-            Backend::X11(x) => x.hold_key(key, duration_ms, window, cancellation),
-            Backend::Wayland(w) => w.hold_key(key, duration_ms, window, cancellation),
+            Backend::X11(x) => x.hold_key(key, duration_ms, window, allow_other_keys, cancellation),
+            Backend::Wayland(w) => {
+                w.hold_key(key, duration_ms, window, allow_other_keys, cancellation)
+            }
         }
     }
     pub fn num_lock(&self, action: &str) -> Result<String> {

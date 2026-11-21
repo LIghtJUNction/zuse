@@ -2,7 +2,7 @@
 //! Loading parses data only. The caller validates the complete prepared source
 //! with the selected executor before replacing its session with next_session.
 use super::syntax::{self, Argument, Call, Expr, Span, Statement, StatementKind};
-use crate::{json, runtime::Options};
+use crate::{json, packages, runtime::Options};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
@@ -10,6 +10,9 @@ use std::{
     path::{Path, PathBuf},
     sync::OnceLock,
 };
+
+#[path = "scalar.rs"]
+mod scalar;
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_MODULES: usize = 64;
@@ -192,11 +195,21 @@ impl ModuleSession {
         let (program, descriptions) =
             syntax::parse_module_documented(source).map_err(|error| format!("<input>: {error}"))?;
         let had_directives = program.statements.iter().any(is_directive);
+        // Capture the entry base once. Only package imports inspect a manifest;
+        // a nested module must never replace this root with its own project.
+        let package_base = match base {
+            Some(base) if base.is_absolute() => Ok(base.to_path_buf()),
+            base => std::env::current_dir()
+                .map(|cwd| base.map_or(cwd.clone(), |base| cwd.join(base)))
+                .map_err(|error| format!("cannot resolve package entry directory: {error}")),
+        };
         let mut loader = Loader {
             next: self.clone(),
             read_bytes: source.len(),
             files: Vec::new(),
             depth: 0,
+            package_base,
+            package_root: None,
         };
         let items = loader.load(
             program.statements,
@@ -207,8 +220,26 @@ impl ModuleSession {
             false,
         )?;
         loader.next.check_limits()?;
-        validate_graph(&loader.next)?;
         let reachable = reachable_functions(&loader.next, &items)?;
+        if scalar::required(&loader.next, &items, &reachable) {
+            let statements = scalar::lower(&loader.next, &items, options)?;
+            let scoped = force_scoped || statements_are_scoped(&statements, &[]);
+            let mut output = Output::default();
+            if scoped {
+                write_statements(&mut output, &statements)?;
+            } else {
+                scalar::write_flat(&mut output, &statements)?;
+            }
+            return Ok(Prepared {
+                source: output.text,
+                next_session: loader.next,
+                mode: if scoped {
+                    ProgramMode::Scoped
+                } else {
+                    ProgramMode::Flat
+                },
+            });
+        }
         let scoped = force_scoped
             || items
                 .iter()
@@ -296,10 +327,18 @@ pub fn uses_scoped_syntax(source: &str) -> Result<bool> {
 
 fn statements_are_scoped(statements: &[Statement], params: &[String]) -> bool {
     statements.iter().any(|statement| match &statement.kind {
-        StatementKind::Let { .. } | StatementKind::Parallel(_) => true,
+        StatementKind::Let { value, .. } => matches!(value, Expr::Call(call)
+            if call.receiver.is_none() && matches!(call.name.as_str(), "mouse" | "user_mouse")),
+        StatementKind::Parallel(_) => true,
         StatementKind::Block(body)
         | StatementKind::Sequence(body)
         | StatementKind::Repeat { body, .. } => statements_are_scoped(body, params),
+        StatementKind::If {
+            then_body,
+            else_body,
+            ..
+        } => statements_are_scoped(then_body, params) || statements_are_scoped(else_body, params),
+        StatementKind::For { body, .. } => statements_are_scoped(body, params),
         StatementKind::Function { params, body, .. } => statements_are_scoped(body, params),
         StatementKind::Call(call) => {
             (call.receiver.is_none() && matches!(call.name.as_str(), "mouse" | "user_mouse"))
@@ -326,9 +365,19 @@ struct Loader {
     read_bytes: usize,
     files: Vec<PathBuf>,
     depth: usize,
+    package_base: Result<PathBuf>,
+    package_root: Option<PathBuf>,
 }
 
 impl Loader {
+    fn package_path(&mut self, spec: &str) -> Result<PathBuf> {
+        if self.package_root.is_none() {
+            let base = self.package_base.as_ref().map_err(Clone::clone)?;
+            self.package_root = Some(packages::project_root(base)?);
+        }
+        packages::resolve_import(self.package_root.as_ref().unwrap(), spec)
+    }
+
     fn charge(&mut self, bytes: usize) -> Result<()> {
         self.read_bytes = self
             .read_bytes
@@ -541,10 +590,16 @@ impl Loader {
                 return Err(at(
                     origin,
                     call.span,
-                    "import path must be a literal local file path of 1..4096 bytes",
+                    "import path must be a literal local path or pkg: specifier of 1..4096 bytes",
                 ));
             }
-            let requested = base.map_or_else(|| PathBuf::from(&path), |base| base.join(&path));
+            let package = path.strip_prefix("pkg:");
+            let requested = if package.is_some() {
+                self.package_path(&path)
+                    .map_err(|error| at(origin, call.span, error))?
+            } else {
+                base.map_or_else(|| PathBuf::from(&path), |base| base.join(&path))
+            };
             let canonical = requested.canonicalize().map_err(|error| {
                 at(
                     origin,
@@ -598,6 +653,11 @@ impl Loader {
                 format!("import {}: module source is not UTF-8", canonical.display())
             })?;
             let alias = alias
+                .or_else(|| {
+                    package
+                        .and_then(|spec| spec.rsplit('/').next())
+                        .map(str::to_owned)
+                })
                 .or_else(|| {
                     canonical
                         .file_stem()
@@ -718,7 +778,18 @@ fn valid_name(name: &str) -> Result<()> {
     }
     if matches!(
         name,
-        "let" | "fn" | "parallel" | "sequence" | "serial" | "repeat" | "true" | "false"
+        "let"
+            | "fn"
+            | "parallel"
+            | "sequence"
+            | "serial"
+            | "repeat"
+            | "true"
+            | "false"
+            | "if"
+            | "else"
+            | "for"
+            | "in"
     ) {
         return Err(format!(
             "module/function name {name:?} is a reserved keyword"
@@ -791,12 +862,36 @@ fn validate_body(statements: &[Statement], origin: &str) -> Result<()> {
             | StatementKind::Parallel(body)
             | StatementKind::Sequence(body)
             | StatementKind::Repeat { body, .. } => validate_body(body, origin)?,
+            StatementKind::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                validate_expression(condition, origin)?;
+                validate_body(then_body, origin)?;
+                validate_body(else_body, origin)?;
+            }
+            StatementKind::For {
+                start, end, body, ..
+            } => {
+                validate_expression(start, origin)?;
+                validate_expression(end, origin)?;
+                validate_body(body, origin)?;
+            }
         }
     }
     Ok(())
 }
 
 fn validate_expression(expression: &Expr, origin: &str) -> Result<()> {
+    match expression {
+        Expr::Neg(value) => return validate_expression(value, origin),
+        Expr::Binary { left, right, .. } => {
+            validate_expression(left, origin)?;
+            return validate_expression(right, origin);
+        }
+        _ => {}
+    }
     if let Expr::Call(call) = expression {
         if directive(call).is_some() {
             return Err(at(
@@ -817,6 +912,14 @@ fn visit_expression_calls(
     bound: &BTreeSet<String>,
     visitor: &mut impl FnMut(&Call, &BTreeSet<String>) -> Result<()>,
 ) -> Result<()> {
+    match expression {
+        Expr::Neg(value) => return visit_expression_calls(value, bound, visitor),
+        Expr::Binary { left, right, .. } => {
+            visit_expression_calls(left, bound, visitor)?;
+            return visit_expression_calls(right, bound, visitor);
+        }
+        _ => {}
+    }
     if let Expr::Call(call) = expression {
         visitor(call, bound)?;
         for argument in &call.args {
@@ -855,6 +958,27 @@ fn visit_calls(
                     visit_calls(std::slice::from_ref(branch), &mut bound.clone(), visitor)?;
                 }
             }
+            StatementKind::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                visit_expression_calls(condition, bound, visitor)?;
+                visit_calls(then_body, &mut bound.clone(), visitor)?;
+                visit_calls(else_body, &mut bound.clone(), visitor)?;
+            }
+            StatementKind::For {
+                name,
+                start,
+                end,
+                body,
+            } => {
+                visit_expression_calls(start, bound, visitor)?;
+                visit_expression_calls(end, bound, visitor)?;
+                let mut inner = bound.clone();
+                inner.insert(name.clone());
+                visit_calls(body, &mut inner, visitor)?;
+            }
             StatementKind::Function { .. } => {}
         }
     }
@@ -884,52 +1008,6 @@ fn resolve(
     session.functions.contains_key(&name).then_some(name)
 }
 
-fn validate_graph(session: &ModuleSession) -> Result<()> {
-    fn visit(
-        name: &str,
-        session: &ModuleSession,
-        stack: &mut Vec<String>,
-        done: &mut BTreeSet<String>,
-    ) -> Result<()> {
-        if stack.iter().any(|active| active == name) {
-            let function = &session.functions[name];
-            return Err(at(
-                &function.origin,
-                function.span,
-                format!("recursive function cycle: {} -> {name}", stack.join(" -> ")),
-            ));
-        }
-        if done.contains(name) {
-            return Ok(());
-        }
-        if stack.len() >= MAX_CALL_DEPTH {
-            let function = &session.functions[name];
-            return Err(at(
-                &function.origin,
-                function.span,
-                format!("function call depth exceeds {MAX_CALL_DEPTH}: {name}"),
-            ));
-        }
-        stack.push(name.into());
-        let function = &session.functions[name];
-        let mut bound = function.params.iter().cloned().collect();
-        visit_calls(&function.body, &mut bound, &mut |call, bound| {
-            if let Some(next) = resolve(session, call, &function.namespace, bound) {
-                visit(&next, session, stack, done)?;
-            }
-            Ok(())
-        })?;
-        stack.pop();
-        done.insert(name.into());
-        Ok(())
-    }
-    let mut done = BTreeSet::new();
-    for name in session.functions.keys() {
-        visit(name, session, &mut Vec::new(), &mut done)?;
-    }
-    Ok(())
-}
-
 fn reachable_functions(session: &ModuleSession, items: &[Item]) -> Result<BTreeSet<String>> {
     fn visit(
         statements: &[Statement],
@@ -940,7 +1018,7 @@ fn reachable_functions(session: &ModuleSession, items: &[Item]) -> Result<BTreeS
         reached: &mut BTreeSet<String>,
         depth: usize,
     ) -> Result<()> {
-        if depth > MAX_CALL_DEPTH {
+        if depth > MAX_FUNCTIONS {
             let span = statements
                 .first()
                 .map(|statement| statement.span)
@@ -953,7 +1031,7 @@ fn reachable_functions(session: &ModuleSession, items: &[Item]) -> Result<BTreeS
             return Err(at(
                 origin,
                 span,
-                format!("function call depth exceeds {MAX_CALL_DEPTH}"),
+                format!("function graph exceeds {MAX_FUNCTIONS} declarations"),
             ));
         }
         visit_calls(statements, bound, &mut |call, bound| {
@@ -1010,6 +1088,18 @@ fn write_expression(output: &mut Output, expression: &Expr) -> Result<()> {
         Expr::String(text) => output.push(&json::quote(text)),
         Expr::Bool(value) => output.push(if *value { "true" } else { "false" }),
         Expr::Call(call) => write_call(output, call),
+        Expr::Neg(value) => {
+            output.push("-(")?;
+            write_expression(output, value)?;
+            output.push(")")
+        }
+        Expr::Binary { left, op, right } => {
+            output.push("(")?;
+            write_expression(output, left)?;
+            output.push(op.text())?;
+            write_expression(output, right)?;
+            output.push(")")
+        }
     }
 }
 
@@ -1080,6 +1170,35 @@ fn write_statements(output: &mut Output, statements: &[Statement]) -> Result<()>
                 write_statements(output, body)?;
                 output.push("}\n")?;
             }
+            StatementKind::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                output.push("if ")?;
+                write_expression(output, condition)?;
+                output.push("{\n")?;
+                write_statements(output, then_body)?;
+                output.push("}else{\n")?;
+                write_statements(output, else_body)?;
+                output.push("}\n")?;
+            }
+            StatementKind::For {
+                name,
+                start,
+                end,
+                body,
+            } => {
+                output.push("for ")?;
+                output.push(name)?;
+                output.push(" in ")?;
+                write_expression(output, start)?;
+                output.push("..")?;
+                write_expression(output, end)?;
+                output.push("{\n")?;
+                write_statements(output, body)?;
+                output.push("}\n")?;
+            }
         }
     }
     Ok(())
@@ -1121,8 +1240,14 @@ fn scoped_source(
         session: &ModuleSession,
         names: &BTreeMap<String, String>,
     ) {
-        if let Expr::Call(call) = expression {
-            *call = rename_call(call, namespace, bound, session, names);
+        match expression {
+            Expr::Call(call) => *call = rename_call(call, namespace, bound, session, names),
+            Expr::Neg(value) => rename_expression(value, namespace, bound, session, names),
+            Expr::Binary { left, right, .. } => {
+                rename_expression(left, namespace, bound, session, names);
+                rename_expression(right, namespace, bound, session, names);
+            }
+            _ => {}
         }
     }
     fn rename_statement(
@@ -1153,6 +1278,27 @@ fn scoped_source(
                         rename_statement(branch, namespace, &mut bound.clone(), session, names)
                     })
                     .collect();
+            }
+            StatementKind::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                rename_expression(condition, namespace, bound, session, names);
+                *then_body = rename(then_body, namespace, &mut bound.clone(), session, names);
+                *else_body = rename(else_body, namespace, &mut bound.clone(), session, names);
+            }
+            StatementKind::For {
+                name,
+                start,
+                end,
+                body,
+            } => {
+                rename_expression(start, namespace, bound, session, names);
+                rename_expression(end, namespace, bound, session, names);
+                let mut inner = bound.clone();
+                inner.insert(name.clone());
+                *body = rename(body, namespace, &mut inner, session, names);
             }
             StatementKind::Function { .. } => {}
         }
@@ -1243,7 +1389,10 @@ impl Expansion<'_> {
                         "nested function declaration is not supported",
                     ));
                 }
-                StatementKind::Let { .. } | StatementKind::Parallel(_) => {
+                StatementKind::Let { .. }
+                | StatementKind::Parallel(_)
+                | StatementKind::If { .. }
+                | StatementKind::For { .. } => {
                     return Err(at(
                         origin,
                         statement.span,
@@ -1264,13 +1413,6 @@ impl Expansion<'_> {
     ) -> Result<()> {
         let bound = values.keys().cloned().collect();
         if let Some(name) = resolve(self.session, call, namespace, &bound) {
-            if self.stack.contains(&name) {
-                return Err(at(
-                    origin,
-                    call.span,
-                    format!("recursive function {name:?} is not supported"),
-                ));
-            }
             if self.stack.len() >= MAX_CALL_DEPTH {
                 return Err(at(origin, call.span, "function call depth exceeds 32"));
             }
@@ -1318,6 +1460,9 @@ fn literal(
             span,
             "module function arguments must be literals; functions do not return values",
         )),
+        Expr::Binary { .. } => scalar::legacy_word(expression, &values.keys().cloned().collect())
+            .map(Expr::Identifier)
+            .ok_or_else(|| at(origin, span, "scalar expression was not expanded")),
         _ => Ok(expression.clone()),
     }
 }

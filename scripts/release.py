@@ -47,7 +47,7 @@ def package(target):
         raise FileNotFoundError("build the release target first: " + str(executable))
     prefix = "zuse-v" + version + "-" + target
     files = [(executable, name, 0o755)]
-    for pattern in ("README*.md", "LICENSE", "CHANGELOG.md", "docs/*.md", "examples/*.zuse"):
+    for pattern in ("README*.md", "LICENSE", "CHANGELOG.md", "docs/*.md", "examples/*.zuse", "examples/*.py", "skills/**/*"):
         for path in sorted(ROOT.glob(pattern)):
             if path.is_file():
                 files.append((path, str(path.relative_to(ROOT)).replace("\\", "/"), 0o644))
