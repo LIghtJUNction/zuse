@@ -26,9 +26,10 @@ jobs:
       - name: Install isolated USB fixture build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libusb-1.0-0-dev
-      - name: Exercise Linux PTY and isolated libusb boundaries
+      - name: Exercise updater, Linux PTY and isolated libusb boundaries
         if: runner.os == 'Linux'
         run: |
           cargo build --locked
+          python tests/cli_update.py --binary target/debug/zuse
           python tests/native_serial.py --binary target/debug/zuse --output target/ci-native-serial
           python tests/native_usb.py --binary target/debug/zuse --output target/ci-native-usb
