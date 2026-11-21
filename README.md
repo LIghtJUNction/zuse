@@ -17,7 +17,7 @@ The runtime checks the entire program before its first effect. Unknown operation
 Rust 1.100 or newer:
 
 ~~~sh
-cargo install zuse-computer --locked
+cargo install zuse-computer --version 0.4.2 --locked
 zuse --version
 zuse doctor
 ~~~
@@ -31,6 +31,18 @@ cargo install --git https://github.com/LIghtJUNction/zuse --locked
 ~~~
 
 Native archives for Linux, Windows, and macOS are published on the [Releases page](https://github.com/LIghtJUNction/zuse/releases). Extract the matching archive and place its zuse executable on your PATH. Remove that executable to uninstall; Cargo installations use `cargo uninstall zuse-computer`.
+
+### Update
+
+~~~sh
+zuse update --check       # Query the latest stable version; do not install
+zuse update --dry-run     # Show the exact update command; do not install
+zuse update              # Update a tracked user Cargo installation
+~~~
+
+The updater needs `curl` for HTTPS metadata and Cargo for installation. It verifies the `zuse-computer` ownership record beside the running executable, preserves that installation's root, features, profile and target, and delegates replacement to Cargo. Registry installations use an exact stable version from crates.io; official Git installations use an existing stable release tag from the Zuse repository. Newer development versions are kept.
+
+System and AUR installations use their package manager. Portable archives, untracked executables, custom registry sources and explicitly pinned Git branches/revisions receive a manual-update explanation. The command never chooses another installation prefix or invokes privilege escalation. JSON goes to stdout; progress and failures go to stderr. See [update behavior and verification](docs/update.md).
 
 ## Project Z dependencies
 
