@@ -10,7 +10,7 @@ fn input() {
     let value = std::env::var("ZUSE_X11_UTF8_VALUE").unwrap();
     let action = std::env::var("ZUSE_X11_UTF8_ACTION").unwrap();
     let output = std::env::var("ZUSE_X11_UTF8_RESULT").unwrap();
-    let result = (|| -> Result<(), String> {
+    let result = (|| -> Result<String, String> {
         let mut desktop = zuse::platform::Desktop::connect()?;
         if desktop.backend() != "x11" {
             return Err("fixture did not use X11".into());
@@ -26,20 +26,22 @@ fn input() {
                     std::io::stdin().read_line(&mut line).unwrap();
                     assert_eq!(line.trim(), "GO");
                 }
-                desktop.type_text(&value)
+                desktop.type_text(&value).map(|()| "ok".into())
             }
-            "background" => desktop.type_into(&target, &value),
+            "background" => desktop.type_into(&target, &value).map(|()| "ok".into()),
             "key" => {
                 desktop.focus(&target)?;
-                desktop.key(&value)
+                desktop.key(&value).map(|()| "ok".into())
             }
+            "num_lock" => desktop.num_lock(&value),
+            "keyboard_state" => desktop.keyboard_status(),
             _ => Err("unknown fixture action".into()),
         }
     })();
     std::fs::write(
         output,
         match result {
-            Ok(()) => "ok".to_owned(),
+            Ok(value) => value,
             Err(error) => format!("error: {error}"),
         },
     )

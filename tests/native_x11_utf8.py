@@ -244,6 +244,12 @@ def main():
             elif action == "key":
                 operation = "keyboard.key"
                 code = f"keyboard.key(key={quote(value)})"
+            elif action == "num_lock":
+                operation = "keyboard.num_lock"
+                code = f"keyboard.num_lock(state={quote(value)})"
+            elif action == "keyboard_state":
+                operation = "keyboard.state"
+                code = "keyboard.state()"
             else:
                 raise RuntimeError(f"unknown CLI fixture action: {action}")
             if pause_before and action != "type":
@@ -255,7 +261,7 @@ def main():
             timer = None
             try:
                 setup = [("system.capabilities", "system.capabilities()")]
-                if action != "background":
+                if action in ("type", "key"):
                     setup.append(("window.focus", f"window.focus(id={quote(window)})"))
                 for setup_operation, source in setup:
                     child.stdin.write((source + "\n").encode())
@@ -284,6 +290,8 @@ def main():
                 if child.returncode != expected_exit:
                     raise RuntimeError(f"CLI exit code disagrees with its result: {record!r}")
                 result = "ok" if expected_exit == 0 else "error: " + reply["error"]
+                if expected_exit == 0 and action in ("num_lock", "keyboard_state"):
+                    result = json.dumps(reply["results"][0]["value"])
                 return result, time.monotonic() - started
             finally:
                 if timer:
@@ -360,6 +368,92 @@ def main():
             check("mapped ASCII uses confirmed insertion while preserving held Shift", "ASCII", "你好🙂ASCII")
         finally:
             assert command("SHIFT_UP") == "OK"
+
+        def keyboard_result(value="", action="keyboard_state"):
+            result, elapsed = invoke(value, action)
+            assert not result.startswith("error:"), result
+            status = json.loads(result)
+            assert status["backend"] == "x11" and status["scope"] == "core_keyboard", status
+            assert status["keys_held"] is False, status
+            assert type(status["current"]["numLock"]) is bool, status
+            assert type(status["current"]["capsLock"]) is bool, status
+            return status, elapsed
+
+        def keyboard_fields(snapshot):
+            fields = tuple(map(int, snapshot["keyboard"].split(",")))
+            assert len(fields) == 8, snapshot
+            return fields
+
+        reset()
+        initial_status, _ = keyboard_result()
+        initial_native = native()
+        report["num_lock_text"] = {"initial": initial_status, "restored": False}
+        num_mask = None
+        try:
+            if not initial_status["current"]["capsLock"]:
+                result, _ = invoke("Caps_Lock", "key")
+                assert result == "ok", result
+            caps_status, _ = keyboard_result()
+            assert caps_status["current"]["capsLock"] is True, caps_status
+            for index, (action, expected) in enumerate([
+                ("on", True), ("on", True), ("off", False),
+                ("toggle", True), ("off", False),
+            ]):
+                before_status, _ = keyboard_result()
+                before_native = native()
+                before_text = state()
+                result, elapsed = keyboard_result(action, "num_lock")
+                readback, _ = keyboard_result()
+                after_native = native()
+                observed = state()
+                receipt = {"name": f"Num Lock {action} step {index + 1}", "seconds": elapsed,
+                           "result": result, "readback": readback,
+                           "state_before": before_native, "state_after": after_native}
+                report["cases"].append(receipt)
+                assert result == readback, receipt
+                assert readback["current"]["numLock"] is expected, receipt
+                assert readback["current"]["capsLock"] is True, receipt
+                assert observed["text"] == before_text["text"], receipt
+                assert observed["other"] == "other window untouched", receipt
+                assert observed["clipboard_clears"] == 0, receipt
+                for field in ["mapping", "keys", "clipboard_owner"]:
+                    assert before_native[field] == after_native[field], (field, receipt)
+                before_fields, after_fields = keyboard_fields(before_native), keyboard_fields(after_native)
+                # Groups, depressed and latched modifiers must survive. Only
+                # the Num Lock bit may change in effective/locked modifiers.
+                for field in [0, 1, 2, 3, 5, 6]:
+                    assert before_fields[field] == after_fields[field], (field, receipt)
+                changed = before_fields[7] ^ after_fields[7]
+                if before_status["current"]["numLock"] is expected:
+                    assert before_fields == after_fields, receipt
+                else:
+                    assert changed and changed & (changed - 1) == 0, receipt
+                    if num_mask is None:
+                        num_mask = changed
+                    assert changed == num_mask, receipt
+                    assert bool(after_fields[7] & num_mask) is expected, receipt
+                    assert before_fields[4] ^ after_fields[4] == num_mask, receipt
+                    assert after_fields[7] & ~num_mask, "Caps Lock must remain set"
+                if index == 0:
+                    check("ASCII receipt preserves Num Lock and Caps Lock", "ASCII 42! aAzZ", "ASCII 42! aAzZ")
+                elif index == 1:
+                    check("mixed UTF-8 receipt after idempotent Num Lock on", " 中文🙂 e\u0301", "ASCII 42! aAzZ 中文🙂 e\u0301")
+                elif action == "toggle":
+                    check("ASCII receipt after Num Lock toggle", " next 7!", "ASCII 42! aAzZ 中文🙂 e\u0301 next 7!")
+            assert num_mask is not None, "fixture never observed a native Num Lock transition"
+            report["num_lock_text"]["native_num_mask"] = num_mask
+        finally:
+            restored_status, _ = keyboard_result("on" if initial_status["current"]["numLock"] else "off", "num_lock")
+            if restored_status["current"]["capsLock"] != initial_status["current"]["capsLock"]:
+                result, _ = invoke("Caps_Lock", "key")
+                assert result == "ok", result
+            restored_status, _ = keyboard_result()
+            restored_native = native()
+            report["num_lock_text"].update(readback=restored_status, state_after=restored_native)
+            assert restored_status == initial_status, report["num_lock_text"]
+            for field in ["mapping", "keys", "keyboard", "clipboard_owner"]:
+                assert restored_native[field] == initial_native[field], (field, report["num_lock_text"])
+            report["num_lock_text"]["restored"] = True
         reset()
         check("ASCII keyboard path", "Hello Zuse 123!", "Hello Zuse 123!")
         result, _ = invoke("Ctrl+a", "key")
