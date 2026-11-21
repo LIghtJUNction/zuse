@@ -101,6 +101,10 @@ File imports use `import(path="module.zuse", as="name")`; loading only registers
 
 `keyboard.state()` distinguishes the active Wayland keyboard from other devices; text input preserves lock states. `keyboard.num_lock(state="on")` is an explicit readback-checked operation, also accepting `off` or `toggle`. A Wayland glow marker is click-through and follows the shared user pointer; independent pointers still require X11 MPX. Unavailable native pinch input remains explicitly unsupported.
 
+`keyboard.hold(key="Up", duration=400)` keeps a direction key down on the observed foreground Linux window, then releases it. `browser.hold(key="ArrowRight", duration=300)` provides the same bounded operation for the selected Chromium page. Both stop on cancellation or target changes. See [direction-key holds and receiver tests](docs/key-holds.md).
+
+The importable [ChatGPT desktop module](docs/chatgpt-desktop.md) separates native observation, guarded draft preparation and an explicitly authorized send action. Draft preparation checks the process and an empty editor before writing. A real target must expose the required native accessibility interfaces.
+
 ## Independent, scoped mice
 
 `zuse script` gives each mouse variable its own visible cursor, position, and button state. Independent mice are the default and require native Linux X11 with XInput2/MPX. Their glow, color, shape, size, and image are configurable. The following script moves two mice concurrently and closes both when its scope ends:

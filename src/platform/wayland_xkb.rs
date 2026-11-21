@@ -221,8 +221,20 @@ pub(super) fn resolve(text: &str, original: &[u8]) -> Result<Vec<Stroke>> {
 
 /// Resolve fully before creating a virtual keyboard or submitting a key.
 pub(super) fn locked_chord(key: &str, modifiers: &[&str], original: &[u8]) -> Result<LockedChord> {
+    chord_in_state(key, modifiers, original, true)
+}
+
+pub(super) fn chord_in_state(
+    key: &str,
+    modifiers: &[&str],
+    original: &[u8],
+    num_lock: bool,
+) -> Result<LockedChord> {
     let map = Map::open(original)?;
-    let locked = map.num_lock_mask()?;
+    let locked = if num_lock { map.num_lock_mask()? } else { 0 };
+    unsafe {
+        (map.api.update_mask)(map.state, 0, 0, locked, 0, 0, 0);
+    }
     // Hyprland suppresses only byte-identical recipient keymap updates.
     // Re-parsing can normalize even a compositor-produced map on some XKB
     // versions. A changed map would reset the client's lock state again when

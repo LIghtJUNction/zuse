@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 — 2026-11-22
+
+- Add bounded direction-key holds for Linux X11, Hyprland and selected Chromium pages. Hold duration counts toward the program's wait budget; cancellation, permission revocation and target changes attempt to release the owned key.
+- Preserve native Num Lock state and bind each hold to its observed target. Browser cleanup sends keyup before waiting for acknowledgements and reports errors from either event, including when a very short hold ends before the keydown reply arrives.
+- Add a declaration-only ChatGPT desktop module with native window inspection, scoped conversation and draft observations, guarded draft preparation, and a separately authorized send helper. Importing the module performs no desktop actions.
+- Add optional exact text and process preconditions to Linux accessibility edits. Guarded writes retain one native object, reject mismatched drafts before input, and verify the resulting text. Real application accessibility availability remains a separate requirement.
+- Submit native accessibility edits while holding the input permit, then wait for the application's reply outside it. Cancellation after submission returns promptly and reports that the draft may already have changed.
+- Add private browser, X11, Wayland and GTK fixtures for receiver timing, cancellation, target changes, draft protection and cleanup. Document actual Cargo artifact discovery for updater acceptance tests.
+
 ## 0.4.2 — 2026-11-21
 
 - Add `zuse update`, `update --check`, and `update --dry-run` with JSON receipts and explicit progress. Preserve the running CLI's tracked Cargo root, source, features, profile, and target.

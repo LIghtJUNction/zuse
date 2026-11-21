@@ -245,6 +245,7 @@ def main():
     parser.add_argument("--with-ime", action="store_true")
     parser.add_argument("--state-tests", action="store_true")
     parser.add_argument("--marker-tests", action="store_true")
+    parser.add_argument("--hold-tests", action="store_true")
     parser.add_argument("--scale", type=float, choices=(1.0, 1.25), default=1.0,
                         help="owned monitor scale for coordinate/marker calibration")
     parser.add_argument("--ascii-background", action="store_true")
@@ -462,6 +463,8 @@ def main():
                 command.append("--state-tests")
             if args.marker_tests:
                 command.append("--marker-tests")
+            if args.hold_tests:
+                command.append("--hold-tests")
             result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, timeout=90)
             if keyboard.poll() is not None:
                 raise RuntimeError("owned baseline keyboard exited during the native fixtures")

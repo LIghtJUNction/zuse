@@ -73,6 +73,18 @@ impl Desktop {
             Backend::Wayland(w) => w.keyboard_status(),
         }
     }
+    pub fn hold_key(
+        &mut self,
+        key: &str,
+        duration_ms: u64,
+        window: &str,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        match &mut self.inner {
+            Backend::X11(x) => x.hold_key(key, duration_ms, window, cancellation),
+            Backend::Wayland(w) => w.hold_key(key, duration_ms, window, cancellation),
+        }
+    }
     pub fn num_lock(&self, action: &str) -> Result<String> {
         match &self.inner {
             Backend::X11(x) => x.num_lock(action),

@@ -96,6 +96,7 @@ static SPECS: &[Spec] = &[
     spec!("mouse.scroll",false,["dx":I:false,"dy":I:false]),
     spec!("keyboard.type",false,["text":T:true,"window":T:false]),
     spec!("keyboard.key",false,["key":T:true,"window":T:false]),
+    spec!("keyboard.hold",false,["key":T:true,"duration":I:true,"window":T:false]),
     spec!("keyboard.state", true, []),
     spec!("keyboard.num_lock",false,["state":T:true]),
     spec!("window.list", true, []),
@@ -118,6 +119,7 @@ static SPECS: &[Spec] = &[
     spec!("browser.click",false,["selector":T:true]),
     spec!("browser.fill",false,["selector":T:true,"text":T:true]),
     spec!("browser.key",false,["key":T:true]),
+    spec!("browser.hold",false,["key":T:true,"duration":I:true]),
     spec!("browser.capture",true,["path":T:true]),
     spec!("browser.close", false, []),
     spec!("human.request",false,["kind":T:true,"message":T:true,"url":T:false,"window":T:false,"timeout":I:false]),
@@ -143,7 +145,7 @@ static SPECS: &[Spec] = &[
     spec!("omarchy.theme",false,["name":T:true]),
     spec!("accessibility.action",false,["path":T:true,"index":I:false]),
     spec!("accessibility.focus",false,["path":T:true]),
-    spec!("accessibility.set_text",false,["path":T:true,"text":T:true]),
+    spec!("accessibility.set_text",false,["path":T:true,"text":T:true,"expected_text":T:false,"expected_pid":I:false]),
     spec!("android.devices", true, []),
     spec!("android.connect",true,["serial":T:false,"mode":T:false,"display":I:false]),
     spec!("android.status", true, []),
@@ -906,6 +908,23 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             "accessibility.action" => {
                 range(&call, "index", 0, 0, 128)?;
             }
+            "accessibility.set_text" => {
+                let expected = call
+                    .get("expected_text")
+                    .map(|_| text(&call, "expected_text", ""))
+                    .transpose()?;
+                let pid = call
+                    .get("expected_pid")
+                    .map(|_| range(&call, "expected_pid", 1, 1, u32::MAX as i64))
+                    .transpose()?
+                    .map(|value| value as u32);
+                accessibility::validate_text_edit(
+                    &text(&call, "path", "")?,
+                    &text(&call, "text", "")?,
+                    expected.as_deref(),
+                    pid,
+                )?;
+            }
             "human.request" => {
                 let kind = text(&call, "kind", "")?;
                 if !crate::human::KINDS.contains(&kind.as_str()) {
@@ -942,6 +961,11 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             }
             "keyboard.key" => {
                 crate::platform::split_chord(&text(&call, "key", "")?)?;
+            }
+            "keyboard.hold" | "browser.hold" => {
+                crate::key_hold::Direction::parse(&text(&call, "key", "")?)?;
+                let duration = range(&call, "duration", 0, 1, crate::key_hold::MAX_HOLD_MS as i64)?;
+                wait_budget = wait_budget.saturating_add(duration as u64);
             }
             "process.start" | "harness.start" => {
                 let program = text(
@@ -1806,6 +1830,16 @@ impl Runtime {
                 }
                 Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
             }
+            "keyboard.hold" => {
+                let key = text(c, "key", "")?;
+                let window = text(c, "window", "active")?;
+                self.desktop()?.hold_key(
+                    &key,
+                    integer(c, "duration", 0) as u64,
+                    &window,
+                    &cancellation,
+                )
+            }
             "window.list" => self.desktop()?.windows(),
             "wine.windows" => {
                 let windows = self.desktop()?.windows()?;
@@ -1901,6 +1935,11 @@ impl Runtime {
                 .browser()?
                 .fill(&text(c, "selector", "")?, &text(c, "text", "")?),
             "browser.key" => self.browser()?.key(&text(c, "key", "")?),
+            "browser.hold" => self.browser()?.hold_key(
+                &text(c, "key", "")?,
+                integer(c, "duration", 0) as u64,
+                &cancellation,
+            ),
             "browser.capture" => self.browser()?.screenshot(&text(c, "path", "")?),
             "browser.close" => {
                 if let Some(mut browser) = self.browser.take() {
@@ -1949,7 +1988,18 @@ impl Runtime {
             }
             "accessibility.focus" => accessibility::focus(&text(c, "path", "")?),
             "accessibility.set_text" => {
-                accessibility::set_text(&text(c, "path", "")?, &text(c, "text", "")?)
+                let expected = c
+                    .get("expected_text")
+                    .map(|_| text(c, "expected_text", ""))
+                    .transpose()?;
+                accessibility::set_text_checked_with_cancel(
+                    &text(c, "path", "")?,
+                    &text(c, "text", "")?,
+                    expected.as_deref(),
+                    c.get("expected_pid")
+                        .map(|_| integer(c, "expected_pid", 0) as u32),
+                    &self.cancellation,
+                )
             }
 
             "android.browser.sockets" => Android::browser_sockets(&text(c, "serial", "")?),

@@ -24,6 +24,22 @@ pub(super) fn set_text(path: &str, text: &str) -> Result<String> {
     run("set_text", path, text, 0, 1, 0)
 }
 
+pub(super) fn set_text_checked(
+    path: &str,
+    text: &str,
+    expected_text: Option<&str>,
+    expected_pid: Option<u32>,
+    cancellation: &crate::observation::Cancellation,
+) -> Result<String> {
+    if expected_text.is_none() && expected_pid.is_none() {
+        return cancellation.dispatch(|| set_text(path, text));
+    }
+    Err(
+        "unsupported_state: conditional accessibility text editing currently requires Linux AT-SPI"
+            .into(),
+    )
+}
+
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 fn run(
     operation: &str,

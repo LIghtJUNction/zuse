@@ -159,11 +159,56 @@ pub fn focus(path: &str) -> Result<String> {
 }
 /// Replace an editable node's contents. Password nodes require human assistance.
 pub fn set_text(path: &str, text: &str) -> Result<String> {
-    validate_path(path)?;
-    if text.len() > 65536 || text.contains('\0') {
-        return Err("text must be NUL-free and at most 64 KiB".into());
-    }
+    validate_text_edit(path, text, None, None)?;
     native::set_text(path, text)
+}
+
+/// Conditionally replace and read back the same native editable object.
+/// An empty expected_text requires an exactly empty editor. Checks and edits
+/// are separate native application calls, not an atomic compare-and-set.
+/// Omitted checks preserve the existing unguarded set_text behavior.
+pub fn set_text_checked(
+    path: &str,
+    text: &str,
+    expected_text: Option<&str>,
+    expected_pid: Option<u32>,
+) -> Result<String> {
+    set_text_checked_with_cancel(
+        path,
+        text,
+        expected_text,
+        expected_pid,
+        &crate::observation::Cancellation::default(),
+    )
+}
+
+pub(crate) fn set_text_checked_with_cancel(
+    path: &str,
+    text: &str,
+    expected_text: Option<&str>,
+    expected_pid: Option<u32>,
+    cancellation: &crate::observation::Cancellation,
+) -> Result<String> {
+    validate_text_edit(path, text, expected_text, expected_pid)?;
+    native::set_text_checked(path, text, expected_text, expected_pid, cancellation)
+}
+
+pub(crate) fn validate_text_edit(
+    path: &str,
+    text: &str,
+    expected_text: Option<&str>,
+    expected_pid: Option<u32>,
+) -> Result<()> {
+    validate_path(path)?;
+    for (name, value) in [("text", Some(text)), ("expected_text", expected_text)] {
+        if value.is_some_and(|value| value.len() > 65536 || value.contains('\0')) {
+            return Err(format!("{name} must be NUL-free and at most 64 KiB"));
+        }
+    }
+    if expected_pid == Some(0) {
+        return Err("expected_pid must be a positive native process ID".into());
+    }
+    Ok(())
 }
 fn validate_path(path: &str) -> Result<()> {
     if path.len() > 1024
@@ -196,6 +241,7 @@ pub(crate) fn insert_focused_x11(
 #[cfg(target_os = "linux")]
 mod native {
     mod events;
+    mod text_edit;
     pub(super) mod x11_input;
     use super::*;
     use crate::platform::dylib::Library;
@@ -249,7 +295,6 @@ mod native {
         extents: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> *mut Rect,
         grab_focus: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
         editable_iface: unsafe extern "C" fn(Obj) -> Obj,
-        set_contents: unsafe extern "C" fn(Obj, *const c_char, *mut ErrPtr) -> c_int,
         process_id: unsafe extern "C" fn(Obj, *mut ErrPtr) -> u32,
         clear_cache: unsafe extern "C" fn(Obj),
         state_set: unsafe extern "C" fn(Obj) -> Obj,
@@ -301,7 +346,6 @@ mod native {
                     extents: library.symbol(c"atspi_component_get_extents")?,
                     grab_focus: library.symbol(c"atspi_component_grab_focus")?,
                     editable_iface: library.symbol(c"atspi_accessible_get_editable_text_iface")?,
-                    set_contents: library.symbol(c"atspi_editable_text_set_text_contents")?,
                     process_id: library.symbol(c"atspi_accessible_get_process_id")?,
                     clear_cache: library
                         .symbol(c"atspi_accessible_clear_cache_single")
@@ -801,11 +845,78 @@ mod native {
         Ok(format!(r#"{{"path":{},"focused":true}}"#, quote(path)))
     }
     pub(super) fn set_text(path: &str, text: &str) -> Result<String> {
+        edit_text(
+            path,
+            text,
+            None,
+            None,
+            &crate::observation::Cancellation::default(),
+        )
+    }
+
+    pub(super) fn set_text_checked(
+        path: &str,
+        text: &str,
+        expected_text: Option<&str>,
+        expected_pid: Option<u32>,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        edit_text(path, text, expected_text, expected_pid, cancellation)
+    }
+
+    fn editable_text(api: &Api, object: &Object<'_>) -> Result<String> {
+        let interface = api.object(unsafe { (api.text_iface)(object.ptr) })?;
+        let mut error = core::ptr::null_mut();
+        let count = unsafe { (api.text_count)(interface.ptr, &mut error) };
+        api.error(error)?;
+        if !(0..=65536).contains(&count) {
+            return Err("editable text exceeds the 64 KiB check bound".into());
+        }
+        let mut error = core::ptr::null_mut();
+        let pointer = unsafe { (api.text)(interface.ptr, 0, count, &mut error) };
+        // Snapshot strings are clipped to 4096 characters. An edit precondition
+        // must instead read the full bounded value and reject missing text.
+        let value = if pointer.is_null() {
+            Err("editable text is unavailable".to_owned())
+        } else {
+            // SAFETY: AT-SPI returned an owned NUL-terminated UTF-8 string.
+            unsafe {
+                let value = CStr::from_ptr(pointer)
+                    .to_str()
+                    .map(str::to_owned)
+                    .map_err(|_| "editable text is not UTF-8".to_owned());
+                (api.free)(pointer.cast());
+                value
+            }
+        };
+        api.error(error)?;
+        let value = value?;
+        if value.len() > 65536 {
+            return Err("editable text exceeds the 64 KiB check bound".into());
+        }
+        if value.chars().count() != count as usize {
+            return Err("editable text changed while it was being read".into());
+        }
+        Ok(value)
+    }
+
+    fn edit_text(
+        path: &str,
+        text: &str,
+        expected_text: Option<&str>,
+        expected_pid: Option<u32>,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        cancellation.check()?;
         let _guard = ACCESS
             .lock()
             .map_err(|_| "accessibility state is poisoned")?;
         let api = load()?;
         let object = api.resolve(path)?;
+        let checked = expected_text.is_some() || expected_pid.is_some();
+        if checked {
+            unsafe { (api.clear_cache)(object.ptr) };
+        }
         if api
             .get_string(object.ptr, api.role)?
             .to_ascii_lowercase()
@@ -813,13 +924,49 @@ mod native {
         {
             return Err("password input requires human assistance".into());
         }
-        let interface = api.object(unsafe { (api.editable_iface)(object.ptr) })?;
+        let pid = if let Some(expected) = expected_pid {
+            let mut error = core::ptr::null_mut();
+            let actual = unsafe { (api.process_id)(object.ptr, &mut error) };
+            api.error(error)?;
+            if actual != expected {
+                return Err(
+                    "stale_target: accessibility process does not match expected_pid".into(),
+                );
+            }
+            Some(actual)
+        } else {
+            None
+        };
+        if checked {
+            let current = editable_text(api, &object)?;
+            if expected_text.is_some_and(|expected| current != expected) {
+                return Err("accessibility text precondition failed; no text was written".into());
+            }
+        }
+        let _interface = api.object(unsafe { (api.editable_iface)(object.ptr) })?;
         let string = CString::new(text).map_err(|_| "text contains NUL")?;
-        let mut error = core::ptr::null_mut();
-        let success = unsafe { (api.set_contents)(interface.ptr, string.as_ptr(), &mut error) };
-        api.error(error)?;
-        if success == 0 {
-            return Err("application rejected accessibility text input".into());
+        text_edit::set_contents(&object, &string, cancellation)?;
+        text_edit::check_submitted(cancellation)?;
+        if checked {
+            unsafe { (api.clear_cache)(object.ptr) };
+            let actual = editable_text(api, &object);
+            text_edit::check_submitted(cancellation)?;
+            let actual = actual.map_err(|error| {
+                format!("accessibility text was submitted; readback failed: {error}")
+            })?;
+            if actual != text {
+                return Err(format!(
+                    "accessibility text was submitted; readback differs: {}",
+                    quote(&actual)
+                ));
+            }
+            return Ok(format!(
+                r#"{{"path":{},"pid":{},"characters":{},"text":{},"verified":true}}"#,
+                quote(path),
+                pid.map_or_else(|| "null".into(), |pid| pid.to_string()),
+                actual.chars().count(),
+                quote(&actual),
+            ));
         }
         Ok(format!(
             r#"{{"path":{},"characters":{}}}"#,

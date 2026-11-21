@@ -40,9 +40,27 @@ On supported Unix builds, Ctrl+C and SIGTERM use the existing CLI cancellation g
 
 ```sh
 cargo test --locked --bin zuse
-cargo build --locked --bin zuse
-python3 tests/cli_update.py --binary target/debug/zuse -v
+python3 - <<'PY'
+import json
+import subprocess
+import sys
+
+records = subprocess.check_output(
+    ["cargo", "build", "--locked", "--bin", "zuse", "--message-format=json"],
+    text=True,
+)
+artifacts = [json.loads(line) for line in records.splitlines()]
+binary = next(
+    item["executable"] for item in artifacts
+    if item.get("reason") == "compiler-artifact"
+    and item.get("target", {}).get("name") == "zuse"
+    and item.get("executable")
+)
+subprocess.run([sys.executable, "tests/cli_update.py", "--binary", binary, "-v"], check=True)
+PY
 ```
+
+The fixture uses the executable reported by this build, including a shared Cargo target directory or configured target subdirectory.
 
 The Rust cases cover version ordering, release/package identity, tracked options, unknown and symlinked metadata, literal arguments, process failure, cancellation and deadlines. The CLI fixtures copy the binary into private temporary Cargo roots and provide fake `curl`, `git` and `cargo` executables. They exercise the real command parser and updater, including simulated replacement and installed-version readback. They make no public requests, perform no actual Cargo installation, and use no desktop input.
 

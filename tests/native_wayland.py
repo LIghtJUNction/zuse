@@ -125,10 +125,11 @@ def main():
     parser.add_argument("--ascii-background",action="store_true",help=argparse.SUPPRESS)
     parser.add_argument("--state-tests",action="store_true")
     parser.add_argument("--marker-tests",action="store_true")
+    parser.add_argument("--hold-tests",action="store_true",help="run only bounded key-hold checks in the owned compositor")
     args=parser.parse_args()
     if not args.allow_desktop:
         parser.error("--allow-desktop is required for live fixture-only desktop input")
-    if (args.state_tests or args.marker_tests) and os.environ.get("ZUSE_PRIVATE_WAYLAND_FIXTURE")!="1":
+    if (args.state_tests or args.marker_tests or args.hold_tests) and os.environ.get("ZUSE_PRIVATE_WAYLAND_FIXTURE")!="1":
         parser.error("state/marker tests are restricted to native_wayland_private.py")
     binary=args.binary.resolve()
     if not binary.is_file():
@@ -163,6 +164,8 @@ def main():
             assert data["error"].startswith(expected+":"), data
         return data
     def evaluate(name, action):
+        if args.hold_tests and name not in ("window_metadata", "bounded_key_holds"):
+            return
         try:
             outcome=action()
             report["checks"][name]={"ok":True,"result":outcome}
@@ -257,6 +260,10 @@ def main():
                 return {"owned_windows":len(selected),"native_wayland":True,
                         "scale_focus_mapped_verified":True}
             evaluate("window_metadata",list_windows)
+            if args.hold_tests:
+                from native_key_hold import run_private_holds
+                evaluate("bounded_key_holds", lambda: run_private_holds(
+                    binary, env, directory, first, second, focus, compositor, private_held))
             def pointer():
                 focus(first)
                 w=current_own(first)

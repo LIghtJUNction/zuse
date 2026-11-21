@@ -28,6 +28,15 @@ pub type Result<T> = std::result::Result<T, String>;
 
 #[cfg(not(target_os = "linux"))]
 impl Desktop {
+    pub fn hold_key(
+        &mut self,
+        _key: &str,
+        _duration_ms: u64,
+        _window: &str,
+        _cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        Err("unsupported_state: native key holds currently require Linux X11 or Hyprland; use browser.hold for an explicitly connected browser page".into())
+    }
     pub fn window_hit_test(&self, _id: &str, _x: i32, _y: i32) -> Result<bool> {
         Err(
             "unsupported_state: native window hit testing is not implemented for this backend"

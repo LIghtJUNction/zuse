@@ -573,6 +573,10 @@ impl Connection {
         result
     }
     fn install(&mut self, bytes: &[u8]) -> Result<()> {
+        self.send_keymap(bytes)?;
+        self.roundtrip()
+    }
+    fn send_keymap(&mut self, bytes: &[u8]) -> Result<()> {
         if bytes.len() > 2_097_152 || bytes.last() != Some(&0) {
             return Err("invalid temporary keymap size".into());
         }
@@ -598,7 +602,29 @@ impl Connection {
                 bytes.len() as u32,
             );
         }
-        self.roundtrip()
+        Ok(())
+    }
+    fn key_event(&mut self, code: u32, time: u32, pressed: bool) -> Result<()> {
+        if !(8..=255).contains(&code) {
+            return Err("temporary XKB keycode is out of range".into());
+        }
+        unsafe {
+            (self.api.marshal)(
+                self.virtual_keyboard,
+                1,
+                ptr::null(),
+                1,
+                0,
+                time,
+                code - 8,
+                u32::from(pressed),
+            );
+        }
+        let flushed = unsafe { (self.api.flush)(self.display) };
+        if flushed < 0 && std::io::Error::last_os_error().raw_os_error() != Some(11) {
+            return Err("Wayland key write failed".into());
+        }
+        Ok(())
     }
     fn press(&mut self, code: u32, time: u32) -> Result<()> {
         if !(8..=255).contains(&code) {
@@ -804,6 +830,88 @@ pub(super) fn key_with_num_lock(
 
 pub(super) fn original_keymap() -> Result<Vec<u8>> {
     Connection::open().map(|mut c| std::mem::take(&mut c.original))
+}
+
+/// Hold one arrow in the unchanged native map. The owned keyboard is removed
+/// after releasing the key, with the original modifier state restored.
+pub(super) fn hold_arrow(
+    direction: crate::key_hold::Direction,
+    duration_ms: u64,
+    num_lock: bool,
+    cancellation: &crate::observation::Cancellation,
+    before_input: impl FnOnce() -> Result<()>,
+    mut verify_target: impl FnMut(Instant, u32) -> Result<()>,
+) -> Result<String> {
+    use crate::key_hold::{self, Event};
+    key_hold::validate_duration(duration_ms)?;
+    cancellation.check()?;
+    let mut connection = Connection::open()?;
+    let chord = xkb::chord_in_state(direction.native(), &[], &connection.original, num_lock)?;
+    let base = [0, 0, chord.locked, 0];
+    if connection
+        .original_modifiers
+        .is_some_and(|observed| observed != base)
+    {
+        return Err(
+            "unsupported_state: observed keyboard modifiers changed before the key hold".into(),
+        );
+    }
+    before_input()?;
+    connection.original_modifiers = Some(base);
+    let mut pending_press = false;
+    let started = Instant::now();
+    let result = key_hold::run(duration_ms, cancellation, |event| match event {
+        Event::Press { .. } => {
+            connection.create_keyboard()?;
+            let original = std::mem::take(&mut connection.original);
+            let installed = connection.send_keymap(&original);
+            connection.original = original;
+            installed?;
+            unsafe {
+                (connection.api.marshal)(
+                    connection.virtual_keyboard,
+                    2,
+                    ptr::null(),
+                    1,
+                    0,
+                    0u32,
+                    0u32,
+                    chord.locked,
+                    0u32,
+                );
+            }
+            pending_press = true;
+            connection.key_event(chord.code, started.elapsed().as_millis() as u32, true)
+        }
+        Event::Check { deadline } => {
+            let deadline = deadline.min(Instant::now() + Duration::from_millis(100));
+            if pending_press {
+                connection.deadline = deadline;
+                connection.roundtrip()?;
+                pending_press = false;
+            }
+            verify_target(deadline, chord.code)
+        }
+        Event::Release { deadline } => {
+            if connection.virtual_keyboard.is_null() {
+                return Ok(());
+            }
+            connection.deadline = deadline;
+            connection.key_event(chord.code, started.elapsed().as_millis() as u32, false)?;
+            connection.roundtrip()
+        }
+    });
+    let restored = connection.restore();
+    match (result, restored) {
+        (Ok(elapsed), Ok(())) => Ok(key_hold::receipt(direction, duration_ms, elapsed)),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(format!(
+            "key released but keyboard state restoration failed: {error}"
+        )),
+        (Err(error), Err(cleanup)) => Err(format!(
+            "{error}; keyboard state restoration failed: {cleanup}"
+        )),
+    }
 }
 
 pub(super) fn probe() -> Result<()> {

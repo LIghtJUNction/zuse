@@ -120,24 +120,29 @@ impl Wayland {
         )
     }
     fn request(&self, command: &str) -> Result<String> {
+        self.request_until(command, Instant::now() + Duration::from_secs(5))
+    }
+    fn request_until(&self, command: &str, deadline: Instant) -> Result<String> {
         let socket=self.socket.as_ref().ok_or("this operation requires Hyprland IPC; other Wayland compositors need their accessibility/portal backend")?;
         let mut stream = UnixStream::connect(socket).map_err(|e| format!("Hyprland IPC: {e}"))?;
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or("timeout: Hyprland IPC deadline reached")?;
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(remaining))
             .map_err(|e| e.to_string())?;
         stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
+            .set_write_timeout(Some(remaining))
             .map_err(|e| e.to_string())?;
         stream
             .write_all(command.as_bytes())
             .map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(5);
         let mut buffer = [0; 8192];
         loop {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
-                .ok_or("Hyprland IPC exceeded five seconds")?;
+                .ok_or("timeout: Hyprland IPC deadline reached")?;
             stream
                 .set_read_timeout(Some(remaining))
                 .map_err(|e| e.to_string())?;
@@ -340,6 +345,53 @@ impl Wayland {
     }
     pub fn key_into(&mut self, id: &str, chord: &str) -> Result<()> {
         self.key_target(Some(id), chord)
+    }
+    pub fn hold_key(
+        &mut self,
+        key: &str,
+        duration_ms: u64,
+        window: &str,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        use crate::{key_hold::Direction, target::TargetWindow};
+        let direction = Direction::parse(key)?;
+        crate::key_hold::validate_duration(duration_ms)?;
+        let state = self.keyboard_state(true)?;
+        state.require_restorable_keyboard()?;
+        let expected = TargetWindow::from_windows(&self.windows()?, window)?;
+        if !expected.focused {
+            return Err("stale_target: key holds require the currently focused window".into());
+        }
+        keyboard::hold_arrow(
+            direction,
+            duration_ms,
+            state.num_lock,
+            cancellation,
+            || {
+                if self.keyboard_state(true)? != state {
+                    return Err(
+                        "stale_target: keyboard changed while preparing the key hold".into(),
+                    );
+                }
+                Ok(())
+            },
+            |deadline, held_code| {
+                let active = self.request_until("j/activewindow", deadline)?;
+                let monitors = self.request_until("j/monitors", deadline)?;
+                let snapshot = window_rows(&format!("[{active}]"), &monitors, &active)?;
+                let current = TargetWindow::from_windows(&snapshot, &expected.id)?;
+                if current != expected || !current.focused {
+                    return Err("stale_target: window identity, geometry, scale or focus changed during the key hold".into());
+                }
+                let other = self.request_until(&format!(
+                "/repl return (function() for code=8,775 do if code~={held_code} and hl.is_key_down(code) then return true end end return false end)()"
+            ), deadline)?;
+                if parse_held_keys(&other)? {
+                    return Err("stale_target: another key was pressed during the key hold".into());
+                }
+                Ok(())
+            },
+        )
     }
     fn selector(id: &str) -> Result<String> {
         if id == "active" {

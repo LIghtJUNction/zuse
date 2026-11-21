@@ -1,0 +1,4 @@
+# This example imports declarations and lists their descriptions. It does not
+# discover or modify a live application and can run with --read-only.
+import(path="../skills/zuse/assets/chatgpt-desktop.zuse", as="chatgpt")
+functions(namespace="chatgpt")

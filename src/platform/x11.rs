@@ -9,6 +9,31 @@ use std::{
 type Dpy = *mut c_void;
 type Window = c_ulong;
 type Atom = c_ulong;
+
+fn explicit_window_id(id: &str) -> Result<Window> {
+    let window = if let Some(hex) = id.strip_prefix("0x") {
+        Window::from_str_radix(hex, 16).map_err(|_| "invalid hexadecimal X11 window ID")?
+    } else {
+        id.parse()
+            .map_err(|_| "window ID must be decimal, 0x hexadecimal, or active")?
+    };
+    if window <= 1 {
+        return Err("no active application window".into());
+    }
+    Ok(window)
+}
+
+fn hold_target_window(snapshot: &str, id: &str) -> Result<crate::target::TargetWindow> {
+    // Match the spelling used by windows(), using window_id's numeric grammar.
+    // Keep active as a focused client/ancestor lookup, not a focused child XID.
+    let selector = if id == "active" {
+        id.to_owned()
+    } else {
+        format!("0x{:x}", explicit_window_id(id)?)
+    };
+    crate::target::TargetWindow::from_windows(snapshot, &selector)
+}
+
 macro_rules! api {
     ($($name:ident($($arg:ty),*)->$ret:ty;)+) => {
         #[allow(non_snake_case)]
@@ -48,6 +73,7 @@ api! {
     XQueryKeymap(Dpy,*mut c_char)->c_int;
     XkbGetState(Dpy,c_uint,*mut KeyboardState)->c_int;
     XkbKeysymToModifiers(Dpy,c_ulong)->c_uint;
+    XkbLookupKeySym(Dpy,u8,c_uint,*mut c_uint,*mut c_ulong)->c_int;
     XkbLockModifiers(Dpy,c_uint,c_uint,c_uint)->c_int;
     XFree(*mut c_void)->c_int;
     XSendEvent(Dpy,Window,c_int,std::ffi::c_long,*mut c_void)->c_int;
@@ -472,6 +498,98 @@ impl X11 {
         self.flush();
         Ok(())
     }
+    pub fn hold_key(
+        &mut self,
+        key: &str,
+        duration_ms: u64,
+        window: &str,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        use crate::{
+            key_hold::{self, Direction, Event},
+            target::TargetWindow,
+        };
+        let direction = Direction::parse(key)?;
+        key_hold::validate_duration(duration_ms)?;
+        let expected = hold_target_window(&self.windows()?, window)?;
+        if !expected.focused {
+            return Err("stale_target: key holds require the currently focused window".into());
+        }
+        let (state, held, _, _) = self.keyboard_state()?;
+        if held || state.base_mods != 0 || state.latched_mods != 0 || state.group != 0 {
+            return Err(
+                "unsupported_state: release held keys and use layout group zero before a key hold"
+                    .into(),
+            );
+        }
+        let symbol = match direction {
+            Direction::Left => 0xff51,
+            Direction::Up => 0xff52,
+            Direction::Right => 0xff53,
+            Direction::Down => 0xff54,
+        };
+        // Resolve the effective symbol in the current lock state. This avoids
+        // treating Num Lock's keypad numbers as directional keys.
+        let code = (8..=255u8)
+            .find(|&code| {
+                let (mut consumed, mut found) = (0, 0);
+                unsafe {
+                    (self.api.XkbLookupKeySym)(
+                        self.display,
+                        code,
+                        u32::from(state.locked_mods),
+                        &mut consumed,
+                        &mut found,
+                    ) != 0
+                        && found == symbol
+                }
+            })
+            .ok_or("unsupported_state: direction is absent from the current X11 keymap")?;
+        let test = self
+            .test
+            .as_ref()
+            .ok_or("XTest extension library unavailable")?;
+        let elapsed = key_hold::run(duration_ms, cancellation, |event| {
+            match event {
+                Event::Check { .. } => {
+                    let current = TargetWindow::from_windows(&self.windows()?, &expected.id)?;
+                    if current != expected || !current.focused {
+                        return Err("stale_target: window identity, geometry, scale or focus changed during the key hold".into());
+                    }
+                    let (current, _, _, _) = self.keyboard_state()?;
+                    if current.locked_mods != state.locked_mods
+                        || current.group != state.group
+                        || current.base_mods != 0
+                        || current.latched_mods != 0
+                    {
+                        return Err(
+                            "stale_target: keyboard modifiers changed during the key hold".into(),
+                        );
+                    }
+                    let mut keys = [0 as c_char; 32];
+                    unsafe {
+                        (self.api.XQueryKeymap)(self.display, keys.as_mut_ptr());
+                    }
+                    keys[usize::from(code / 8)] &= !(1u8 << (code % 8)) as c_char;
+                    if keys.iter().any(|&value| value != 0) {
+                        return Err(
+                            "stale_target: another key was pressed during the key hold".into()
+                        );
+                    }
+                }
+                Event::Press { .. } | Event::Release { .. } => {
+                    let down = i32::from(matches!(event, Event::Press { .. }));
+                    let sent = unsafe { (test.key)(self.display, u32::from(code), down, 0) };
+                    self.flush();
+                    if sent == 0 {
+                        return Err("X11 rejected the key event".into());
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(key_hold::receipt(direction, duration_ms, elapsed))
+    }
     pub fn type_text(&mut self, text: &str) -> Result<()> {
         self.type_common(None, text)
     }
@@ -747,11 +865,8 @@ impl X11 {
                 (self.api.XGetInputFocus)(self.display, &mut w, &mut revert);
             }
             w
-        } else if let Some(hex) = id.strip_prefix("0x") {
-            Window::from_str_radix(hex, 16).map_err(|_| "invalid hexadecimal X11 window ID")?
         } else {
-            id.parse()
-                .map_err(|_| "window ID must be decimal, 0x hexadecimal, or active")?
+            explicit_window_id(id)?
         };
         if w <= 1 {
             return Err("no active application window".into());
@@ -1037,6 +1152,62 @@ impl X11 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HOLD_WINDOWS: &str = r#"[
+        {"id":"0x200001","pid":42,"x":20,"y":30,"width":260,"height":220,"scale":1.0,"focused":true,"mapped":true},
+        {"id":"0x200002","pid":42,"x":320,"y":30,"width":260,"height":220,"scale":1.0,"focused":false,"mapped":true}
+    ]"#;
+
+    #[test]
+    fn hold_decimal_and_hex_ids_resolve_the_same_native_target() {
+        let decimal = hold_target_window(HOLD_WINDOWS, "2097153").unwrap();
+        let hex = hold_target_window(HOLD_WINDOWS, "0x200001").unwrap();
+        let padded_hex = hold_target_window(HOLD_WINDOWS, "0x00200001").unwrap();
+        assert_eq!(decimal, hex);
+        assert_eq!(decimal, padded_hex);
+        assert_eq!(decimal.id, "0x200001");
+        assert_eq!(decimal.pid, 42);
+        assert_eq!(hold_target_window(HOLD_WINDOWS, "active").unwrap(), decimal);
+        assert_ne!(
+            hold_target_window(HOLD_WINDOWS, "2097154").unwrap(),
+            decimal
+        );
+    }
+
+    #[test]
+    fn hold_id_normalization_preserves_invalid_and_stale_target_rejections() {
+        for id in [
+            "",
+            "unknown",
+            "-1",
+            "0",
+            "1",
+            "0x0",
+            "0x1",
+            "0x",
+            "0xzz",
+            "0X200001",
+            "184467440737095516160",
+        ] {
+            assert!(hold_target_window(HOLD_WINDOWS, id).is_err(), "{id}");
+        }
+        assert!(
+            hold_target_window(HOLD_WINDOWS, "2097155")
+                .unwrap_err()
+                .starts_with("stale_target:")
+        );
+        for windows in [
+            HOLD_WINDOWS.replace("\"pid\":42", "\"pid\":null"),
+            HOLD_WINDOWS.replace("\"mapped\":true", "\"mapped\":false"),
+            HOLD_WINDOWS.replace("\"scale\":1.0", "\"scale\":0"),
+        ] {
+            assert!(hold_target_window(&windows, "2097153").is_err());
+        }
+        let no_focus = HOLD_WINDOWS.replace("\"focused\":true", "\"focused\":false");
+        assert!(hold_target_window(&no_focus, "active").is_err());
+        let ambiguous = HOLD_WINDOWS.replace("\"focused\":false", "\"focused\":true");
+        assert!(hold_target_window(&ambiguous, "active").is_err());
+    }
 
     #[test]
     fn native_plan_requires_every_character_before_dispatch() {

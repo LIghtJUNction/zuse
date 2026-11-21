@@ -1,0 +1,36 @@
+# Native desktop helpers. Importing registers functions and performs no input.
+# Obtain every path from the selected desktop application, never a web page.
+# See docs/chatgpt-desktop.md for target, empty-draft and readback checks.
+
+/// List native windows so the caller can identify the intended desktop process.
+fn windows() {
+    window.list()
+}
+
+/// Observe the selected native window. The caller verifies its process and conversation.
+fn inspect_window(scope) {
+    observe(source="desktop", scope=scope)
+}
+
+/// Read only the selected conversation subtree; no navigation or input is sent.
+fn read_conversation(scope) {
+    observe(source="desktop", scope=scope)
+}
+
+/// Read the selected editor. The caller must confirm an exact empty text before preparing a draft.
+fn read_draft(editor) {
+    observe(source="desktop", scope=editor)
+}
+
+/// Require the selected process and an exact empty editor, then write and read back the same native object.
+/// The caller identifies the intended conversation; this function never sends or focuses.
+fn prepare_draft(editor, pid, message) {
+    accessibility.set_text(path=editor, text=message, expected_text="", expected_pid=pid)
+    observe(source="desktop", scope=editor)
+}
+
+/// Invoke one explicitly authorized send action using a fresh native node and its observed index.
+/// The caller checks the target and draft first, then observes the conversation to confirm delivery.
+fn send_prepared(send_button, action_index) {
+    accessibility.action(path=send_button, index=action_index)
+}
