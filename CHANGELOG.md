@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased — local programs and input-state iteration
+## 0.4.0 — local programs and input-state iteration
+
+- Align the Git development lock with zmcpio 0.5.0, zcall 0.4.1 and zconv 0.4.1. A separate registry projection must preserve this dependency graph and the complete published source contents.
 
 - Separate the active Wayland keyboard from other devices; preserve lock state during text entry and add explicit Num Lock read/set/toggle with native readback.
 - Add a click-through, non-focusable Wayland marker for the shared user pointer, including fractional output coordinates and cleanup. Independent pointer devices remain X11-only.

@@ -192,6 +192,6 @@ cargo bench --bench core
 python3 scripts/bump.py patch --commit --tag --push
 ~~~
 
-工作流支持版本 bump、原子提交/标签推送、五个平台制品及 Cargo 发布。详见 [开发说明](docs/development.md) 与 [验证记录](docs/validation-0.2.0.md)。
+工作流支持版本 bump、原子提交/标签推送和五个平台的原生制品。Cargo 发布使用单独验证的源码暂存目录，内部依赖必须与 Git 锁定来源对应的 registry 精确版本及完整发布内容一致。详见 [开发说明](docs/development.md) 与 [验证记录](docs/validation-0.2.0.md)。
 
 MIT 开源。

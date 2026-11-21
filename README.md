@@ -309,7 +309,7 @@ python3 scripts/bump.py patch --dry-run
 python3 scripts/bump.py patch --commit --tag --push
 ~~~
 
-Checks run locally; the CI workflow is available for pull requests and manual dispatch. The release workflow builds Linux x86_64/ARM64, macOS x86_64/ARM64, and Windows x86_64 archives. It also publishes the Cargo package when `CARGO_REGISTRY_TOKEN` is configured. The Bump and release workflow performs the version commit, atomic branch/tag push, and reusable release call.
+Checks run locally; the CI workflow is available for pull requests and manual dispatch. The release workflow builds Linux x86_64/ARM64, macOS x86_64/ARM64, and Windows x86_64 archives. The native release workflow does not publish the Cargo package. Registry publication uses a separately validated source stage with exact matching registry dependencies. The Bump and release workflow performs the version commit, atomic branch/tag push, and reusable release call.
 
 See [Development](docs/development.md) and [Validation](docs/validation-0.2.2.md) for exact gates and measured results.
 
