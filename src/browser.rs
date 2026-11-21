@@ -45,6 +45,11 @@ impl Browser {
     pub fn launch(headless: bool) -> Result<Self> {
         let executable = browser_executable()?;
         let profile = new_profile()?;
+        #[cfg(target_os = "linux")]
+        if let Err(error) = check_launch_socket(&profile) {
+            let _ = fs::remove_dir(&profile);
+            return Err(error);
+        }
         let mut command = Command::new(executable);
         command
             .args([
@@ -1108,6 +1113,21 @@ fn browser_executable() -> Result<String> {
         }
     }
     Err("Chromium was not found; set ZUSE_BROWSER to a Chrome/Chromium executable".into())
+}
+
+#[cfg(target_os = "linux")]
+fn check_launch_socket(profile: &Path) -> Result<()> {
+    // Chromium creates a local Unix socket during startup. Connecting to a
+    // nonexistent path in this private profile tests socket permission without
+    // creating a socket file or attempting to reach another process.
+    match std::os::unix::net::UnixStream::connect(profile.join(".zuse-launch-probe")) {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Err(format!(
+            "browser launch unavailable: this session denies Unix sockets ({error}); run Zuse in an environment that permits local Unix sockets"
+        )),
+        // The normally expected error is NotFound. Leave other errors (e.g. a
+        // long temporary-directory path) for the browser's own startup logic.
+        _ => Ok(()),
+    }
 }
 
 fn new_profile() -> Result<PathBuf> {

@@ -17,6 +17,7 @@ use zmcpio::json::{Document, Limits, Token};
 
 pub(super) struct Wayland {
     socket: Option<PathBuf>,
+    ipc_ready: bool,
     modern: bool,
 }
 fn installed(name: &str) -> bool {
@@ -77,17 +78,17 @@ impl Wayland {
             });
         let mut this = Self {
             socket,
+            ipc_ready: false,
             modern: false,
         };
         if let Ok(version) = this.request("j/version") {
             let mut tokens = [Token::EMPTY; 128];
             if let Ok(d) = Document::parse(version.as_bytes(), &mut tokens, Limits::default()) {
-                let tag = d
-                    .root()
-                    .get("tag")
-                    .and_then(|n| n.string())
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
+                let root = d.root();
+                let tag = root.get("tag").and_then(|n| n.string());
+                let version = root.get("version").and_then(|n| n.string());
+                this.ipc_ready = tag.is_some() || version.is_some();
+                let tag = tag.and_then(|s| s.as_str()).unwrap_or("");
                 let mut parts = tag.trim_start_matches('v').split('.');
                 let major = parts
                     .next()
@@ -110,18 +111,24 @@ impl Wayland {
             } else {
                 "null"
             },
-            self.socket.is_some() || installed("ydotool"),
-            self.socket.is_some(),
+            self.ipc_ready || (self.socket.is_none() && installed("ydotool")),
+            self.ipc_ready,
             self.modern && keyboard::probe().is_ok(),
             installed("grim"),
-            self.socket.is_some(),
+            self.ipc_ready,
             self.modern,
             self.modern
         )
     }
     fn request(&self, command: &str) -> Result<String> {
         let socket=self.socket.as_ref().ok_or("this operation requires Hyprland IPC; other Wayland compositors need their accessibility/portal backend")?;
-        let mut stream = UnixStream::connect(socket).map_err(|e| format!("Hyprland IPC: {e}"))?;
+        let mut stream = UnixStream::connect(socket).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                format!("Hyprland IPC: {e}; run Zuse from an authorized Hyprland desktop session")
+            } else {
+                format!("Hyprland IPC: {e}")
+            }
+        })?;
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(|e| e.to_string())?;
@@ -995,6 +1002,7 @@ mod state_tests {
             });
             let backend = super::Wayland {
                 socket: Some(path.clone()),
+                ipc_ready: true,
                 modern: true,
             };
             let result = backend.keyboard_state(false);
@@ -1010,6 +1018,24 @@ mod state_tests {
         assert_eq!(canonical_keyboard_address("0x12AB").unwrap(), "0x12ab");
         for invalid in ["", "0", "0x", "../input/event0"] {
             assert!(canonical_keyboard_address(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn advertised_socket_is_not_a_verified_ipc_connection() {
+        let mut backend = super::Wayland {
+            socket: Some("unused-test-socket".into()),
+            ipc_ready: false,
+            modern: false,
+        };
+        let blocked = backend.capabilities();
+        for key in ["pointer", "windows", "nativeIpc"] {
+            assert!(blocked.contains(&format!("\"{key}\":false")));
+        }
+        backend.ipc_ready = true;
+        let connected = backend.capabilities();
+        for key in ["pointer", "windows", "nativeIpc"] {
+            assert!(connected.contains(&format!("\"{key}\":true")));
         }
     }
 
