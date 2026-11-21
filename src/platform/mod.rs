@@ -12,6 +12,8 @@ mod macos_focus;
 mod png;
 #[cfg(target_os = "linux")]
 pub(crate) mod pointer_x11;
+#[cfg(target_os = "linux")]
+pub(crate) mod wayland_marker;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(any(target_os = "windows", test))]
@@ -23,6 +25,24 @@ pub use macos::Desktop;
 #[cfg(target_os = "windows")]
 pub use windows::Desktop;
 pub type Result<T> = std::result::Result<T, String>;
+
+#[cfg(not(target_os = "linux"))]
+impl Desktop {
+    pub fn window_hit_test(&self, _id: &str, _x: i32, _y: i32) -> Result<bool> {
+        Err(
+            "unsupported_state: native window hit testing is not implemented for this backend"
+                .into(),
+        )
+    }
+
+    pub fn keyboard_status(&self) -> Result<String> {
+        Err("unsupported_state: explicit keyboard state inspection is currently supported on Linux X11 and Hyprland".into())
+    }
+
+    pub fn num_lock(&self, _action: &str) -> Result<String> {
+        Err("unsupported_state: explicit Num Lock control is currently supported on Linux X11 and Hyprland".into())
+    }
+}
 
 pub(crate) fn quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);

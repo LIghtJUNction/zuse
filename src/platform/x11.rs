@@ -30,6 +30,7 @@ api! {
     XGetWindowProperty(Dpy,Window,Atom,std::ffi::c_long,std::ffi::c_long,c_int,Atom,*mut Atom,*mut c_int,*mut c_ulong,*mut c_ulong,*mut *mut u8)->c_int;
     XQueryTree(Dpy,Window,*mut Window,*mut Window,*mut *mut Window,*mut c_uint)->c_int;
     XGetGeometry(Dpy,Window,*mut Window,*mut c_int,*mut c_int,*mut c_uint,*mut c_uint,*mut c_uint,*mut c_uint)->c_int;
+    XGetWindowAttributes(Dpy,Window,*mut WindowAttributes)->c_int;
     XTranslateCoordinates(Dpy,Window,Window,c_int,c_int,*mut c_int,*mut c_int,*mut Window)->c_int;
     XFetchName(Dpy,Window,*mut *mut c_char)->c_int;
     XGetClassHint(Dpy,Window,*mut ClassHint)->c_int;
@@ -46,6 +47,8 @@ api! {
     XDisplayString(Dpy)->*const c_char;
     XQueryKeymap(Dpy,*mut c_char)->c_int;
     XkbGetState(Dpy,c_uint,*mut KeyboardState)->c_int;
+    XkbKeysymToModifiers(Dpy,c_ulong)->c_uint;
+    XkbLockModifiers(Dpy,c_uint,c_uint,c_uint)->c_int;
     XFree(*mut c_void)->c_int;
     XSendEvent(Dpy,Window,c_int,std::ffi::c_long,*mut c_void)->c_int;
     XSetErrorHandler(Option<unsafe extern "C" fn(Dpy,*mut c_void)->c_int>)->Option<unsafe extern "C" fn(Dpy,*mut c_void)->c_int>;
@@ -54,6 +57,33 @@ api! {
 struct ClassHint {
     name: *mut c_char,
     class: *mut c_char,
+}
+#[repr(C)]
+#[derive(Default)]
+struct WindowAttributes {
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+    border_width: c_int,
+    depth: c_int,
+    visual: *mut c_void,
+    root: Window,
+    class: c_int,
+    bit_gravity: c_int,
+    win_gravity: c_int,
+    backing_store: c_int,
+    backing_planes: c_ulong,
+    backing_pixel: c_ulong,
+    save_under: c_int,
+    colormap: c_ulong,
+    map_installed: c_int,
+    map_state: c_int,
+    all_event_masks: std::ffi::c_long,
+    your_event_mask: std::ffi::c_long,
+    do_not_propagate_mask: std::ffi::c_long,
+    override_redirect: c_int,
+    screen: *mut c_void,
 }
 #[repr(C)]
 #[derive(Default)]
@@ -211,6 +241,88 @@ impl X11 {
     }
     pub fn has_input(&self) -> bool {
         self.test.is_some()
+    }
+    fn keyboard_state(&self) -> Result<(KeyboardState, bool, c_uint, c_uint)> {
+        let mut state = KeyboardState::default();
+        let mut keys = [0 as c_char; 32];
+        // SAFETY: these buffers match XkbStateRec and XQueryKeymap's 32 bytes.
+        unsafe {
+            if (self.api.XkbGetState)(self.display, 0x100, &mut state) != 0 {
+                return Err("unsupported_state: X11 cannot read the current keyboard state".into());
+            }
+            (self.api.XQueryKeymap)(self.display, keys.as_mut_ptr());
+            Ok((
+                state,
+                keys.iter().any(|&key| key != 0),
+                (self.api.XkbKeysymToModifiers)(self.display, 0xff7f),
+                (self.api.XkbKeysymToModifiers)(self.display, 0xffe5),
+            ))
+        }
+    }
+    pub fn keyboard_status(&self) -> Result<String> {
+        let (state, held, num, caps) = self.keyboard_state()?;
+        let lock = |mask: c_uint| {
+            if mask == 0 {
+                "null"
+            } else if u32::from(state.locked_mods) & mask != 0 {
+                "true"
+            } else {
+                "false"
+            }
+        };
+        Ok(format!(
+            "{{\"backend\":\"x11\",\"scope\":\"core_keyboard\",\"current\":{{\"address\":\"core\",\"main\":true,\"numLock\":{},\"capsLock\":{},\"active_layout_index\":{}}},\"other_devices\":[],\"other_devices_observed\":false,\"keys_held\":{held}}}",
+            lock(num),
+            lock(caps),
+            state.group
+        ))
+    }
+    pub fn num_lock(&self, action: &str) -> Result<String> {
+        if action == "read" {
+            return self.keyboard_status();
+        }
+        if !matches!(action, "on" | "off" | "toggle") {
+            return Err("Num Lock action must be read, on, off or toggle".into());
+        }
+        let (state, held, mask, _) = self.keyboard_state()?;
+        if mask == 0 {
+            return Err(
+                "unsupported_state: Num Lock has no modifier in the current X11 keymap".into(),
+            );
+        }
+        if held || state.base_mods != 0 || state.latched_mods != 0 {
+            return Err("unsupported_state: release held keys before changing Num Lock".into());
+        }
+        let before = u32::from(state.locked_mods) & mask != 0;
+        let expected = match action {
+            "on" => true,
+            "off" => false,
+            _ => !before,
+        };
+        if before != expected {
+            // Only the explicitly requested core-keyboard lock bit is changed.
+            let accepted = unsafe {
+                (self.api.XkbLockModifiers)(
+                    self.display,
+                    0x100,
+                    mask,
+                    if expected { mask } else { 0 },
+                )
+            };
+            unsafe {
+                (self.api.XSync)(self.display, 0);
+            }
+            if accepted == 0 {
+                return Err("X11 rejected the Num Lock state change; it was not retried".into());
+            }
+        }
+        let (after, _, after_mask, _) = self.keyboard_state()?;
+        if after_mask != mask || (u32::from(after.locked_mods) & mask != 0) != expected {
+            return Err(
+                "Num Lock readback did not match the requested state; it was not retried".into(),
+            );
+        }
+        self.keyboard_status()
     }
     pub fn position(&self) -> Result<(i32, i32)> {
         let (mut root, mut child, mut x, mut y, mut wx, mut wy, mut state) = (0, 0, 0, 0, 0, 0, 0);
@@ -681,6 +793,42 @@ impl X11 {
         }
         Ok((x, y, width, height))
     }
+    /// Resolve the frontmost root child at a point without changing focus or pointer.
+    pub fn window_hit_test(&self, id: &str, x: i32, y: i32) -> Result<bool> {
+        let target = self.window_id(id)?;
+        let (mut dx, mut dy, mut hit) = (0, 0, 0);
+        let ok = unsafe {
+            (self.api.XTranslateCoordinates)(
+                self.display,
+                self.root,
+                self.root,
+                x,
+                y,
+                &mut dx,
+                &mut dy,
+                &mut hit,
+            )
+        };
+        if ok == 0 || hit == 0 {
+            return Ok(false);
+        }
+        let mut current = target;
+        for _ in 0..32 {
+            if current == hit {
+                return Ok(true);
+            }
+            if current <= 1 || current == self.root {
+                break;
+            }
+            let parent = self.parent(current)?;
+            if parent == current {
+                break;
+            }
+            current = parent;
+        }
+        Ok(false)
+    }
+
     pub fn focus(&mut self, id: &str) -> Result<()> {
         let w = self.window_id(id)?;
         unsafe {
@@ -729,6 +877,21 @@ impl X11 {
         Some((format, out))
     }
     pub fn windows(&self) -> Result<String> {
+        let mut focused_ancestors = Vec::new();
+        let (mut focused, mut revert) = (0, 0);
+        unsafe {
+            (self.api.XGetInputFocus)(self.display, &mut focused, &mut revert);
+        }
+        for _ in 0..32 {
+            if focused <= 1 || focused == self.root {
+                break;
+            }
+            focused_ancestors.push(focused);
+            match self.parent(focused) {
+                Ok(parent) => focused = parent,
+                Err(_) => break,
+            }
+        }
         let mut wins = Vec::new();
         if let Some((32, bytes)) = self.property(self.root, c"_NET_CLIENT_LIST") {
             for item in bytes.as_chunks::<{ std::mem::size_of::<c_ulong>() }>().0 {
@@ -761,6 +924,12 @@ impl X11 {
         }
         let mut result = String::from("[");
         for w in wins.into_iter().take(4096) {
+            let mut attributes = WindowAttributes::default();
+            if unsafe { (self.api.XGetWindowAttributes)(self.display, w, &mut attributes) } == 0 {
+                continue;
+            }
+            let mapped = attributes.map_state == 2;
+            let focused = focused_ancestors.contains(&w);
             let Ok((x, y, width, height)) = self.geometry(w) else {
                 continue;
             };
@@ -815,7 +984,7 @@ impl X11 {
             }
             let wine = class.to_ascii_lowercase().contains("wine")
                 || class.to_ascii_lowercase().ends_with(".exe");
-            result.push_str(&format!("{{\"id\":\"0x{w:x}\",\"title\":{},\"class\":{},\"pid\":{},\"x\":{x},\"y\":{y},\"width\":{width},\"height\":{height},\"wine\":{wine}}}",quote(&title),quote(&class),pid.map(|p|p.to_string()).unwrap_or("null".into())));
+            result.push_str(&format!("{{\"id\":\"0x{w:x}\",\"title\":{},\"class\":{},\"pid\":{},\"x\":{x},\"y\":{y},\"width\":{width},\"height\":{height},\"wine\":{wine},\"scale\":1.0,\"focused\":{focused},\"mapped\":{mapped}}}",quote(&title),quote(&class),pid.map(|p|p.to_string()).unwrap_or("null".into())));
         }
         result.push(']');
         Ok(result)

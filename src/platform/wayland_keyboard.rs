@@ -3,12 +3,12 @@ use super::{Result, keymap, xkb};
 use crate::platform::dylib::Library;
 use std::{
     cell::Cell,
-    ffi::{CStr, c_char, c_int, c_void},
-    fs::File,
+    ffi::{CStr, c_char, c_int, c_long, c_ulong, c_void},
+    fs::{File, OpenOptions},
     io::Write,
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::fs::FileExt,
+        unix::fs::{FileExt, FileTypeExt},
     },
     ptr,
     time::{Duration, Instant},
@@ -90,6 +90,99 @@ struct PollFd {
 unsafe extern "C" {
     fn poll(fds: *mut PollFd, count: usize, timeout: c_int) -> c_int;
     fn memfd_create(name: *const c_char, flags: u32) -> c_int;
+    fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+}
+
+const KEY_NUMLOCK: u16 = 69;
+const INPUT_EVENT_SIZE: usize = 2 * std::mem::size_of::<c_long>() + 8;
+
+fn num_lock_events(down: bool) -> Vec<u8> {
+    // Linux input_event contains two native longs followed by type, code and
+    // value. Encoding the initialized fields avoids Rust struct padding.
+    let values: &[i32] = if down { &[1, 0] } else { &[0] };
+    let mut bytes = vec![0; INPUT_EVENT_SIZE * values.len() * 2];
+    for (index, value) in values.iter().enumerate() {
+        let at = index * INPUT_EVENT_SIZE * 2 + 2 * std::mem::size_of::<c_long>();
+        bytes[at..at + 2].copy_from_slice(&1u16.to_ne_bytes()); // EV_KEY
+        bytes[at + 2..at + 4].copy_from_slice(&KEY_NUMLOCK.to_ne_bytes());
+        bytes[at + 4..at + 8].copy_from_slice(&value.to_ne_bytes());
+        // The following zero-initialized event is EV_SYN/SYN_REPORT.
+    }
+    bytes
+}
+
+fn submit_num_lock(writer: &mut impl Write) -> Result<()> {
+    let events = num_lock_events(true);
+    match writer.write(&events) {
+        Ok(written) if written == events.len() => Ok(()),
+        Ok(written) => {
+            // A short batch may have delivered the press. Release only; never
+            // retry the batch or send a second toggle on an uncertain result.
+            if written > 0 {
+                let _ = writer.write(&num_lock_events(false));
+            }
+            Err(format!(
+                "native Num Lock input was incomplete ({written}/{} bytes); input was not replayed",
+                events.len()
+            ))
+        }
+        Err(error) => Err(format!(
+            "write Num Lock to the current keyboard: {error}; input was not replayed"
+        )),
+    }
+}
+
+pub(super) fn toggle_num_lock(
+    sysname: &str,
+    before_input: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let suffix = sysname
+        .strip_prefix("event")
+        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        .ok_or("unsupported_state: invalid native keyboard sysname")?;
+    let mut device = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(format!("/dev/input/event{suffix}"))
+        .map_err(|error| format!("open current keyboard for explicit Num Lock input: {error}"))?;
+    if !device
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .file_type()
+        .is_char_device()
+    {
+        return Err("unsupported_state: current keyboard is not an evdev character device".into());
+    }
+    // Linux EVIOCGBIT(EV_KEY, 96), covering KEY_MAX=0x2ff. Both supported
+    // Linux architectures use the asm-generic ioctl request encoding.
+    let mut keys = [0u8; 96];
+    let key_bits = 0x8000_4521u32 | ((keys.len() as u32) << 16);
+    if unsafe { ioctl(device.as_raw_fd(), key_bits as c_ulong, keys.as_mut_ptr()) } < 0 {
+        return Err(format!(
+            "inspect current keyboard capabilities: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if keys[usize::from(KEY_NUMLOCK / 8)] & (1 << (KEY_NUMLOCK % 8)) == 0 {
+        return Err(
+            "unsupported_state: current native keyboard does not expose KEY_NUMLOCK".into(),
+        );
+    }
+    before_input()?;
+    keys.fill(0);
+    let held_bits = 0x8000_4518u32 | ((keys.len() as u32) << 16); // EVIOCGKEY
+    if unsafe { ioctl(device.as_raw_fd(), held_bits as c_ulong, keys.as_mut_ptr()) } < 0 {
+        return Err(format!(
+            "inspect current keyboard held keys: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if keys.iter().any(|byte| *byte != 0) {
+        return Err(
+            "unsupported_state: a keyboard key is held; release it before Num Lock input".into(),
+        );
+    }
+    submit_num_lock(&mut device)
 }
 #[allow(non_snake_case)]
 struct Api {
@@ -715,4 +808,67 @@ pub(super) fn original_keymap() -> Result<Vec<u8>> {
 
 pub(super) fn probe() -> Result<()> {
     Connection::open().map(|_| ())
+}
+
+#[cfg(test)]
+mod num_lock_tests {
+    use super::{INPUT_EVENT_SIZE, KEY_NUMLOCK, num_lock_events, submit_num_lock};
+    use std::io::{self, Write};
+
+    fn events(bytes: &[u8]) -> Vec<(u16, u16, i32)> {
+        bytes
+            .chunks_exact(INPUT_EVENT_SIZE)
+            .map(|event| {
+                let at = INPUT_EVENT_SIZE - 8;
+                (
+                    u16::from_ne_bytes(event[at..at + 2].try_into().unwrap()),
+                    u16::from_ne_bytes(event[at + 2..at + 4].try_into().unwrap()),
+                    i32::from_ne_bytes(event[at + 4..at + 8].try_into().unwrap()),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn native_num_lock_is_one_press_release_with_sync_frames() {
+        let mut bytes = Vec::new();
+        submit_num_lock(&mut bytes).unwrap();
+        assert_eq!(
+            events(&bytes),
+            [
+                (1, KEY_NUMLOCK, 1),
+                (0, 0, 0),
+                (1, KEY_NUMLOCK, 0),
+                (0, 0, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn short_num_lock_write_only_releases_and_never_replays_the_press() {
+        #[derive(Default)]
+        struct ShortWrite(Vec<Vec<u8>>);
+        impl Write for ShortWrite {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.push(bytes.to_vec());
+                Ok(if self.0.len() == 1 {
+                    INPUT_EVENT_SIZE
+                } else {
+                    bytes.len()
+                })
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut writer = ShortWrite::default();
+        assert!(
+            submit_num_lock(&mut writer)
+                .unwrap_err()
+                .contains("not replayed")
+        );
+        assert_eq!(writer.0.len(), 2);
+        assert_eq!(writer.0[1], num_lock_events(false));
+        assert!(events(&writer.0[1]).iter().all(|(_, _, value)| *value == 0));
+    }
 }

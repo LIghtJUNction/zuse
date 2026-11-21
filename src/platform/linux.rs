@@ -36,7 +36,7 @@ impl Desktop {
     pub fn capabilities(&self) -> String {
         match &self.inner {
             Backend::X11(x) => format!(
-                "{{\"backend\":\"x11\",\"native\":true,\"pointer\":{},\"keyboard\":{},\"windows\":true,\"capture\":true,\"backgroundInput\":\"XSendEvent; application dependent\",\"wine\":\"X11/XWayland windows; Wine installation optional\"}}",
+                "{{\"backend\":\"x11\",\"native\":true,\"keyboard_state\":true,\"num_lock\":true,\"pointer\":{},\"keyboard\":{},\"windows\":true,\"capture\":true,\"backgroundInput\":\"XSendEvent; application dependent\",\"wine\":\"X11/XWayland windows; Wine installation optional\"}}",
                 x.has_input(),
                 x.has_input()
             ),
@@ -67,6 +67,18 @@ impl Desktop {
             Backend::Wayland(w) => w.key(chord),
         }
     }
+    pub fn keyboard_status(&self) -> Result<String> {
+        match &self.inner {
+            Backend::X11(x) => x.keyboard_status(),
+            Backend::Wayland(w) => w.keyboard_status(),
+        }
+    }
+    pub fn num_lock(&self, action: &str) -> Result<String> {
+        match &self.inner {
+            Backend::X11(x) => x.num_lock(action),
+            Backend::Wayland(w) => w.num_lock(action),
+        }
+    }
     pub fn type_text(&mut self, text: &str) -> Result<()> {
         match &mut self.inner {
             Backend::X11(x) => x.type_text(text),
@@ -83,6 +95,12 @@ impl Desktop {
         match &self.inner {
             Backend::X11(x) => x.windows(),
             Backend::Wayland(w) => w.windows(),
+        }
+    }
+    pub fn window_hit_test(&self, id: &str, x: i32, y: i32) -> Result<bool> {
+        match &self.inner {
+            Backend::X11(display) => display.window_hit_test(id, x, y),
+            Backend::Wayland(_) => Err("unsupported_state: this Wayland backend cannot prove the input surface at a point; use native accessibility actions or a browser target".into()),
         }
     }
     pub fn focus(&mut self, id: &str) -> Result<()> {

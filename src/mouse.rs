@@ -25,6 +25,8 @@ pub struct MouseOptions {
     pub mode: MouseMode,
     pub name: String,
     /// `None` preserves the system appearance; allowed only for the user mouse.
+    /// Wayland custom appearances are click-through last-operation markers;
+    /// the real input and system cursor still belong to the user mouse.
     pub appearance: Option<CursorStyle>,
     /// Optional custom premultiplied image, overriding the generated style.
     pub image: Option<CursorImage>,
@@ -79,13 +81,18 @@ impl MouseOptions {
 enum Backend {
     #[cfg(target_os = "linux")]
     X11(crate::platform::pointer_x11::X11Pointer),
+    #[cfg(target_os = "linux")]
+    WaylandMarker {
+        desktop: Desktop,
+        marker: Box<crate::platform::wayland_marker::WaylandMarker>,
+    },
     System(Desktop),
 }
 
 /// A pointer whose native resources live exactly as long as this value.
 ///
 /// Dropping it releases held synthetic buttons and removes its independent
-/// native device. `close()` also reports cleanup failures. It never silently
+/// native device or operation marker. `close()` also reports cleanup failures. It never silently
 /// substitutes the user pointer when independent input is unavailable.
 pub struct Mouse {
     id: u64,
@@ -119,13 +126,30 @@ impl Mouse {
         } else {
             #[cfg(target_os = "linux")]
             {
-                require_x11()?;
                 let image = image.as_ref().ok_or("mouse appearance is missing")?;
-                Backend::X11(if options.mode == MouseMode::Independent {
-                    crate::platform::pointer_x11::X11Pointer::create(&options.name, image)?
+                if options.mode == MouseMode::Independent {
+                    require_x11()?;
+                    Backend::X11(crate::platform::pointer_x11::X11Pointer::create(
+                        &options.name,
+                        image,
+                    )?)
                 } else {
-                    crate::platform::pointer_x11::X11Pointer::shared(image)?
-                })
+                    let desktop = Desktop::connect()?;
+                    if desktop.backend() == "wayland" {
+                        let mut marker = crate::platform::wayland_marker::WaylandMarker::connect(
+                            &options.name,
+                            image,
+                        )?;
+                        let (x, y) = desktop.position()?;
+                        marker.move_to(x, y)?;
+                        Backend::WaylandMarker {
+                            desktop,
+                            marker: Box::new(marker),
+                        }
+                    } else {
+                        Backend::X11(crate::platform::pointer_x11::X11Pointer::shared(image)?)
+                    }
+                }
             }
             #[cfg(not(target_os = "linux"))]
             {
@@ -175,6 +199,8 @@ impl Mouse {
         let (x, y) = match self.backend.as_ref().ok_or("mouse is closed")? {
             #[cfg(target_os = "linux")]
             Backend::X11(native) => native.position()?,
+            #[cfg(target_os = "linux")]
+            Backend::WaylandMarker { desktop, .. } => desktop.position()?,
             Backend::System(desktop) => desktop.position()?,
         };
         Ok(Point {
@@ -243,6 +269,13 @@ impl Mouse {
         match self.backend.as_mut().ok_or("mouse is closed")? {
             #[cfg(target_os = "linux")]
             Backend::X11(native) => native.move_to(x, y),
+            #[cfg(target_os = "linux")]
+            Backend::WaylandMarker { desktop, marker } => {
+                desktop.move_to(x, y)?;
+                marker.move_to(x, y).map_err(|error| {
+                    format!("user pointer moved but operation marker update failed: {error}")
+                })
+            }
             Backend::System(desktop) => desktop.move_to(x, y),
         }
     }
@@ -299,6 +332,14 @@ impl Mouse {
         match self.backend.as_mut().ok_or("mouse is closed")? {
             #[cfg(target_os = "linux")]
             Backend::X11(native) => native.button(button, action)?,
+            #[cfg(target_os = "linux")]
+            Backend::WaylandMarker { desktop, marker } => {
+                desktop.button(button, action)?;
+                let (x, y) = desktop.position()?;
+                marker.move_to(x, y).map_err(|error| {
+                    format!("button input was sent but operation marker update failed: {error}")
+                })?;
+            }
             Backend::System(desktop) => desktop.button(button, action)?,
         }
         if action == "up" {
@@ -318,6 +359,14 @@ impl Mouse {
         match self.backend.as_mut().ok_or("mouse is closed")? {
             #[cfg(target_os = "linux")]
             Backend::X11(native) => native.scroll(dx, dy),
+            #[cfg(target_os = "linux")]
+            Backend::WaylandMarker { desktop, marker } => {
+                desktop.scroll(dx, dy)?;
+                let (x, y) = desktop.position()?;
+                marker.move_to(x, y).map_err(|error| {
+                    format!("scroll input was sent but operation marker update failed: {error}")
+                })
+            }
             Backend::System(desktop) => desktop.scroll(dx, dy),
         }
     }
@@ -330,9 +379,11 @@ impl Mouse {
         match self.backend.as_mut().ok_or("mouse is closed")? {
             #[cfg(target_os = "linux")]
             Backend::X11(native) => native.set_cursor(image),
-            Backend::System(_) => Err(
-                "custom cursor appearance requires an X11 mouse created with an appearance".into(),
-            ),
+            #[cfg(target_os = "linux")]
+            Backend::WaylandMarker { marker, .. } => marker.set_cursor(image),
+            Backend::System(_) => {
+                Err("custom appearance requires a mouse created with an appearance".into())
+            }
         }
     }
 
@@ -346,6 +397,23 @@ impl Mouse {
                 Backend::X11(native) => {
                     self.held.clear();
                     native.close()
+                }
+                #[cfg(target_os = "linux")]
+                Backend::WaylandMarker { desktop, marker } => {
+                    let mut errors = Vec::new();
+                    for b in std::mem::take(&mut self.held) {
+                        if let Err(error) = desktop.button(&b, "up") {
+                            errors.push(error);
+                        }
+                    }
+                    if let Err(error) = marker.close() {
+                        errors.push(error);
+                    }
+                    if errors.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(errors.join("; "))
+                    }
                 }
                 Backend::System(desktop) => {
                     let mut errors = Vec::new();
@@ -397,7 +465,7 @@ fn require_x11() -> Result<(), String> {
     match selected.as_str() {
         "x11"=>Ok(()),
         "" if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var("XDG_SESSION_TYPE").unwrap_or_default()!="wayland"=>Ok(()),
-        ""|"wayland"=>Err("independent mice and custom cursors require a native X11 MPX display; this Wayland backend has no independent-pointer support. Use an X11 session or explicitly select user_mouse(appearance=\"system\")".into()),
+        ""|"wayland"=>Err("independent mice require a native X11 MPX display; Wayland supports user_mouse with a click-through operation marker or appearance=\"system\"".into()),
         _=>Err("ZUSE_BACKEND must be x11 or wayland".into()),
     }
 }

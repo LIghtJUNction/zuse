@@ -104,7 +104,7 @@ impl Wayland {
     }
     pub fn capabilities(&self) -> String {
         format!(
-            "{{\"backend\":\"wayland\",\"compositor\":{},\"pointer\":{},\"windows\":{},\"keyboard\":{},\"capture\":{},\"nativeIpc\":{},\"inputHelper\":\"native Wayland virtual keyboard; pointer buttons/wheel use authorized ydotool daemon\",\"windowCapture\":\"composited visible region\",\"backgroundInput\":\"Hyprland targeted shortcuts\",\"backgroundText\":\"current keymap plain/Shift levels; unavailable characters rejected before input\",\"keyboardState\":\"Hyprland 0.55+: no held keys, Caps off, group 0; focused chords preserve verified Num Lock; text and background chords require Num off; sticky/custom modifier state unsupported\"}}",
+            "{{\"backend\":\"wayland\",\"compositor\":{},\"pointer\":{},\"windows\":{},\"keyboard\":{},\"capture\":{},\"nativeIpc\":{},\"keyboard_state\":{},\"num_lock\":{},\"operationMarker\":{{\"availability\":\"protocol-dependent\",\"mode\":\"last-operation-point\",\"input\":\"shared-user-pointer\",\"clickThrough\":true,\"independentPointer\":false,\"requires\":[\"wlr-layer-shell\",\"xdg-output\",\"ARGB8888\"]}},\"inputHelper\":\"native Wayland virtual keyboard; pointer buttons/wheel use authorized ydotool daemon\",\"windowCapture\":\"composited visible region\",\"backgroundInput\":\"Hyprland targeted shortcuts\",\"backgroundText\":\"current keymap plain/Shift levels; unavailable characters rejected before input\",\"keyboardState\":\"Hyprland 0.55+: current keyboard checked separately from other devices; no held keys, Caps off, group 0; focused chords preserve verified Num Lock; text and background chords require Num off; sticky/custom modifier state unsupported\"}}",
             if self.socket.is_some() {
                 "\"hyprland\""
             } else {
@@ -114,7 +114,9 @@ impl Wayland {
             self.socket.is_some(),
             self.modern && keyboard::probe().is_ok(),
             installed("grim"),
-            self.socket.is_some()
+            self.socket.is_some(),
+            self.modern,
+            self.modern
         )
     }
     fn request(&self, command: &str) -> Result<String> {
@@ -167,23 +169,102 @@ impl Wayland {
         self.keyboard_state(false).map(|_| ())
     }
 
-    fn keyboard_state(&self, allow_num_lock: bool) -> Result<KeyboardState> {
-        if !self.modern {
-            return Err(
+    fn require_keyboard_inspection(&self) -> Result<()> {
+        if self.modern {
+            Ok(())
+        } else {
+            Err(
                 "unsupported_state: keyboard state inspection requires Hyprland 0.55 or newer"
                     .into(),
-            );
+            )
         }
-        let state = check_keyboard_state(&self.request("j/devices")?, allow_num_lock)?;
-        // This is a read-only compositor query, including extended Linux
-        // keyboard codes. It does not create a virtual input device.
+    }
+
+    fn held_keys(&self) -> Result<bool> {
+        self.require_keyboard_inspection()?;
+        // This query includes extended Linux keyboard codes and never creates
+        // a virtual device or changes the active keyboard.
         let held = self.request("/repl return (function() for code=8,775 do if hl.is_key_down(code) then return true end end return false end)()")?;
-        match held.trim() {
-            "false" => Ok(state),
-            "true" => {
-                Err("unsupported_state: a keyboard key is held; release it before input".into())
+        parse_held_keys(&held)
+    }
+
+    pub fn keyboard_status(&self) -> Result<String> {
+        self.require_keyboard_inspection()?;
+        let devices = self.request("j/devices")?;
+        keyboard_status_json(&devices, self.held_keys()?)
+    }
+
+    fn main_keyboard_sysname(&self, address: &str) -> Result<String> {
+        let address = canonical_keyboard_address(address)?;
+        // The compositor exposes the kernel sysname directly. Device display
+        // names can be duplicated or normalized, so they are never guessed.
+        let response = self.request(&format!(
+            "/repl return (function() local count=0 local event=nil for _,d in ipairs(hl.get_devices()) do if d.type==\"keyboard\" and d.main and d.address=={} then count=count+1 event=tonumber(string.match(d.sysname or \"\",\"^event(%d+)$\")) end end if count==1 and event then return event end return -1 end)()",
+            quote(&address)
+        ))?;
+        let event = response.trim().parse::<u32>().map_err(
+            |_| "unsupported_state: the current keyboard has no unambiguous native evdev device",
+        )?;
+        Ok(format!("event{event}"))
+    }
+
+    pub fn num_lock(&self, action: &str) -> Result<String> {
+        if action == "read" {
+            return self.keyboard_status();
+        }
+        if !matches!(action, "on" | "off" | "toggle") {
+            return Err("Num Lock action must be read, on, off, or toggle".into());
+        }
+        let before = self.keyboard_state(true)?;
+        let wanted = match action {
+            "on" => true,
+            "off" => false,
+            _ => !before.num_lock,
+        };
+        if before.num_lock == wanted {
+            return self.keyboard_status();
+        }
+        let sysname = self.main_keyboard_sysname(&before.main_address)?;
+        keyboard::toggle_num_lock(&sysname, || {
+            if self.keyboard_state(true)? != before
+                || self.main_keyboard_sysname(&before.main_address)? != sysname
+            {
+                return Err(
+                    "unsupported_state: the current keyboard changed before Num Lock input".into(),
+                );
             }
-            _ => Err("unsupported_state: compositor cannot report held keyboard keys".into()),
+            Ok(())
+        })?;
+
+        // Only the reads are retried. Replaying a toggle after an uncertain
+        // result would reverse an input that the compositor has already seen.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            let devices = self.request("j/devices")?;
+            let after = check_keyboard_state(&devices, true)?;
+            if after.main_address != before.main_address {
+                return Err("Num Lock input was sent but the active keyboard changed before verification; input was not replayed".into());
+            }
+            if after.num_lock == wanted {
+                return keyboard_status_json(&devices, self.held_keys()?);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "Num Lock input was sent but readback stayed {}; input was not replayed",
+                    if after.num_lock { "on" } else { "off" }
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn keyboard_state(&self, allow_num_lock: bool) -> Result<KeyboardState> {
+        self.require_keyboard_inspection()?;
+        let state = check_keyboard_state(&self.request("j/devices")?, allow_num_lock)?;
+        if self.held_keys()? {
+            Err("unsupported_state: a keyboard key is held; release it before input".into())
+        } else {
+            Ok(state)
         }
     }
     pub fn position(&self) -> Result<(i32, i32)> {
@@ -375,7 +456,25 @@ impl Wayland {
     }
     pub fn type_text(&mut self, text: &str) -> Result<()> {
         validate_text(text)?;
-        keyboard::type_text(text, || self.quiescent_keyboard())
+        if text.is_empty() {
+            return Ok(());
+        }
+        let before = self.keyboard_state(false)?;
+        if !before.main_is_last {
+            // Destroying a virtual keyboard makes Hyprland select the last
+            // native device. Use the existing keymap without creating a
+            // device when that would change the user's active keyboard.
+            return self.type_into("active", text);
+        }
+        before.require_restorable_keyboard()?;
+        keyboard::type_text(text, || {
+            let current = self.keyboard_state(false)?;
+            current.require_restorable_keyboard()?;
+            if current != before {
+                return Err("unsupported_state: keyboard changed while preparing text".into());
+            }
+            Ok(())
+        })
     }
     pub fn type_into(&mut self, id: &str, text: &str) -> Result<()> {
         validate_text(text)?;
@@ -423,45 +522,11 @@ impl Wayland {
         Ok(())
     }
     pub fn windows(&self) -> Result<String> {
-        let response = self.request("j/clients")?;
-        let mut tokens = vec![Token::EMPTY; 32_768];
-        let doc = Document::parse(response.as_bytes(), &mut tokens, Limits::default())
-            .map_err(|e| e.to_string())?;
-        let mut rows = Vec::new();
-        for window in doc.root().elements().take(4096) {
-            let field = |key| window.get(key).map(|v| v.raw()).unwrap_or("null");
-            let class = window
-                .get("class")
-                .and_then(|v| v.string())
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let initial = window
-                .get("initialClass")
-                .and_then(|v| v.string())
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let wine = [class, initial].iter().any(|s| {
-                let lower = s.to_ascii_lowercase();
-                lower.contains("wine") || lower.ends_with(".exe")
-            });
-            let at = window
-                .get("at")
-                .map(|v| v.elements().collect::<Vec<_>>())
-                .unwrap_or_default();
-            let size = window
-                .get("size")
-                .map(|v| v.elements().collect::<Vec<_>>())
-                .unwrap_or_default();
-            let coordinate = |list: &Vec<zmcpio::json::Value<'_>>, index: usize| {
-                list.get(index).and_then(|v| v.integer().ok()).unwrap_or(0)
-            };
-            rows.push(format!(
-                "{{\"id\":{},\"title\":{},\"class\":{},\"pid\":{},\"x\":{},\"y\":{},\"width\":{},\"height\":{},\"wine\":{},\"workspace\":{}}}",
-                field("address"),field("title"),field("class"),field("pid"),
-                coordinate(&at,0),coordinate(&at,1),coordinate(&size,0),coordinate(&size,1),wine,field("workspace")
-            ));
-        }
-        Ok(format!("[{}]", rows.join(",")))
+        window_rows(
+            &self.request("j/clients")?,
+            &self.request("j/monitors")?,
+            &self.request("j/activewindow")?,
+        )
     }
     pub fn focus(&mut self, id: &str) -> Result<()> {
         let s = Self::selector(id)?;
@@ -533,6 +598,83 @@ impl Wayland {
     }
 }
 
+fn window_rows(clients: &str, monitors: &str, active: &str) -> Result<String> {
+    let mut tokens = vec![Token::EMPTY; 32_768];
+    let doc = Document::parse(clients.as_bytes(), &mut tokens, Limits::default())
+        .map_err(|e| e.to_string())?;
+    let mut monitor_tokens = vec![Token::EMPTY; 8192];
+    let monitor_doc = Document::parse(monitors.as_bytes(), &mut monitor_tokens, Limits::default())
+        .map_err(|e| e.to_string())?;
+    let mut active_tokens = [Token::EMPTY; 512];
+    let active_doc = Document::parse(active.as_bytes(), &mut active_tokens, Limits::default())
+        .map_err(|e| e.to_string())?;
+    let active_address = active_doc.root().get("address").and_then(|v| v.string());
+    let mut rows = Vec::new();
+    for window in doc.root().elements().take(4096) {
+        let field = |key| window.get(key).map(|v| v.raw()).unwrap_or("null");
+        let class = window
+            .get("class")
+            .and_then(|v| v.string())
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let initial = window
+            .get("initialClass")
+            .and_then(|v| v.string())
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let wine = [class, initial].iter().any(|s| {
+            let lower = s.to_ascii_lowercase();
+            lower.contains("wine") || lower.ends_with(".exe")
+        });
+        let at = window
+            .get("at")
+            .map(|v| v.elements().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let size = window
+            .get("size")
+            .map(|v| v.elements().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let coordinate = |list: &Vec<zmcpio::json::Value<'_>>, index: usize| {
+            list.get(index)
+                .and_then(|v| v.integer().ok())
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".into())
+        };
+        let monitor_id = window.get("monitor").and_then(|v| v.integer().ok());
+        let scale = monitor_doc
+            .root()
+            .elements()
+            .find(|monitor| {
+                monitor_id.is_some()
+                    && monitor.get("id").and_then(|v| v.integer().ok()) == monitor_id
+            })
+            .and_then(|monitor| monitor.get("scale"))
+            .filter(|v| {
+                v.raw()
+                    .parse::<f64>()
+                    .is_ok_and(|n| n.is_finite() && n > 0.0)
+            })
+            .map(|v| v.raw())
+            .unwrap_or("null");
+        let focused = active_address
+            .as_ref()
+            .zip(window.get("address").and_then(|v| v.string()))
+            .map(|(active, address)| active.chars().eq(address.chars()).to_string())
+            .unwrap_or_else(|| "null".into());
+        let mapped = window
+            .get("mapped")
+            .and_then(|v| v.boolean())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "null".into());
+        rows.push(format!(
+            "{{\"id\":{},\"title\":{},\"class\":{},\"pid\":{},\"x\":{},\"y\":{},\"width\":{},\"height\":{},\"wine\":{},\"workspace\":{},\"scale\":{scale},\"focused\":{focused},\"mapped\":{mapped}}}",
+            field("address"),field("title"),field("class"),field("pid"),
+            coordinate(&at,0),coordinate(&at,1),coordinate(&size,0),coordinate(&size,1),wine,field("workspace")
+        ));
+    }
+    Ok(format!("[{}]", rows.join(",")))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct KeyboardState {
     num_lock: bool,
@@ -547,7 +689,7 @@ impl KeyboardState {
         // that selection is exactly the keyboard we observed before input.
         if !self.main_is_last || self.main_address.is_empty() {
             return Err(
-                "unsupported_state: cannot restore the same active keyboard after a Num Lock chord"
+                "unsupported_state: cannot restore the same active keyboard after virtual input"
                     .into(),
             );
         }
@@ -568,7 +710,6 @@ fn check_keyboard_state(json: &str, allow_num_lock: bool) -> Result<KeyboardStat
     let mut main_index = 0;
     let mut main_address = String::new();
     let mut main_num_lock = false;
-    let mut any_num_lock = false;
     for keyboard in keyboards.elements().take(65) {
         count += 1;
         if count > 64 {
@@ -582,14 +723,16 @@ fn check_keyboard_state(json: &str, allow_num_lock: bool) -> Result<KeyboardStat
                 main_address = address.chars().collect();
             }
         }
+        if !is_main {
+            // A device's LED state is not the active seat's modifier state.
+            // Secondary keyboards are diagnostic data, not input guards.
+            continue;
+        }
         for (field, name) in [("capsLock", "Caps Lock"), ("numLock", "Num Lock")] {
             match keyboard.get(field).and_then(|v| v.boolean()) {
                 Some(false) => {}
                 Some(true) if field == "numLock" && allow_num_lock => {
-                    any_num_lock = true;
-                    if is_main {
-                        main_num_lock = true;
-                    }
+                    main_num_lock = true;
                 }
                 Some(true) => {
                     return Err(format!(
@@ -615,20 +758,65 @@ fn check_keyboard_state(json: &str, allow_num_lock: bool) -> Result<KeyboardStat
     if count == 0 || main != 1 {
         return Err("unsupported_state: a unique main keyboard is required".into());
     }
-    if any_num_lock && !main_num_lock {
-        return Err(
-            "unsupported_state: Num Lock differs between the active and other keyboards".into(),
-        );
-    }
     Ok(KeyboardState {
         num_lock: main_num_lock,
         main_address,
         main_is_last: main_index == count,
     })
 }
+
+fn parse_held_keys(response: &str) -> Result<bool> {
+    match response.trim() {
+        "false" => Ok(false),
+        "true" => Ok(true),
+        _ => Err("unsupported_state: compositor cannot report held keyboard keys".into()),
+    }
+}
+
+fn canonical_keyboard_address(address: &str) -> Result<String> {
+    // `hyprctl -j devices` omits the 0x prefix used by Lua device.address.
+    let digits = address.strip_prefix("0x").unwrap_or(address);
+    let value = u64::from_str_radix(digits, 16)
+        .ok()
+        .filter(|address| *address != 0)
+        .ok_or("unsupported_state: the current keyboard has no stable identity")?;
+    Ok(format!("0x{value:x}"))
+}
+
+fn keyboard_status_json(json: &str, held: bool) -> Result<String> {
+    let mut tokens = vec![Token::EMPTY; 8192];
+    let doc = Document::parse(json.as_bytes(), &mut tokens, Limits::default())
+        .map_err(|_| "unsupported_state: cannot parse compositor keyboard state")?;
+    let keyboards = doc
+        .root()
+        .get("keyboards")
+        .ok_or("unsupported_state: compositor keyboard state is unavailable")?;
+    let mut current = None;
+    let mut other_devices = Vec::new();
+    for (index, device) in keyboards.elements().take(65).enumerate() {
+        if index == 64 {
+            return Err("unsupported_state: too many keyboards to inspect".into());
+        }
+        if device.get("main").and_then(|v| v.boolean()) == Some(true) {
+            if current.replace(device.raw()).is_some() {
+                return Err("unsupported_state: a unique main keyboard is required".into());
+            }
+        } else {
+            other_devices.push(device.raw());
+        }
+    }
+    let current = current.ok_or("unsupported_state: a unique main keyboard is required")?;
+    Ok(format!(
+        "{{\"backend\":\"wayland\",\"compositor\":\"hyprland\",\"current\":{current},\"other_devices\":[{}],\"keys_held\":{held}}}",
+        other_devices.join(",")
+    ))
+}
 #[cfg(test)]
 mod state_tests {
-    use super::check_keyboard_state;
+    use super::{
+        canonical_keyboard_address, check_keyboard_state, keyboard_status_json, parse_held_keys,
+        window_rows,
+    };
     #[test]
     fn rejects_known_nonzero_or_unknown_states() {
         let neutral = r#"{"keyboards":[{"main":true,"capsLock":false,"numLock":false,"active_layout_index":0}]}"#;
@@ -697,6 +885,154 @@ mod state_tests {
                 "\"main\":false,\"capsLock\":false,\"numLock\":false",
                 "\"main\":false,\"capsLock\":false,\"numLock\":true",
             );
-        assert!(check_keyboard_state(&mixed, true).is_err());
+        assert!(!check_keyboard_state(&mixed, true).unwrap().num_lock);
+    }
+
+    #[test]
+    fn eight_other_num_locks_do_not_block_the_current_keyboard() {
+        let main = r#"{"address":"0x1","main":true,"capsLock":false,"numLock":false,"active_layout_index":0}"#;
+        let other = r#"{"main":false,"capsLock":true,"numLock":true,"active_layout_index":3}"#;
+        let devices = format!("{{\"keyboards\":[{main},{}]}}", [other; 8].join(","));
+        let state = check_keyboard_state(&devices, false).unwrap();
+        assert!(!state.num_lock);
+        assert!(
+            !state.main_is_last,
+            "text must avoid creating a virtual keyboard"
+        );
+        let report = keyboard_status_json(&devices, false).unwrap();
+        let mut tokens = [super::Token::EMPTY; 256];
+        let doc = super::Document::parse(report.as_bytes(), &mut tokens, super::Limits::default())
+            .unwrap();
+        assert_eq!(
+            doc.root()
+                .get("current")
+                .unwrap()
+                .get("numLock")
+                .unwrap()
+                .boolean(),
+            Some(false)
+        );
+        assert_eq!(
+            doc.root().get("other_devices").unwrap().elements().count(),
+            8
+        );
+        assert!(
+            doc.root()
+                .get("other_devices")
+                .unwrap()
+                .elements()
+                .all(|device| device.get("numLock").unwrap().boolean() == Some(true))
+        );
+    }
+
+    #[test]
+    fn unknown_secondary_state_is_diagnostic_but_current_state_must_be_known() {
+        let devices = r#"{"keyboards":[{"main":true,"capsLock":false,"numLock":false,"active_layout_index":0},{"main":false}]}"#;
+        check_keyboard_state(devices, false).unwrap();
+        for field in ["capsLock", "numLock", "active_layout_index"] {
+            assert!(check_keyboard_state(&devices.replace(field, "missing"), false).is_err());
+        }
+        let ambiguous = devices.replace("{\"main\":false}", "{\"main\":true}");
+        assert!(check_keyboard_state(&ambiguous, false).is_err());
+        assert!(keyboard_status_json(&ambiguous, false).is_err());
+    }
+
+    #[test]
+    fn held_keys_and_unknown_held_state_remain_distinct_from_quiescence() {
+        assert!(!parse_held_keys("false\n").unwrap());
+        assert!(parse_held_keys("true\n").unwrap());
+        for unknown in ["", "nil", "error", "0"] {
+            assert!(parse_held_keys(unknown).is_err());
+        }
+    }
+
+    #[test]
+    fn keyboard_inspection_rejects_held_or_unreported_keys_before_input() {
+        use std::{
+            io::{Read, Write},
+            os::unix::net::UnixListener,
+        };
+        for (index, held) in ["true", "nil"].into_iter().enumerate() {
+            let path = std::env::temp_dir().join(format!(
+                "zuse-keyboard-state-{}-{index}.sock",
+                std::process::id()
+            ));
+            let listener = UnixListener::bind(&path).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let server = std::thread::spawn(move || {
+                for (expected, response) in [
+                    (
+                        "j/devices",
+                        r#"{"keyboards":[{"main":true,"capsLock":false,"numLock":false,"active_layout_index":0}]}"#,
+                    ),
+                    ("/repl return", held),
+                ] {
+                    let deadline = super::Instant::now() + super::Duration::from_secs(2);
+                    let mut stream = loop {
+                        match listener.accept() {
+                            Ok((stream, _)) => break stream,
+                            Err(error)
+                                if error.kind() == std::io::ErrorKind::WouldBlock
+                                    && super::Instant::now() < deadline =>
+                            {
+                                std::thread::sleep(super::Duration::from_millis(1))
+                            }
+                            Err(error) => panic!("keyboard inspection request missing: {error}"),
+                        }
+                    };
+                    stream
+                        .set_read_timeout(Some(super::Duration::from_secs(2)))
+                        .unwrap();
+                    let mut bytes = [0; 1024];
+                    let length = stream.read(&mut bytes).unwrap();
+                    assert!(
+                        std::str::from_utf8(&bytes[..length])
+                            .unwrap()
+                            .starts_with(expected)
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+            });
+            let backend = super::Wayland {
+                socket: Some(path.clone()),
+                modern: true,
+            };
+            let result = backend.keyboard_state(false);
+            server.join().unwrap();
+            std::fs::remove_file(path).unwrap();
+            assert!(result.unwrap_err().starts_with("unsupported_state:"));
+        }
+    }
+
+    #[test]
+    fn native_keyboard_lookup_normalizes_the_json_and_lua_addresses() {
+        assert_eq!(canonical_keyboard_address("12ab").unwrap(), "0x12ab");
+        assert_eq!(canonical_keyboard_address("0x12AB").unwrap(), "0x12ab");
+        for invalid in ["", "0", "0x", "../input/event0"] {
+            assert!(canonical_keyboard_address(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn window_scale_focus_and_mapping_are_observed_without_defaults() {
+        let clients = r#"[{"address":"0x1","at":[40,50],"size":[800,600],"monitor":2,"mapped":true},{"address":"0x2","monitor":9}]"#;
+        let monitors = r#"[{"id":1,"scale":1},{"id":2,"scale":1.5}]"#;
+        let rows = window_rows(clients, monitors, r#"{"address":"0x1"}"#).unwrap();
+        let mut tokens = [super::Token::EMPTY; 128];
+        let doc =
+            super::Document::parse(rows.as_bytes(), &mut tokens, super::Limits::default()).unwrap();
+        let rows = doc.root().elements().collect::<Vec<_>>();
+        assert_eq!(rows[0].get("scale").unwrap().raw(), "1.5");
+        assert_eq!(rows[0].get("focused").unwrap().boolean(), Some(true));
+        assert_eq!(rows[0].get("mapped").unwrap().boolean(), Some(true));
+        for missing in ["scale", "mapped", "x", "y", "width", "height"] {
+            assert_eq!(rows[1].get(missing).unwrap().raw(), "null");
+        }
+        assert_eq!(rows[1].get("focused").unwrap().boolean(), Some(false));
+        assert!(
+            window_rows(clients, monitors, "{}")
+                .unwrap()
+                .contains("\"focused\":null")
+        );
     }
 }
