@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-21
+
+- Update the transitive zcall Git lock to `317c52f1` (release tooling only; no runtime API changes in that dependency).
 
 - Add `zuse script` and MCP `zuse.script` with owned mouse variables, lexical blocks, borrowed aliases and function parameters, bounded repeats, and cooperative parallel or sequential trajectories.
 - Create independent Linux X11 MPX mice by default, with per-device glowing cursors, configurable colors/shapes, bounded PAM images, and explicit shared user-pointer selection.
