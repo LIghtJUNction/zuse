@@ -27,8 +27,8 @@ source = "git+https://github.com/LIghtJUNction/zconv.git#f78b97b7065bbb7cf9ddfd0
 
 [[package]]
 name = "zmcpio"
-version = "0.5.2"
-source = "git+https://github.com/LIghtJUNction/zmcpio.git#97f61f9de32804f7e4d712b236ad4ba838f443a6"
+version = "0.5.3"
+source = "git+https://github.com/LIghtJUNction/zmcpio.git#89a247ac274bcd96b760dd9e7dcb0d4d924a901e"
 dependencies = [
  "zcall",
 ]
