@@ -1,0 +1,8 @@
+timer.start()
+browser.launch(headless=true)
+browser.navigate(url="data:text/html,<div id='board'></div>")
+browser.evaluate(expression="setTimeout(()=>{let b=document.createElement('button');b.id='ready';b.textContent='Ready';b.onclick=()=>b.textContent='Received';document.getElementById('board').appendChild(b)},80);true")
+watch_until_click(source="browser", scope="#board", selector="#ready", max_clicks=1, timeout=2000)
+observe(source="browser", selector="#board")
+browser.close()
+timer.stop()

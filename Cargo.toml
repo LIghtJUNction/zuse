@@ -9,7 +9,7 @@ repository = "https://github.com/LIghtJUNction/zuse"
 readme = "README.md"
 keywords = ["computer-use", "mcp", "automation", "no-std", "agents"]
 categories = ["command-line-utilities", "api-bindings", "no-std"]
-include = ["scripts/**", "benches/**", "src/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README*", "LICENSE", "CHANGELOG.md"]
+include = ["scripts/**", "skills/**", "benches/**", "src/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README*", "LICENSE", "CHANGELOG.md"]
 
 [lib]
 name = "zuse"
@@ -17,6 +17,7 @@ path = "src/lib.rs"
 
 [features]
 default = ["std"]
+vision = ["std"]
 std = ["dep:zmcpio", "dep:zclap", "dep:z64", "dep:zsys"]
 
 [dependencies]

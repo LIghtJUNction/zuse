@@ -4,7 +4,7 @@
 
 zuse turns small programs into desktop observations and actions. The same executor drives native windows, an isolated Chromium browser, accessibility trees, Android displays and Chrome tabs, iOS through WebDriverAgent, serial/USB devices, IDE entry points, and managed harness processes. Human assistance pauses a program and gives it an explicit continuation.
 
-[中文](README.zh-CN.md) · [Language](docs/language.md) · [Scoped mice](docs/scoped-mice.md) · [Target motion](docs/target-motion.md) · [Platforms](docs/platforms.md) · [Architecture](docs/architecture.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
+[中文](README.zh-CN.md) · [Language](docs/language.md) · [Functions and local observation](docs/local-programs.md) · [Scoped mice](docs/scoped-mice.md) · [Target motion](docs/target-motion.md) · [Platforms](docs/platforms.md) · [Architecture](docs/architecture.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
 
 ## Small core, explicit effects
 
@@ -34,7 +34,7 @@ Native archives for Linux, Windows, and macOS are published on the [Releases pag
 
 ## Project Z dependencies
 
-Project Z dependencies use their GitHub repositories directly. Each currently uses `main` as its default branch. Refresh the pinned Git commits with `cargo update -p zmcpio -p zclap -p z64 -p zsys -p zcall -p zconv`, review the lockfile diff, and run CI before merging a refresh. CI and release builds use `--locked`. GitHub publishes the native binaries; registry packaging is separate and must not silently substitute a different dependency graph.
+Project Z dependencies use their GitHub repositories directly. Each currently uses `main` as its default branch. Refresh the pinned Git commits with `cargo update -p zmcpio -p zclap -p z64 -p zsys -p zcall -p zconv`, review the lockfile diff, and run the relevant local checks before publishing a refresh. Reproducible builds use `--locked`. GitHub publishes the native binaries; registry packaging is separate and must not silently substitute a different dependency graph.
 
 ## First program
 
@@ -62,9 +62,26 @@ screen.capture(path="desktop.png")
 mouse.release()
 ~~~
 
-`zuse check FILE` validates without executing. `--read-only` permits observation operations, including screenshot artifacts, and rejects input, evaluation, process launches, and settings changes. `zuse schema` prints every supported operation and its arguments.
+`zuse check FILE` validates without executing. `--read-only` permits observation operations, including screenshot artifacts, and rejects input, page JavaScript, process launches, and settings changes. `zuse schema` prints every supported operation and its arguments.
 
 Motion supports linear, smoothstep, cubic ease-in/out, and curved Bezier paths. Seeded jitter tapers to zero at the endpoints. Samples use absolute time offsets so scheduling delays do not accumulate across the path.
+
+## Reusable functions and local events
+
+Import a `.zuse` module once in `zuse shell`, then reuse its functions across submissions:
+
+~~~text
+import(source="fn pause(ms){wait(ms=ms)}", as="local")
+local.pause(ms=10)
+eval(source="fn clock(){timer.status()}", as="tools")
+tools.clock()
+~~~
+
+File imports use `import(path="module.zuse", as="name")`; loading only registers declarations. Explicit `eval` may also execute actions. The whole expanded program shares one preflight, read-only policy and budget. Failed preflight and dry runs do not replace retained definitions. `run`, `script` and `check` resolve file imports relative to the containing source file.
+
+`observe`, `watch` and `wait_until` return structured text and use local DOM or AT-SPI events. Explicit `watch_until_click` binds a tab, origin, container and bounded appearance count. `timer.start/reset/stop/status` expose monotonic command and cumulative timing. Optional `--features vision` adds multi-scale image matching and explicitly rendered visual timelines. See [local programs](docs/local-programs.md), the [bundled Zuse skill](skills/zuse/SKILL.md), and [validation evidence](docs/validation-20261121.md).
+
+`keyboard.state()` distinguishes the active Wayland keyboard from other devices; text input preserves lock states. `keyboard.num_lock(state="on")` is an explicit readback-checked operation, also accepting `off` or `toggle`. A Wayland glow marker is click-through and follows the shared user pointer; independent pointers still require X11 MPX. Unavailable native pinch input remains explicitly unsupported.
 
 ## Independent, scoped mice
 

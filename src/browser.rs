@@ -3,7 +3,7 @@
 //! Launches Chromium with a private temporary profile, or connects to an explicitly
 //! supplied local debugging endpoint. No browser driver or scripting runtime is used.
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     fs::{self, OpenOptions},
     io::{Read, Write},
     net::{IpAddr, SocketAddr, TcpStream},
@@ -14,6 +14,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use zmcpio::json::{Document, Limits, Token, Value};
+
+mod click_watch;
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
@@ -33,6 +35,8 @@ pub struct Browser {
     mobile: bool,
     closed: bool,
     close_error: Option<String>,
+    observation_binding: String,
+    observation_ids: BTreeSet<String>,
 }
 
 impl Browser {
@@ -124,6 +128,79 @@ impl Browser {
         Self::from_socket(socket, page_endpoint, false)
     }
 
+    /// Attach to one explicitly named, existing page. This does not create,
+    /// activate, navigate or take ownership of a tab. Closing the connection
+    /// leaves the selected page open.
+    pub fn connect_existing(endpoint: &str, target: &str) -> Result<Self> {
+        Self::connect_existing_cancellable(
+            endpoint,
+            target,
+            &crate::observation::Cancellation::default(),
+        )
+    }
+
+    /// Existing-page attachment whose discovery, handshake and CDP reads wake
+    /// when the embedding host cancels. No input or page activation is sent.
+    pub fn connect_existing_cancellable(
+        endpoint: &str,
+        target: &str,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<Self> {
+        if target.is_empty() || target.len() > 1024 || target.contains('\0') {
+            return Err("an explicit existing browser target ID is required".into());
+        }
+        cancellation.check()?;
+        let address = if endpoint.starts_with("http://") {
+            let address = self::endpoint(endpoint, "http://")?;
+            let (mut stream, _wake) = existing_stream(&address.address, cancellation)?;
+            let discovered = discover_stream(&mut stream, &address.host);
+            cancellation.check()?;
+            discovered?
+        } else {
+            endpoint.to_owned()
+        };
+        if address.contains("/devtools/page/") {
+            return Err("connect_existing requires the browser debugging endpoint and an explicit target ID".into());
+        }
+        let address = self::endpoint(&address, "ws://")?;
+        let (stream, _wake) = existing_stream(&address.address, cancellation)?;
+        let socket = WebSocket::connect_stream(stream, &address.host, &address.path);
+        cancellation.check()?;
+        let mut browser = Self::unattached_socket(socket?, false);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let info = browser.request_until(
+            "Target.getTargetInfo",
+            &format!(r#"{{"targetId":{}}}"#, quote(target)),
+            false,
+            deadline,
+            Some(cancellation),
+        )?;
+        if field_string(&info, &["targetInfo", "targetId"])? != target
+            || field_string(&info, &["targetInfo", "type"])? != "page"
+        {
+            return Err("requested existing target is not the named browser page".into());
+        }
+        let attached = browser.request_until(
+            "Target.attachToTarget",
+            &format!(r#"{{"targetId":{},"flatten":true}}"#, quote(target)),
+            false,
+            deadline,
+            Some(cancellation),
+        )?;
+        browser.session = field_string(&attached, &["sessionId"])?;
+        browser.target = target.to_owned();
+        browser.request_until("Page.enable", "{}", true, deadline, Some(cancellation))?;
+        browser.request_until(
+            "Page.setLifecycleEventsEnabled",
+            r#"{"enabled":true}"#,
+            true,
+            deadline,
+            Some(cancellation),
+        )?;
+        cancellation.check()?;
+        Ok(browser)
+    }
+
     /// Connect through an authorized local ADB server to one observed Chrome socket.
     /// A fresh owned tab is requested with background=true. Existing tabs are never
     /// enumerated or selected by this session, and Chrome is not started for the user.
@@ -162,8 +239,8 @@ impl Browser {
             .map_err(|error| format!("Android Chrome session initialization: {error}"))
     }
 
-    fn from_socket(socket: WebSocket, page_endpoint: bool, mobile: bool) -> Result<Self> {
-        let mut browser = Self {
+    fn unattached_socket(socket: WebSocket, mobile: bool) -> Self {
+        Self {
             socket,
             child: None,
             profile: None,
@@ -175,7 +252,17 @@ impl Browser {
             mobile,
             closed: false,
             close_error: None,
-        };
+            observation_binding: format!(
+                "__zuse_observation_{}_{}",
+                std::process::id(),
+                PROFILE_ID.fetch_add(1, Ordering::Relaxed)
+            ),
+            observation_ids: BTreeSet::new(),
+        }
+    }
+
+    fn from_socket(socket: WebSocket, page_endpoint: bool, mobile: bool) -> Result<Self> {
+        let mut browser = Self::unattached_socket(socket, mobile);
         if !page_endpoint {
             let params = if mobile {
                 r#"{"url":"about:blank","background":true}"#
@@ -296,6 +383,13 @@ impl Browser {
         let candidate = self.attach_session(target)?;
         let previous_session = std::mem::replace(&mut self.session, candidate);
         let prepared = self.enable_page().and_then(|()| {
+            if !self.observation_ids.is_empty() {
+                let candidate_session =
+                    std::mem::replace(&mut self.session, previous_session.clone());
+                let cleanup = self.clear_observations();
+                self.session = candidate_session;
+                cleanup?;
+            }
             if self.owned_target {
                 // Closing the old owned target also releases its session.
                 self.close_target(&self.target.clone())
@@ -324,6 +418,7 @@ impl Browser {
         if url.len() > 65536 || url.chars().any(|c| c == '\0') {
             return Err("invalid URL".into());
         }
+        self.clear_observations()?;
         self.events.clear();
         let result = self.request(
             "Page.navigate",
@@ -421,6 +516,228 @@ impl Browser {
             output.push_str(&format!("],\"truncated\":{truncated}}}"));
             Ok(output)
         })
+    }
+
+    /// Read only the selected DOM container. Form values and images are omitted.
+    pub fn observe_scope(&mut self, selector: &str) -> Result<String> {
+        self.observation_command("observe", "", selector)
+    }
+
+    pub(crate) fn start_observation(&mut self, id: &str, selector: &str) -> Result<String> {
+        if self.observation_ids.is_empty() {
+            self.request("Runtime.enable", "{}", true)?;
+            self.request(
+                "Runtime.addBinding",
+                &format!(r#"{{"name":{}}}"#, quote(&self.observation_binding)),
+                true,
+            )?;
+        }
+        let snapshot = self.observation_command("watch", id, selector)?;
+        self.observation_ids.insert(id.to_owned());
+        Ok(snapshot)
+    }
+
+    pub(crate) fn observation_snapshot(&mut self, id: &str) -> Result<String> {
+        if !self.observation_ids.contains(id) {
+            return Err(
+                "observation watch is no longer active after navigation or tab selection".into(),
+            );
+        }
+        self.observation_command("snapshot", id, "")
+    }
+
+    pub(crate) fn stop_observation(&mut self, id: &str) -> Result<String> {
+        if !self.observation_ids.contains(id) {
+            return Ok(r#"{"closed":true}"#.into());
+        }
+        let result = self.observation_command("close", id, "")?;
+        self.observation_ids.remove(id);
+        if self.observation_ids.is_empty() {
+            self.request(
+                "Runtime.removeBinding",
+                &format!(r#"{{"name":{}}}"#, quote(&self.observation_binding)),
+                true,
+            )?;
+        }
+        Ok(result)
+    }
+
+    fn clear_observations(&mut self) -> Result<()> {
+        if self.observation_ids.is_empty() {
+            return Ok(());
+        }
+        let ids = self
+            .observation_ids
+            .iter()
+            .map(|id| quote(id))
+            .collect::<Vec<_>>()
+            .join(",");
+        self.evaluate(&format!("(()=>{{const watches=globalThis[Symbol.for('zuse.observation.v1')];for(const id of [{ids}]){{watches?.get(id)?.close();watches?.delete(id)}}return true}})()"))?;
+        self.observation_ids.clear();
+        self.request(
+            "Runtime.removeBinding",
+            &format!(r#"{{"name":{}}}"#, quote(&self.observation_binding)),
+            true,
+        )?;
+        Ok(())
+    }
+
+    fn clear_attached_observations(&mut self) -> Result<()> {
+        if self.observation_ids.is_empty() {
+            return Ok(());
+        }
+        // A failed click-watch cleanup must not be followed by a 30-second
+        // Drop retry. Existing tabs remain open even when the peer is stalled.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let ids = self
+            .observation_ids
+            .iter()
+            .map(|id| quote(id))
+            .collect::<Vec<_>>()
+            .join(",");
+        let expression = format!(
+            "(()=>{{const watches=globalThis[Symbol.for('zuse.observation.v1')];for(const id of [{ids}]){{watches?.get(id)?.close();watches?.delete(id)}}return true}})()"
+        );
+        let response = self.request_until(
+            "Runtime.evaluate",
+            &format!(
+                r#"{{"expression":{},"returnByValue":true,"awaitPromise":false,"timeout":500}}"#,
+                quote(&expression)
+            ),
+            true,
+            deadline,
+            None,
+        )?;
+        with_json(&response, |root| {
+            if let Some(error) = root.get("exceptionDetails") {
+                return Err(format!(
+                    "browser observation cleanup failed: {}",
+                    error.raw()
+                ));
+            }
+            Ok(())
+        })?;
+        self.observation_ids.clear();
+        self.request_until(
+            "Runtime.removeBinding",
+            &format!(r#"{{"name":{}}}"#, quote(&self.observation_binding)),
+            true,
+            deadline,
+            None,
+        )?;
+        Ok(())
+    }
+
+    fn observation_command(&mut self, action: &str, id: &str, selector: &str) -> Result<String> {
+        if selector.len() > 4096 || selector.contains('\0') || id.len() > 128 {
+            return Err("invalid observation selector or watch ID".into());
+        }
+        let expression = format!(
+            "(()=>{{const action={},id={},selector={},binding={};{} }})()",
+            quote(action),
+            quote(id),
+            quote(selector),
+            quote(&self.observation_binding),
+            include_str!("browser_observation.js")
+        );
+        self.evaluate(&expression)
+    }
+
+    /// Wait on CDP binding events from the installed MutationObserver. No page
+    /// query or screenshot is issued while idle. Cancellation retains partial
+    /// WebSocket bytes so the next observation can reuse this browser session.
+    pub(crate) fn wait_observation_event(
+        &mut self,
+        id: &str,
+        deadline: Instant,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<bool> {
+        self.observation_event(id, deadline, cancellation)
+            .map(|event| event.is_some())
+    }
+
+    fn observation_event(
+        &mut self,
+        id: &str,
+        deadline: Instant,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<Option<String>> {
+        if !self.observation_ids.contains(id) {
+            return Err(
+                "observation watch is no longer active after navigation or tab selection".into(),
+            );
+        }
+        loop {
+            cancellation.check()?;
+            let message = if let Some(event) = self.events.pop_front() {
+                event
+            } else {
+                if Instant::now() >= deadline {
+                    return Ok(None);
+                }
+                match self
+                    .socket
+                    .read_text_cancellable(deadline, Some(cancellation))
+                {
+                    Ok(message) => message,
+                    Err(error) if error == "browser response deadline timed out" => {
+                        return Ok(None);
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            let event = with_json(&message, |root| {
+                if !self.session.is_empty()
+                    && !root
+                        .get("sessionId")
+                        .and_then(Value::string)
+                        .is_some_and(|value| value.matches(&self.session))
+                {
+                    return Ok(None);
+                }
+                if root
+                    .get("method")
+                    .and_then(Value::string)
+                    .is_some_and(|method| method.matches("Runtime.executionContextsCleared"))
+                {
+                    return Err(
+                        "observation scope was replaced by navigation; create a new watch".into(),
+                    );
+                }
+                if !root
+                    .get("method")
+                    .and_then(Value::string)
+                    .is_some_and(|method| method.matches("Runtime.bindingCalled"))
+                {
+                    return Ok(None);
+                }
+                let Some(params) = root.get("params") else {
+                    return Ok(None);
+                };
+                if !params
+                    .get("name")
+                    .and_then(Value::string)
+                    .is_some_and(|name| name.matches(&self.observation_binding))
+                {
+                    return Ok(None);
+                }
+                let Some(payload) = params.get("payload").and_then(Value::string) else {
+                    return Ok(None);
+                };
+                let payload: String = payload.chars().collect();
+                let matches = with_json(&payload, |root| {
+                    Ok(root
+                        .get("watch")
+                        .and_then(Value::string)
+                        .is_some_and(|watch| watch.matches(id)))
+                })?;
+                Ok(if matches { Some(payload) } else { None })
+            })?;
+            if event.is_some() {
+                cancellation.check()?;
+                return Ok(event);
+            }
+        }
     }
 
     /// Text currently rendered in the page, bounded to 200,000 UTF-16 units.
@@ -541,7 +858,11 @@ impl Browser {
                 None => Ok(r#"{"closed":true}"#.into()),
             };
         }
-        let mut error = None;
+        let mut error = if self.child.is_none() && !self.owned_target {
+            self.clear_attached_observations().err()
+        } else {
+            self.clear_observations().err()
+        };
         if self.child.is_none() && self.owned_target && !self.target.is_empty() {
             let closed = self.close_target(&self.target.clone());
             if let Err(value) = closed {
@@ -582,8 +903,37 @@ impl Browser {
     }
 
     fn request(&mut self, method: &str, params: &str, page: bool) -> Result<String> {
+        let deadline = Instant::now() + TIMEOUT;
+        self.request_until(method, params, page, deadline, None)
+    }
+
+    fn request_until(
+        &mut self,
+        method: &str,
+        params: &str,
+        page: bool,
+        deadline: Instant,
+        cancellation: Option<&crate::observation::Cancellation>,
+    ) -> Result<String> {
+        if let Some(token) = cancellation {
+            token.check()?;
+        }
+        let id = self.send_request_until(method, params, page, deadline)?;
+        self.response_until(id, method, deadline, cancellation)
+    }
+
+    fn send_request_until(
+        &mut self,
+        method: &str,
+        params: &str,
+        page: bool,
+        deadline: Instant,
+    ) -> Result<u64> {
         if self.closed {
             return Err("browser connection is closed".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("browser dispatch deadline timed out".into());
         }
         let id = self.next_id;
         self.next_id = self
@@ -596,21 +946,54 @@ impl Browser {
             String::new()
         };
         self.socket
-            .send(
+            .send_until(
                 1,
                 format!(
                     r#"{{"id":{id},"method":{},"params":{params}{session}}}"#,
                     quote(method)
                 )
                 .as_bytes(),
+                deadline.min(Instant::now() + Duration::from_secs(5)),
             )
             .map_err(|error| format!("CDP {method} write: {error}"))?;
-        let deadline = Instant::now() + TIMEOUT;
+        Ok(id)
+    }
+
+    fn response_until(
+        &mut self,
+        id: u64,
+        method: &str,
+        deadline: Instant,
+        cancellation: Option<&crate::observation::Cancellation>,
+    ) -> Result<String> {
         for _ in 0..10000 {
-            let message = self
-                .socket
-                .read_text(deadline)
-                .map_err(|error| format!("CDP {method} read: {error}"))?;
+            if let Some(token) = cancellation {
+                token.check()?;
+            }
+            // A paired press/release can reply out of order. Also preserve
+            // replies left pending by a cancelled read for the next request.
+            let mut queued = None;
+            for (index, message) in self.events.iter().enumerate() {
+                if with_json(message, |root| {
+                    Ok(root.get("id").and_then(|v| v.integer().ok()) == Some(id as i64))
+                })? {
+                    queued = Some(index);
+                    break;
+                }
+            }
+            let message = if let Some(index) = queued {
+                self.events.remove(index).unwrap()
+            } else {
+                self.socket
+                    .read_text_cancellable(deadline, cancellation)
+                    .map_err(|error| {
+                        if error.starts_with("cancelled:") {
+                            error
+                        } else {
+                            format!("CDP {method} read: {error}")
+                        }
+                    })?
+            };
             let response = with_json(&message, |root| {
                 if root.get("id").and_then(|v| v.integer().ok()) == Some(id as i64) {
                     if let Some(error) = root.get("error") {
@@ -949,6 +1332,24 @@ fn android_debugging_path(input: &str) -> Result<String> {
     Ok(parsed.path)
 }
 
+fn existing_stream(
+    address: &SocketAddr,
+    cancellation: &crate::observation::Cancellation,
+) -> Result<(TcpStream, crate::observation::WakeGuard)> {
+    cancellation.check()?;
+    // No DNS is used and only loopback addresses reach this helper. Bound the
+    // pre-socket connect itself; later blocking I/O has a cancellation waker.
+    let stream = TcpStream::connect_timeout(address, Duration::from_millis(500));
+    cancellation.check()?;
+    let stream = stream.map_err(|error| error.to_string())?;
+    let wake = stream.try_clone().map_err(|error| error.to_string())?;
+    let registration = cancellation.on_cancel(move || {
+        let _ = wake.shutdown(std::net::Shutdown::Both);
+    });
+    cancellation.check()?;
+    Ok((stream, registration))
+}
+
 fn discover_endpoint(input: &str) -> Result<String> {
     let endpoint = endpoint(input, "http://")?;
     let mut socket = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(5))
@@ -1061,8 +1462,19 @@ fn discover_stream(socket: &mut TcpStream, host: &str) -> Result<String> {
 
 struct WebSocket {
     stream: TcpStream,
+    incoming: Vec<u8>,
+    message: Vec<u8>,
+    fragmented: bool,
 }
 impl WebSocket {
+    fn new(stream: TcpStream) -> Self {
+        Self {
+            stream,
+            incoming: Vec::new(),
+            message: Vec::new(),
+            fragmented: false,
+        }
+    }
     fn connect(url: &str) -> Result<Self> {
         let endpoint = endpoint(url, "ws://")?;
         let stream = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(5))
@@ -1126,10 +1538,14 @@ impl WebSocket {
         {
             return Err("invalid WebSocket handshake acceptance".into());
         }
-        Ok(Self { stream })
+        Ok(Self::new(stream))
     }
 
     fn send(&mut self, opcode: u8, payload: &[u8]) -> Result<()> {
+        self.send_until(opcode, payload, Instant::now() + Duration::from_secs(5))
+    }
+
+    fn send_until(&mut self, opcode: u8, payload: &[u8], deadline: Instant) -> Result<()> {
         if payload.len() > MAX_MESSAGE {
             return Err("WebSocket output exceeds 16 MiB".into());
         }
@@ -1148,7 +1564,6 @@ impl WebSocket {
         let mut mask = [0; 4];
         entropy(&mut mask)?;
         header.extend_from_slice(&mask);
-        let deadline = Instant::now() + Duration::from_secs(5);
         write_all_deadline(&mut self.stream, &header, deadline)?;
         let mut buffer = [0; 8192];
         for (block, bytes) in payload.chunks(buffer.len()).enumerate() {
@@ -1161,54 +1576,102 @@ impl WebSocket {
     }
 
     fn read_text(&mut self, deadline: Instant) -> Result<String> {
-        let mut output = Vec::new();
-        let mut fragmented = false;
+        self.read_text_cancellable(deadline, None)
+    }
+
+    fn read_text_cancellable(
+        &mut self,
+        deadline: Instant,
+        cancellation: Option<&crate::observation::Cancellation>,
+    ) -> Result<String> {
         loop {
+            if let Some(cancel) = cancellation {
+                cancel.check()?;
+            }
+            if let Some(message) = self.buffered_text()? {
+                return Ok(message);
+            }
             let remaining = deadline
                 .checked_duration_since(Instant::now())
-                .filter(|d| !d.is_zero())
-                .ok_or("browser response timed out")?;
+                .filter(|time| !time.is_zero())
+                .ok_or("browser response deadline timed out")?;
+            // This timeout checks a local cancellation flag, never page state.
+            // Incomplete frames remain buffered across cancellation and timeout.
+            let timeout = if cancellation.is_some() {
+                remaining.min(Duration::from_millis(25))
+            } else {
+                remaining
+            };
             self.stream
-                .set_read_timeout(Some(remaining))
+                .set_read_timeout(Some(timeout))
                 .map_err(|e| e.to_string())?;
-            let mut head = [0; 2];
-            read_exact_deadline(&mut self.stream, &mut head, deadline)?;
+            let mut bytes = [0; 8192];
+            match self.stream.read(&mut bytes) {
+                Ok(0) => return Err("browser closed the WebSocket".into()),
+                Ok(count) => self.incoming.extend_from_slice(&bytes[..count]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(error) => return Err(format!("browser WebSocket read: {error}")),
+            }
+        }
+    }
+
+    fn buffered_text(&mut self) -> Result<Option<String>> {
+        loop {
+            if self.incoming.len() < 2 {
+                return Ok(None);
+            }
+            let head = &self.incoming;
             let fin = head[0] & 0x80 != 0;
             let opcode = head[0] & 15;
             if head[0] & 0x70 != 0 || head[1] & 0x80 != 0 {
                 return Err("unsupported WebSocket flags or masked server frame".into());
             }
             let marker = head[1] & 0x7f;
+            let header = match marker {
+                126 => 4,
+                127 => 10,
+                _ => 2,
+            };
+            if head.len() < header {
+                return Ok(None);
+            }
             let length = match marker {
                 126 => {
-                    let mut bytes = [0; 2];
-                    read_exact_deadline(&mut self.stream, &mut bytes, deadline)?;
-                    let n = u16::from_be_bytes(bytes) as u64;
+                    let n = u16::from_be_bytes(head[2..4].try_into().map_err(|_| "frame length")?)
+                        as u64;
                     if n < 126 {
                         return Err("non-canonical frame length".into());
                     }
                     n
                 }
                 127 => {
-                    let mut bytes = [0; 8];
-                    read_exact_deadline(&mut self.stream, &mut bytes, deadline)?;
-                    let n = u64::from_be_bytes(bytes);
+                    let n = u64::from_be_bytes(head[2..10].try_into().map_err(|_| "frame length")?);
                     if n < 65536 || n >> 63 != 0 {
                         return Err("invalid frame length".into());
                     }
                     n
                 }
-                n => n as u64,
+                n => u64::from(n),
             };
             let control = opcode & 8 != 0;
             if length > MAX_MESSAGE as u64
-                || output.len().saturating_add(length as usize) > MAX_MESSAGE
+                || (!control && self.message.len().saturating_add(length as usize) > MAX_MESSAGE)
                 || (control && (!fin || length > 125))
             {
                 return Err("WebSocket frame exceeds limits".into());
             }
-            let mut payload = vec![0; length as usize];
-            read_exact_deadline(&mut self.stream, &mut payload, deadline)?;
+            let end = header + length as usize;
+            if self.incoming.len() < end {
+                return Ok(None);
+            }
+            let payload = self.incoming[header..end].to_vec();
+            self.incoming.drain(..end);
             match opcode {
                 8 => return Err("browser closed the WebSocket".into()),
                 9 => {
@@ -1216,17 +1679,20 @@ impl WebSocket {
                     continue;
                 }
                 10 => continue,
-                1 if !fragmented => {
-                    fragmented = !fin;
-                    output.extend_from_slice(&payload);
+                1 if !self.fragmented => {
+                    self.fragmented = !fin;
+                    self.message.extend_from_slice(&payload);
                 }
-                0 if fragmented => {
-                    output.extend_from_slice(&payload);
+                0 if self.fragmented => {
+                    self.fragmented = !fin;
+                    self.message.extend_from_slice(&payload);
                 }
                 _ => return Err("unexpected WebSocket opcode or continuation".into()),
             }
             if fin {
-                return String::from_utf8(output).map_err(|_| "browser frame is not UTF-8".into());
+                return String::from_utf8(std::mem::take(&mut self.message))
+                    .map(Some)
+                    .map_err(|_| "browser frame is not UTF-8".into());
             }
         }
     }
@@ -1364,7 +1830,7 @@ fn entropy(bytes: &mut [u8]) -> Result<()> {
     }
 }
 
-fn encode_base64(bytes: &[u8]) -> String {
+pub(crate) fn encode_base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -1541,9 +2007,7 @@ mod tests {
             assert_eq!(pong[1], 0x81);
             assert_eq!(pong[6] ^ pong[2], b'!');
         });
-        let mut websocket = WebSocket {
-            stream: TcpStream::connect(address).unwrap(),
-        };
+        let mut websocket = WebSocket::new(TcpStream::connect(address).unwrap());
         assert_eq!(
             websocket
                 .read_text(Instant::now() + Duration::from_secs(2))
@@ -1566,9 +2030,7 @@ mod tests {
                 }
             }
         });
-        let mut websocket = WebSocket {
-            stream: TcpStream::connect(address).unwrap(),
-        };
+        let mut websocket = WebSocket::new(TcpStream::connect(address).unwrap());
         assert!(
             websocket
                 .read_text(Instant::now() + Duration::from_millis(70))
@@ -1577,6 +2039,47 @@ mod tests {
         );
         server.join().unwrap();
     }
+    #[test]
+    fn cancelled_partial_frame_is_preserved_for_the_next_call() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let cancellation = crate::observation::Cancellation::default();
+        let external = cancellation.clone();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(&[0x81, 5, b'h']).unwrap();
+            ready_tx.send(()).unwrap();
+            thread::sleep(Duration::from_millis(40));
+            external.cancel();
+            finish_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            stream
+                .write_all(&[b'e', b'l', b'l', b'o', 0x81, 3, b'b', b'y', b'e'])
+                .unwrap();
+        });
+        let mut websocket = WebSocket::new(TcpStream::connect(address).unwrap());
+        ready_rx.recv().unwrap();
+        let error = websocket
+            .read_text_cancellable(Instant::now() + Duration::from_secs(2), Some(&cancellation))
+            .unwrap_err();
+        assert!(error.starts_with("cancelled:"));
+        finish_tx.send(()).unwrap();
+        assert_eq!(
+            websocket
+                .read_text(Instant::now() + Duration::from_secs(2))
+                .unwrap(),
+            "hello"
+        );
+        assert_eq!(
+            websocket
+                .read_text(Instant::now() + Duration::from_secs(2))
+                .unwrap(),
+            "bye"
+        );
+        server.join().unwrap();
+    }
+
     #[test]
     fn frame_size_is_rejected_before_allocation() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1588,9 +2091,7 @@ mod tests {
                 .write_all(&((MAX_MESSAGE + 1) as u64).to_be_bytes())
                 .unwrap();
         });
-        let mut websocket = WebSocket {
-            stream: TcpStream::connect(address).unwrap(),
-        };
+        let mut websocket = WebSocket::new(TcpStream::connect(address).unwrap());
         assert!(
             websocket
                 .read_text(Instant::now() + Duration::from_secs(2))

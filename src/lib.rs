@@ -22,9 +22,19 @@ pub mod json;
 #[cfg(feature = "std")]
 pub mod mcp;
 #[cfg(feature = "std")]
+pub mod observation;
+#[cfg(feature = "std")]
 pub mod platform;
 #[cfg(feature = "std")]
 pub mod runtime;
+#[cfg(feature = "std")]
+mod timing;
+#[cfg(feature = "vision")]
+pub mod vision;
+#[cfg(feature = "vision")]
+mod vision_runtime;
+#[cfg(feature = "std")]
+pub mod visual_timeline;
 
 #[cfg(feature = "std")]
 pub mod cursor;

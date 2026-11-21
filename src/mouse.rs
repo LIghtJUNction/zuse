@@ -465,7 +465,7 @@ fn require_x11() -> Result<(), String> {
     match selected.as_str() {
         "x11"=>Ok(()),
         "" if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var("XDG_SESSION_TYPE").unwrap_or_default()!="wayland"=>Ok(()),
-        ""|"wayland"=>Err("independent mice require a native X11 MPX display; Wayland supports user_mouse with a click-through operation marker or appearance=\"system\"".into()),
+        ""|"wayland"=>Err("no independent-pointer support: independent mice require a native X11 MPX display; Wayland supports user_mouse with a click-through operation marker or appearance=\"system\"".into()),
         _=>Err("ZUSE_BACKEND must be x11 or wayland".into()),
     }
 }

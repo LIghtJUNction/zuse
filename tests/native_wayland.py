@@ -11,7 +11,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import select
 import shlex
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -31,7 +34,7 @@ def compositor(name):
     result.check_returncode()
     return json.loads(result.stdout)
 
-def png_center(path):
+def png_pixels(path):
     raw = path.read_bytes()
     assert raw[:8] == b"\x89PNG\r\n\x1a\n"
     pos, compressed, dimensions = 8, bytearray(), None
@@ -56,7 +59,8 @@ def png_center(path):
         p=a+b-c
         da,db,dc=abs(p-a),abs(p-b),abs(p-c)
         return a if da <= db and da <= dc else b if db <= dc else c
-    for y in range(height//2+1):
+    rows=[]
+    for y in range(height):
         begin=y*(stride+1)
         mode=pixels[begin]
         row=bytearray(pixels[begin+1:begin+1+stride])
@@ -67,10 +71,51 @@ def png_center(path):
             predictor=(0,a,b,(a+b)//2,paeth(a,b,c))[mode]
             row[x]=(row[x]+predictor)&255
         previous=row
+        rows.append(row)
+    return {"width":width,"height":height,"bpp":bpp,"rows":rows,"bytes":len(raw)}
+
+def png_center(path):
+    image=png_pixels(path)
+    width,height,bpp=image["width"],image["height"],image["bpp"]
+    row=image["rows"][height//2]
     x=(width//2)*bpp
     rgb=list(row[x:x+3])
     assert all(abs(a-b) <= 2 for a,b in zip(rgb,(32,160,96))), rgb
-    return {"width":width,"height":height,"center_rgb":rgb,"bytes":len(raw)}
+    return {"width":width,"height":height,"center_rgb":rgb,"bytes":image["bytes"]}
+
+class OwnedKeyboard:
+    """A persistent protocol keyboard, confined to the private compositor."""
+    def __init__(self, binary, env):
+        if env.get("ZUSE_PRIVATE_WAYLAND_FIXTURE")!="1":
+            raise RuntimeError("keyboard fixtures require the owned compositor")
+        self.process=subprocess.Popen([str(binary)],env=env,stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        try:
+            self.receive("READY")
+        except Exception:
+            self.close()
+            raise
+    def receive(self, expected):
+        if not select.select([self.process.stdout],[],[],3)[0]:
+            raise RuntimeError("private keyboard fixture response timed out")
+        response=self.process.stdout.readline().strip()
+        if response!=expected:
+            raise RuntimeError(f"private keyboard fixture expected {expected!r}, got {response!r}")
+    def send(self, line):
+        self.process.stdin.write(line+"\n");self.process.stdin.flush()
+        self.receive("OK")
+    def close(self):
+        if self.process.poll() is None:
+            try:self.send("neutral");self.send("quit")
+            except Exception:pass
+            try:self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)
+        for stream in (self.process.stdin,self.process.stdout,self.process.stderr):
+            if stream:stream.close()
+
+def device_states(rows):
+    return sorted((k["address"],k["main"],k["capsLock"],
+                   k["numLock"],k["active_layout_index"]) for k in rows)
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -79,11 +124,12 @@ def main():
     parser.add_argument("--report",type=Path)
     parser.add_argument("--ascii-background",action="store_true",help=argparse.SUPPRESS)
     parser.add_argument("--state-tests",action="store_true")
+    parser.add_argument("--marker-tests",action="store_true")
     args=parser.parse_args()
     if not args.allow_desktop:
         parser.error("--allow-desktop is required for live fixture-only desktop input")
-    if args.state_tests and os.environ.get("ZUSE_PRIVATE_WAYLAND_FIXTURE")!="1":
-        parser.error("--state-tests is restricted to native_wayland_private.py")
+    if (args.state_tests or args.marker_tests) and os.environ.get("ZUSE_PRIVATE_WAYLAND_FIXTURE")!="1":
+        parser.error("state/marker tests are restricted to native_wayland_private.py")
     binary=args.binary.resolve()
     if not binary.is_file():
         raise SystemExit(f"Build zuse first; missing {binary}")
@@ -200,10 +246,16 @@ def main():
                 rows=value(zuse("window.list()"))
                 selected=[w for w in rows if w["id"] in (first,second)]
                 assert len(selected)==2
+                monitors={m["id"]:m for m in compositor("monitors")}
+                focused=compositor("activewindow").get("address")
                 for row in selected:
                     raw=current_own(row["id"])
                     assert (row["x"],row["y"],row["width"],row["height"])==(*raw["at"],*raw["size"])
-                return {"owned_windows":len(selected),"native_wayland":True}
+                    assert row["scale"]==monitors[raw["monitor"]]["scale"],row
+                    assert row["focused"]==(row["id"]==focused),row
+                    assert row["mapped"] is True and raw["mapped"] is True,row
+                return {"owned_windows":len(selected),"native_wayland":True,
+                        "scale_focus_mapped_verified":True}
             evaluate("window_metadata",list_windows)
             def pointer():
                 focus(first)
@@ -322,9 +374,6 @@ def main():
                         before=text(0)
                         other_before=text(1)
                         before_devices=compositor("devices")["keyboards"]
-                        def device_states(rows):
-                            return sorted((k["address"],k["main"],k["capsLock"],
-                                           k["numLock"],k["active_layout_index"]) for k in rows)
                         original_devices=device_states(before_devices)
                         def shortcut_events():
                             return [tuple(map(int,line.split()[1:]))
@@ -390,6 +439,219 @@ def main():
                             try:helper.wait(timeout=3)
                             except subprocess.TimeoutExpired:helper.kill();helper.wait(timeout=3)
                 evaluate("unsupported_keyboard_states",unsupported_states)
+                def independent_keyboard_locks():
+                    helper_path=directory/"keyboard-fixture"
+                    helpers=[]
+                    try:
+                        focus(first)
+                        helpers.append(OwnedKeyboard(helper_path,env))
+                        for _ in range(8):
+                            helper=OwnedKeyboard(helper_path,env)
+                            helpers.append(helper)
+                            helper.send("num")
+                        # Make the earlier neutral keyboard current by using
+                        # that real device. Its ordinary letter does not replay
+                        # a modifier mask that could conceal lost lock state.
+                        before=text(0)
+                        helpers[0].send("press 38")
+                        before+="a";wait_text(0,before)
+                        rows=compositor("devices")["keyboards"]
+                        current=[k for k in rows if k.get("main") is True]
+                        assert len(current)==1,current
+                        main=current[0]
+                        assert main["numLock"] is False and main["capsLock"] is False,main
+                        assert main["active_layout_index"]==0,main
+                        assert rows[-1]["address"]!=main["address"],"regression must exercise a non-last main keyboard"
+                        assert sum(k.get("numLock") is True for k in rows if not k.get("main"))==8,rows
+                        expected=device_states(rows)
+                        status=value(zuse("keyboard.state()"))
+                        assert status["current"]["address"]==main["address"],status
+                        assert status["current"]["numLock"] is False,status
+                        assert sum(k.get("numLock") is True for k in status["other_devices"])==8,status
+                        active(first)
+                        payload=" mixed devices 42!"
+                        zuse("keyboard.type(text="+json.dumps(payload)+")")
+                        before+=payload;wait_text(0,before)
+                        assert device_states(compositor("devices")["keyboards"])==expected
+                        # Follow-up input from the same original keyboard
+                        # detects unintended modifier/keymap restoration.
+                        helpers[0].send("press 38")
+                        before+="a";wait_text(0,before)
+                        active(first)
+                        assert device_states(compositor("devices")["keyboards"])==expected
+                        assert not private_held()
+                        return {"other_num_lock_on":8,"current_num_lock_on":False,
+                                "current_is_last":False,"current_address":main["address"],
+                                "text_received":payload,"all_device_states_unchanged":True,
+                                "original_keyboard_plain_letter_after_input":True}
+                    finally:
+                        for helper in reversed(helpers):helper.close()
+                evaluate("independent_keyboard_locks",independent_keyboard_locks)
+            if args.marker_tests:
+                def operation_marker():
+                    focus(first)
+                    window=current_own(first)
+                    geometry=tuple(window["at"]+window["size"])
+                    x,y,width,height=geometry
+                    points=[(x+width//4,y+height*2//3),(x+width*3//4,y+height*2//3)]
+                    assert width>=240 and height>=200,geometry
+                    marker_log_path=directory/"marker-protocol.log"
+                    marker_log=marker_log_path.open("w")
+                    shell_env=env.copy();shell_env["WAYLAND_DEBUG"]="client"
+                    shell=subprocess.Popen([str(binary),"shell"],env=shell_env,
+                                           stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+                                           stderr=marker_log,text=True)
+                    pointer=None
+                    screenshots={}
+                    def session(code):
+                        shell.stdin.write(code+"\n");shell.stdin.flush()
+                        if not select.select([shell.stdout],[],[],5)[0]:
+                            raise RuntimeError("persistent marker runtime timed out: "+marker_log_path.read_text()[-1600:])
+                        response=shell.stdout.readline()
+                        if not response:
+                            raise RuntimeError("persistent marker runtime exited: "+marker_log_path.read_text()[-1600:])
+                        data=json.loads(response)
+                        assert data.get("status")=="completed",data
+                        return data
+                    def capture_stage(name):
+                        active(first)
+                        assert tuple(current_own(first)["at"]+current_own(first)["size"])==geometry
+                        path=directory/("marker-"+name+".png")
+                        session("wait(ms=120);window.capture(id="+json.dumps(first)+",path="+json.dumps(str(path))+")")
+                        active(first)
+                        screenshots[name]=path
+                        return png_pixels(path)
+                    def marked_pixels(image, point):
+                        # Compare in captured physical pixels using the current
+                        # window's logical geometry, including 125% scaling.
+                        sx,sy=image["width"]/width,image["height"]/height
+                        cx,cy=(point[0]-x)*sx,(point[1]-y)*sy
+                        found=[]
+                        for py in range(max(0,int(cy-54*sy)),min(image["height"],int(cy+54*sy)+1)):
+                            row=image["rows"][py]
+                            for px in range(max(0,int(cx-54*sx)),min(image["width"],int(cx+54*sx)+1)):
+                                start=px*image["bpp"];r,g,b=row[start:start+3]
+                                if r>120 and b>150 and r>g*1.3 and b>g*1.3:found.append((px,py))
+                        if found:
+                            bounds=[min(p[0] for p in found),min(p[1] for p in found),
+                                    max(p[0] for p in found),max(p[1] for p in found)]
+                            assert abs((bounds[0]+bounds[2])/2-cx)<=3*sx,(bounds,(cx,cy))
+                            assert abs((bounds[1]+bounds[3])/2-cy)<=3*sy,(bounds,(cx,cy))
+                        return len(found)
+                    click_result={"status":"unsupported","reason":"private compositor lacks virtual pointer protocol; host input is disabled"}
+                    try:
+                        independent=rejected('mouse.use(kind="independent")')
+                        assert "independent" in independent["error"].lower(),independent
+                        # This protocol helper is restricted to the owned
+                        # socket. It verifies surface hit testing; it does not
+                        # pretend to exercise the production ydotool backend.
+                        pointer_binary=directory/"pointer-fixture"
+                        flags=shlex.split(command(["pkg-config","--cflags","--libs","wayland-client"]).stdout)
+                        command(["cc","-Wall","-Wextra","-Werror",str(ROOT/"tests/native_wayland_pointer_fixture.c"),
+                                 "-o",str(pointer_binary),*flags]).check_returncode()
+                        pointer=subprocess.Popen([str(pointer_binary)],env=env,stdin=subprocess.PIPE,
+                                                 stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                        if not select.select([pointer.stdout],[],[],3)[0]:
+                            raise RuntimeError("private pointer fixture startup timed out")
+                        pointer_status=pointer.stdout.readline().strip()
+                        assert pointer_status in ("READY","UNSUPPORTED"),pointer_status
+                        def click_through():
+                            if pointer_status!="READY":return
+                            def clicks():
+                                return [line for line in (directory/"0.log").read_text().splitlines() if line.startswith("BUTTON ")]
+                            before=len(clicks())
+                            pointer.stdin.write("click\n");pointer.stdin.flush()
+                            if not select.select([pointer.stdout],[],[],3)[0]:
+                                raise RuntimeError("private pointer click timed out")
+                            assert pointer.stdout.readline().strip()=="OK"
+                            deadline=time.monotonic()+2
+                            while time.monotonic()<deadline:
+                                if len(clicks())>before:break
+                                time.sleep(.01)
+                            assert len(clicks())==before+1,"marker intercepted the owned fixture click"
+                            active(first)
+                        session('mouse.use(kind="user",appearance="system")')
+                        session(f'mouse.move(x={points[0][0]},y={points[0][1]},duration=0)')
+                        baseline=capture_stage("before")
+                        assert all(marked_pixels(baseline,p)==0 for p in points)
+                        created=value(session('mouse.use(kind="user",appearance="glow",color="#ED2FFF",shape="ring",size=40,glow=0.8)'))
+                        assert created["kind"]=="user" and created["device_id"] is None,created
+                        session(f'mouse.move(x={points[0][0]},y={points[0][1]},duration=0)')
+                        first_image=capture_stage("first")
+                        first_count=marked_pixels(first_image,points[0])
+                        assert first_count>=20,first_count
+                        assert marked_pixels(first_image,points[1])==0
+                        click_through()
+                        session(f'mouse.move(x={points[1][0]},y={points[1][1]},duration=160)')
+                        second_image=capture_stage("moved")
+                        second_count=marked_pixels(second_image,points[1])
+                        assert second_count>=20,second_count
+                        assert marked_pixels(second_image,points[0])==0
+                        observed=value(session("mouse.position()"))
+                        assert (observed["x"],observed["y"])==points[1],observed
+                        click_through()
+                        if pointer_status=="READY":
+                            click_result={"status":"passed","source":"owned-wayland-virtual-pointer","received_clicks":2}
+                        session("mouse.release()")
+                        released=capture_stage("released")
+                        assert all(marked_pixels(released,p)==0 for p in points)
+                        # EOF exercises Drop independently of explicit release.
+                        session('mouse.use(kind="user",appearance="glow",color="#ED2FFF",shape="ring",size=40,glow=0.8)')
+                        assert marked_pixels(capture_stage("before-drop"),points[1])>=20
+                        shell.stdin.close();shell.wait(timeout=5)
+                        assert shell.returncode==0,shell.returncode
+                        time.sleep(.12)
+                        dropped_path=directory/"marker-dropped.png"
+                        zuse("window.capture(id="+json.dumps(first)+",path="+json.dumps(str(dropped_path))+")")
+                        screenshots["dropped"]=dropped_path
+                        dropped=png_pixels(dropped_path)
+                        assert all(marked_pixels(dropped,p)==0 for p in points)
+                        active(first)
+                        marker_log.flush()
+                        protocol=marker_log_path.read_text()
+                        regions=re.findall(r"set_input_region\(wl_region[#@](\d+)\)",protocol)
+                        assert regions,"no non-null input region was submitted"
+                        assert all(not re.search(r"wl_region[#@]"+region+r"\.add\(",protocol) for region in regions)
+                        assert "set_keyboard_interactivity(0)" in protocol
+                        assert "set_exclusive_zone(-1)" in protocol
+                        artifacts={}
+                        if args.report:
+                            artifact_dir=args.report.resolve().parent/(args.report.stem+"-artifacts")
+                            artifact_dir.mkdir(parents=True,exist_ok=True)
+                            for name,path in {**screenshots,"protocol":marker_log_path}.items():
+                                target=artifact_dir/path.name;shutil.copyfile(path,target)
+                                artifacts[name]={"path":str(target),"sha256":hashlib.sha256(target.read_bytes()).hexdigest()}
+                        return {"mode":"user-pointer-with-last-operation-marker","persistent_mouse_id":created["mouse_id"],
+                                "points":points,"visible_pixels":[first_count,second_count],
+                                "focus_unchanged":True,"old_position_cleared":True,
+                                "explicit_release_removed_marker":True,"drop_removed_marker":True,
+                                "independent_mode_rejected":True,
+                                "empty_input_region":True,"keyboard_interactivity":"none",
+                                "click_through":click_result,"production_button_backend":"not exercised; host ydotool disabled",
+                                "artifacts":artifacts}
+                    finally:
+                        if shell.poll() is None:
+                            if not shell.stdin.closed:shell.stdin.close()
+                            try:shell.wait(timeout=3)
+                            except subprocess.TimeoutExpired:shell.kill();shell.wait(timeout=3)
+                        shell.stdout.close();marker_log.close()
+                        if args.report:
+                            artifact_dir=args.report.resolve().parent/(args.report.stem+"-artifacts")
+                            artifact_dir.mkdir(parents=True,exist_ok=True)
+                            saved={}
+                            for name,path in {**screenshots,"protocol":marker_log_path}.items():
+                                if path.is_file():
+                                    target=artifact_dir/path.name;shutil.copyfile(path,target)
+                                    saved[name]={"path":str(target),"sha256":hashlib.sha256(target.read_bytes()).hexdigest()}
+                            report["marker_artifacts"]=saved
+                        if pointer:
+                            if pointer.poll() is None:
+                                pointer.stdin.close()
+                                try:pointer.wait(timeout=3)
+                                except subprocess.TimeoutExpired:pointer.kill();pointer.wait(timeout=3)
+                            for stream in (pointer.stdin,pointer.stdout,pointer.stderr):
+                                if stream and not stream.closed:stream.close()
+                evaluate("operation_marker",operation_marker)
             report["native_wayland"]="pass" if all(v["ok"] for v in report["checks"].values()) else "fail"
     finally:
         for process in processes:

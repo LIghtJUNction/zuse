@@ -1,0 +1,10 @@
+# Reusable local operations; importing this file has no effects.
+fn measure_pause(ms) {
+    timer.start()
+    wait(ms=ms)
+    timer.stop()
+}
+
+fn clock() {
+    timer.status()
+}

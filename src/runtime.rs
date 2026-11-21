@@ -12,14 +12,17 @@ use crate::{
     language::{Call, Parser, Value},
     motion::{Curve, FunctionalMotion, MAX_COORDINATE, Motion, PathOptions, Point, Rng},
     mouse::{Mouse, MouseMode, MouseOptions},
+    observation::{Cancellation, Condition, Observer, Query as ObservationQuery},
     platform::Desktop,
     pointer::{MoveOptions, MovePlan},
+    script::{ModuleSession, Prepared, ProgramMode},
     serial::{self, SerialPort},
-    target::{self, LocatedTarget, TargetQuery},
+    target::{self, LocatedTarget, TargetQuery, TargetWindow, WindowTarget},
     touchpad::{self, Command as TouchpadCommand, Gesture, GestureOptions, GesturePlan},
     usb::{self, UsbDevice},
 };
 use std::{
+    collections::BTreeMap,
     path::Path,
     time::{Duration, Instant},
 };
@@ -58,6 +61,21 @@ struct Spec {
 }
 macro_rules! spec { ($name:literal, $read:literal, [$($arg:literal:$ty:ident:$required:literal),* $(,)?]) => { Spec{name:$name,args:&[$(($arg,$ty,$required)),*],read_only:$read} }; }
 static SPECS: &[Spec] = &[
+    spec!("timer.start", true, []),
+    spec!("timer.reset", true, []),
+    spec!("timer.stop", true, []),
+    spec!("timer.status", true, []),
+    spec!("observe",true,["source":T:false,"selector":T:false,"scope":T:false,"watch":T:false]),
+    spec!("watch",true,["source":T:false,"selector":T:false,"scope":T:false,"name":T:false]),
+    spec!("watch.close",true,["name":T:false]),
+    spec!("wait_until",true,["watch":T:false,"condition":T:false,"text":T:false,"role":T:false,"timeout":I:false]),
+    spec!("watch_until_click",false,["source":T:false,"scope":T:false,"selector":T:true,"origin":T:false,"max_clicks":I:false,"timeout":I:false]),
+    spec!("timeline.start",true,["name":T:false,"window":T:false,"columns":I:true,"rows":I:true,"enter":I:false,"exit":I:false]),
+    spec!("timeline.sample",true,["name":T:false]),
+    spec!("timeline.observe",true,["name":T:false]),
+    spec!("timeline.wait_until",true,["name":T:false,"timeout":I:false,"interval":I:false]),
+    spec!("timeline.render",true,["name":T:false,"path":T:true]),
+    spec!("timeline.close",true,["name":T:false]),
     spec!("system.capabilities", true, []),
     spec!("touchpad.capabilities", true, []),
     spec!("touchpad.swipe",false,["dx":N:false,"dy":N:false,"fingers":I:false,"duration":I:false,"steps":I:false]),
@@ -67,15 +85,18 @@ static SPECS: &[Spec] = &[
     spec!("mouse.use",false,["kind":T:false,"appearance":T:false,"color":T:false,"shape":T:false,"size":I:false,"glow":N:false,"name":T:false]),
     spec!("mouse.release", false, []),
     spec!("mouse.position", true, []),
+    spec!("target.locate",true,["text":T:false,"template":T:false,"mode":T:false,"scales":T:false,"min_score":N:false,"min_margin":N:false,"role":T:false,"scope":T:false,"exact":B:false,"case_sensitive":B:false,"index":I:false,"window":T:false,"name":T:false]),
     spec!("mouse.move",false,["x":I:true,"y":I:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"seed":I:false]),
     spec!("mouse.move_to",false,["text":T:true,"role":T:false,"scope":T:false,"exact":B:false,"case_sensitive":B:false,"index":I:false,"duration":I:false,"speed":N:false,"steps":I:false,"curve":T:false,"jitter":N:false,"speed_variation":N:false,"seed":I:false,"offset_x":N:false,"offset_y":N:false,"via":T:false]),
     spec!("mouse.circle",false,["x":I:true,"y":I:true,"radius":N:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"speed_variation":N:false,"seed":I:false]),
-    spec!("mouse.click",false,["button":T:false,"count":I:false,"interval":I:false]),
+    spec!("mouse.click",false,["button":T:false,"count":I:false,"interval":I:false,"target":T:false]),
     spec!("mouse.down",false,["button":T:false]),
     spec!("mouse.up",false,["button":T:false]),
     spec!("mouse.scroll",false,["dx":I:false,"dy":I:false]),
     spec!("keyboard.type",false,["text":T:true,"window":T:false]),
     spec!("keyboard.key",false,["key":T:true,"window":T:false]),
+    spec!("keyboard.state", true, []),
+    spec!("keyboard.num_lock",false,["state":T:true]),
     spec!("window.list", true, []),
     spec!("wine.windows", true, []),
     spec!("window.focus",false,["id":T:true]),
@@ -215,6 +236,83 @@ fn text(call: &Call<'_>, name: &str, default: &str) -> Result<String, String> {
 }
 fn integer(call: &Call<'_>, name: &str, default: i64) -> i64 {
     call.get(name).and_then(Value::as_i64).unwrap_or(default)
+}
+
+fn observation_query(call: &Call<'_>) -> Result<ObservationQuery, String> {
+    Ok(ObservationQuery {
+        source: text(call, "source", "desktop")?,
+        selector: text(call, "selector", "body")?,
+        scope: text(call, "scope", "0")?,
+    })
+}
+fn observation_condition(call: &Call<'_>) -> Result<Condition, String> {
+    Ok(Condition {
+        kind: text(call, "condition", "changed")?,
+        text: call
+            .get("text")
+            .map(|_| text(call, "text", ""))
+            .transpose()?,
+        role: call
+            .get("role")
+            .map(|_| text(call, "role", ""))
+            .transpose()?,
+    })
+}
+fn click_watch_options(call: &Call<'_>) -> Result<crate::observation::ClickWatchOptions, String> {
+    if text(call, "source", "browser")? != "browser" {
+        return Err(
+            "unsupported_state: watch_until_click currently requires the browser event backend"
+                .into(),
+        );
+    }
+    Ok(crate::observation::ClickWatchOptions {
+        scope: text(call, "scope", "body")?,
+        selector: text(call, "selector", "")?,
+        expected_origin: call
+            .get("origin")
+            .map(|_| text(call, "origin", ""))
+            .transpose()?,
+        max_clicks: range(call, "max_clicks", 1, 1, 64)? as u32,
+        timeout_ms: range(call, "timeout", 30_000, 1, 60_000)? as u64,
+    })
+}
+
+#[cfg(feature = "vision")]
+fn image_match_options(call: &Call<'_>) -> Result<crate::vision::MatchOptions, String> {
+    let mode = match text(call, "mode", "edges")?.as_str() {
+        "edges" => crate::vision::MatchMode::Edges,
+        "gray" => crate::vision::MatchMode::Gray,
+        _ => return Err("template mode must be edges or gray".into()),
+    };
+    let mut options = crate::vision::MatchOptions {
+        mode,
+        ..Default::default()
+    };
+    if call.get("scales").is_some() {
+        options.scales = text(call, "scales", "")?
+            .split(',')
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<f64>()
+                    .map_err(|_| "scales must be comma-separated finite numbers".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+    options.min_score = number(call, "min_score", 0.90);
+    options.min_margin = number(call, "min_margin", 0.05);
+    if options.scales.is_empty()
+        || options.scales.len() > 16
+        || options
+            .scales
+            .iter()
+            .any(|s| !s.is_finite() || *s <= 0.0 || *s > 8.0)
+        || !(0.0..=1.0).contains(&options.min_score)
+        || !(0.0..=1.0).contains(&options.min_margin)
+    {
+        return Err("invalid template scales or confidence thresholds".into());
+    }
+    Ok(options)
 }
 fn circle_options(c: &Call<'_>) -> Result<(f64, f64, f64, PathOptions), String> {
     let x = integer(c, "x", 0) as f64;
@@ -490,6 +588,84 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             }
         }
         match call.name {
+            "observe" | "watch" => {
+                if call.name == "observe" && call.get("watch").is_some() {
+                    if ["source", "selector", "scope"]
+                        .iter()
+                        .any(|key| call.get(key).is_some())
+                    {
+                        return Err(
+                            "observe uses either a retained watch or a new source query".into()
+                        );
+                    }
+                } else {
+                    observation_query(&call)?.validate(call.name == "watch")?;
+                }
+                let name = text(
+                    &call,
+                    if call.name == "watch" {
+                        "name"
+                    } else {
+                        "watch"
+                    },
+                    "last",
+                )?;
+                if name.is_empty() || name.len() > 128 {
+                    return Err("watch name must contain 1..128 bytes".into());
+                }
+            }
+            "wait_until" => {
+                observation_condition(&call)?.validate()?;
+                let timeout = range(&call, "timeout", 30_000, 0, 60_000)?;
+                wait_budget = wait_budget.saturating_add(timeout as u64);
+            }
+            "watch_until_click" => {
+                let options = click_watch_options(&call)?;
+                options.validate()?;
+                wait_budget = wait_budget.saturating_add(options.timeout_ms);
+            }
+            "timeline.start"
+            | "timeline.sample"
+            | "timeline.observe"
+            | "timeline.wait_until"
+            | "timeline.render"
+            | "timeline.close" => {
+                #[cfg(not(feature = "vision"))]
+                return Err(
+                    "unsupported_state: visual timelines require the optional vision feature"
+                        .into(),
+                );
+                #[cfg(feature = "vision")]
+                {
+                    let name = text(&call, "name", "last")?;
+                    if name.is_empty() || name.len() > 128 {
+                        return Err("timeline name must contain 1..128 bytes".into());
+                    }
+                    if call.name == "timeline.start" {
+                        let columns = range(&call, "columns", 1, 1, 4096)?;
+                        let rows = range(&call, "rows", 1, 1, 4096)?;
+                        if columns * rows > 4096 {
+                            return Err("timeline grid exceeds 4096 cells".into());
+                        }
+                        let enter = range(&call, "enter", 24, 1, 255)?;
+                        let exit = range(&call, "exit", 8, 0, 254)?;
+                        if exit >= enter {
+                            return Err(
+                                "timeline exit threshold must be below enter threshold".into()
+                            );
+                        }
+                    }
+                    if call.name == "timeline.wait_until" {
+                        range(&call, "interval", 32, 16, 1000)?;
+                        wait_budget = wait_budget
+                            .saturating_add(range(&call, "timeout", 30_000, 1, 60_000)? as u64);
+                    }
+                    if call.name == "timeline.render" && !text(&call, "path", "")?.ends_with(".svg")
+                    {
+                        return Err("timeline.render requires an explicit .svg destination".into());
+                    }
+                }
+            }
             "touchpad.capabilities"
             | "touchpad.swipe"
             | "touchpad.pinch"
@@ -509,6 +685,50 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             }
             "mouse.use" => {
                 mouse_options(&call)?;
+            }
+            "target.locate" => {
+                if call.get("template").is_some() {
+                    #[cfg(not(feature = "vision"))]
+                    return Err(
+                        "unsupported_state: template matching requires the optional vision feature"
+                            .into(),
+                    );
+                    #[cfg(feature = "vision")]
+                    {
+                        if ["text", "role", "scope", "exact", "case_sensitive", "index"]
+                            .iter()
+                            .any(|key| call.get(key).is_some())
+                        {
+                            return Err("template matching and semantic target arguments are separate explicit locators".into());
+                        }
+                        if text(&call, "template", "")?.is_empty() {
+                            return Err("template path is empty".into());
+                        }
+                        image_match_options(&call)?;
+                    }
+                } else {
+                    target_args(&call)?;
+                    if ["mode", "scales", "min_score", "min_margin"]
+                        .iter()
+                        .any(|key| call.get(key).is_some())
+                    {
+                        return Err("image matcher options require template".into());
+                    }
+                }
+                let name = text(&call, "name", "last")?;
+                if name.is_empty() || name.len() > 128 {
+                    return Err("target name must contain 1..128 bytes".into());
+                }
+                if text(&call, "window", "active")?.is_empty() {
+                    return Err(
+                        "target window must be active or an explicit native window ID".into(),
+                    );
+                }
+            }
+            "keyboard.num_lock" => {
+                if !matches!(text(&call, "state", "")?.as_str(), "on" | "off" | "toggle") {
+                    return Err("keyboard.num_lock state must be on, off or toggle; use keyboard.state to read".into());
+                }
             }
             "mouse.move_to" => {
                 target_args(&call)?;
@@ -759,7 +979,20 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
 }
 
 pub fn check(source: &str, options: Options) -> Result<String, String> {
-    let (calls, _) = validate(source, options)?;
+    let prepared = ModuleSession::default().prepare(source, options)?;
+    check_prepared(&prepared, options)
+}
+
+/// Validate one already loaded program without reopening imported files.
+pub fn check_prepared(prepared: &Prepared, options: Options) -> Result<String, String> {
+    if prepared.mode == ProgramMode::Scoped {
+        let plan = prepared.compile_scoped(options)?;
+        return Ok(format!(
+            "{{\"status\":\"planned\",\"language\":\"zuse script\",\"plan\":{}}}",
+            plan.summary.to_json()
+        ));
+    }
+    let (calls, _) = validate(&prepared.source, options)?;
     let list: Vec<_> = calls
         .iter()
         .map(|c| {
@@ -824,6 +1057,14 @@ impl MoveReceipt {
 
 #[derive(Default)]
 pub struct Runtime {
+    modules: ModuleSession,
+    observer: Observer,
+    watches: BTreeMap<String, String>,
+    cancellation: Cancellation,
+    timer: crate::timing::Timer,
+    targets: BTreeMap<String, WindowTarget>,
+    #[cfg(feature = "vision")]
+    vision: crate::vision_runtime::VisionRuntime,
     mouse: Option<Mouse>,
     desktop: Option<Desktop>,
     browser: Option<Browser>,
@@ -836,6 +1077,58 @@ pub struct Runtime {
 impl Runtime {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Function names retained by successful preflight in this session.
+    pub fn functions(&self) -> Vec<String> {
+        self.modules.functions()
+    }
+
+    pub fn cancellation(&self) -> Cancellation {
+        self.cancellation.clone()
+    }
+
+    /// Begin a separately authorized execution with an explicit fresh token.
+    pub fn set_cancellation(&mut self, cancellation: Cancellation) {
+        self.cancellation = cancellation;
+    }
+
+    /// Resolve once inside one native window; the caller may retain the result.
+    pub fn locate(
+        &mut self,
+        query: &TargetQuery<'_>,
+        window: &str,
+    ) -> Result<WindowTarget, String> {
+        target::validate_query(query)?;
+        let window = TargetWindow::from_windows(&self.desktop()?.windows()?, window)?;
+        let snapshot = accessibility::snapshot(4096, 32)?;
+        target::locate_in_window(&snapshot, query, &window)
+    }
+
+    /// Click a retained semantic target after a lightweight identity check.
+    /// The check reads one node and window metadata; it performs no recognition.
+    pub fn click_target(&mut self, target: &WindowTarget, button: &str) -> Result<(), String> {
+        let cancellation = self.cancellation.clone();
+        let center = target_center(&target.target);
+        cancellation.dispatch(|| self.mouse()?.submit(center))?;
+        let node = accessibility::node(&target.target.path)?;
+        let windows = self.desktop()?.windows()?;
+        target.verify(&windows, &node)?;
+        if !accessibility::hit_test(
+            &target.target.path,
+            center.x.round() as i32,
+            center.y.round() as i32,
+        )? || !self.desktop()?.window_hit_test(
+            &target.window.id,
+            center.x.round() as i32,
+            center.y.round() as i32,
+        )? {
+            return Err(
+                "stale_target: another surface covers the retained target; no click was sent"
+                    .into(),
+            );
+        }
+        cancellation.dispatch(|| self.mouse()?.button(button, "click"))
     }
 
     /// Locate an accessible target and move from this runtime's live pointer.
@@ -884,16 +1177,19 @@ impl Runtime {
         target: LocatedTarget,
         plan: MovePlan,
     ) -> Result<MoveReceipt, String> {
+        let cancellation = self.cancellation.clone();
         let mouse = self.mouse()?;
         let start = Instant::now();
         for (index, sample) in plan.samples().iter().enumerate() {
             let due = Duration::from_millis(u64::from(sample.at_ms));
             if let Some(delay) = due.checked_sub(start.elapsed()) {
-                std::thread::sleep(delay);
+                cancellation.sleep(delay)?;
             }
-            mouse.submit(sample.point).map_err(|error| {
-                format!("pointer movement stopped after {index} samples: {error}")
-            })?;
+            cancellation
+                .dispatch(|| mouse.submit(sample.point))
+                .map_err(|error| {
+                    format!("pointer movement stopped after {index} samples: {error}")
+                })?;
         }
         Ok(MoveReceipt {
             target,
@@ -996,11 +1292,45 @@ impl Runtime {
     }
 
     pub fn execute(&mut self, source: &str, options: Options) -> Result<String, String> {
+        let prepared = self.modules.prepare(source, options)?;
+        self.execute_prepared(prepared, options)
+    }
+
+    /// Resolve entry-file imports against an explicit directory, never process cwd.
+    pub fn execute_with_base(
+        &mut self,
+        source: &str,
+        options: Options,
+        base: &Path,
+    ) -> Result<String, String> {
+        let prepared = self.modules.prepare_with_base(source, options, base)?;
+        self.execute_prepared(prepared, options)
+    }
+
+    /// Preflight the entire expansion before committing definitions or effects.
+    /// A dry run leaves the retained module session unchanged.
+    pub fn execute_prepared(
+        &mut self,
+        prepared: Prepared,
+        options: Options,
+    ) -> Result<String, String> {
         if options.dry_run {
-            return check(source, options);
+            return check_prepared(&prepared, options);
         }
-        let (calls, scheduled_wait_ms) = validate(source, options)?;
+        if prepared.mode != ProgramMode::Flat {
+            return Err(
+                "scoped mouse handles require zuse script or script::execute_prepared_with_cancel"
+                    .into(),
+            );
+        }
+        let source = prepared.source;
+        let (calls, scheduled_wait_ms) = validate(&source, options)?;
         require_touchpad_capabilities(&calls)?;
+        if !self.cancellation.is_cancelled() {
+            self.modules = prepared.next_session;
+        } else if calls.is_empty() {
+            return Ok("{\"status\":\"failed\",\"stage\":\"prepare\",\"error\":\"cancelled: execution was cancelled\",\"error_code\":\"cancelled\",\"completed\":0,\"results\":[]}".into());
+        }
         // Speeds need the live start/target/path before their duration is known.
         // Reserve every static wait first, then debit each resolved speed plan
         // before sending its first event.
@@ -1008,7 +1338,7 @@ impl Runtime {
         let mut results = Vec::new();
         let mut bytes = 0;
         for (index, call) in calls.iter().enumerate() {
-            if call.name == "human.request" {
+            if call.name == "human.request" && !self.cancellation.is_cancelled() {
                 let next = calls.get(index + 1).map_or(source.len(), |c| c.span.start);
                 let kind = text(call, "kind", "")?;
                 let message = text(call, "message", "")?;
@@ -1032,7 +1362,21 @@ impl Runtime {
                 ));
             }
             let began = Instant::now();
-            match self.step(call, &mut dynamic_wait_ms) {
+            let was_timing = self.timer.running();
+            let outcome = self
+                .cancellation
+                .check()
+                .and_then(|_| self.step(call, &mut dynamic_wait_ms));
+            let elapsed = began.elapsed();
+            let timing = if was_timing || self.timer.running() {
+                format!(
+                    ",\"timing\":{}",
+                    self.timer.record(elapsed, !call.name.starts_with("timer."))
+                )
+            } else {
+                String::new()
+            };
+            match outcome {
                 Ok(value) => {
                     bytes += value.len();
                     if bytes > 1024 * 1024 {
@@ -1043,24 +1387,36 @@ impl Runtime {
                         ));
                     }
                     results.push(format!(
-                        "{{\"step\":{index},\"operation\":{},\"elapsed_us\":{},\"value\":{value}}}",
+                        "{{\"step\":{index},\"operation\":{},\"elapsed_us\":{}{timing},\"value\":{value}}}",
                         quote(call.name),
-                        began.elapsed().as_micros()
+                        elapsed.as_micros()
                     ));
                 }
                 Err(error) => {
+                    if self.cancellation.is_cancelled() {
+                        let _ = self.release_mouse();
+                    }
                     let error_code = if error.starts_with("unsupported_state:") {
                         "unsupported_state"
                     } else if error.starts_with("unsupported_character:") {
                         "unsupported_character"
+                    } else if error.starts_with("cancelled:") {
+                        "cancelled"
+                    } else if error.starts_with("timeout:") {
+                        "timeout"
+                    } else if error.starts_with("ambiguous_target:") {
+                        "ambiguous_target"
+                    } else if error.starts_with("stale_target:") {
+                        "stale_target"
                     } else {
                         "execution_error"
                     };
                     return Ok(format!(
-                        "{{\"status\":\"failed\",\"failed_step\":{index},\"operation\":{},\"error\":{},\"error_code\":{},\"completed\":{index},\"results\":[{}]}}",
+                        "{{\"status\":\"failed\",\"failed_step\":{index},\"operation\":{},\"error\":{},\"error_code\":{},\"elapsed_us\":{}{timing},\"completed\":{index},\"results\":[{}]}}",
                         quote(call.name),
                         quote(&error),
                         quote(error_code),
+                        elapsed.as_micros(),
                         results.join(",")
                     ));
                 }
@@ -1073,9 +1429,126 @@ impl Runtime {
         ))
     }
 
+    #[cfg(feature = "vision")]
+    fn vision_step(&mut self, call: &Call<'_>) -> Result<String, String> {
+        let name = text(call, "name", "last")?;
+        match call.name {
+            "timeline.observe" => return self.vision.state(&name),
+            "timeline.close" => return self.vision.close(&name),
+            "timeline.render" => {
+                return self
+                    .vision
+                    .render(&name, Path::new(&text(call, "path", "")?));
+            }
+            _ => {}
+        }
+        self.desktop()?;
+        let desktop = self.desktop.as_ref().unwrap();
+        match call.name {
+            "timeline.start" => self.vision.start(
+                desktop,
+                &name,
+                &text(call, "window", "active")?,
+                (
+                    integer(call, "columns", 1) as u16,
+                    integer(call, "rows", 1) as u16,
+                ),
+                (
+                    integer(call, "enter", 24) as u8,
+                    integer(call, "exit", 8) as u8,
+                ),
+            ),
+            "timeline.sample" => self.vision.sample(desktop, &name),
+            "timeline.wait_until" => self.vision.wait_until(
+                desktop,
+                &name,
+                integer(call, "timeout", 30_000) as u64,
+                integer(call, "interval", 32) as u64,
+                &self.cancellation,
+            ),
+            _ => Err("unknown visual timeline command".into()),
+        }
+    }
+
     fn step(&mut self, c: &Call<'_>, dynamic_wait_ms: &mut u64) -> Result<String, String> {
         let done = || Ok("{\"ok\":true}".into());
+        let cancellation = self.cancellation.clone();
         match c.name {
+            "timer.start" => {
+                self.timer.start();
+                Ok(self.timer.status())
+            }
+            "timer.reset" => {
+                self.timer.reset();
+                Ok(self.timer.status())
+            }
+            "timer.stop" => {
+                self.timer.stop();
+                Ok(self.timer.status())
+            }
+            "timer.status" => Ok(self.timer.status()),
+            "observe" => {
+                if c.get("watch").is_some() {
+                    let name = text(c, "watch", "last")?;
+                    let id = self
+                        .watches
+                        .get(&name)
+                        .ok_or("unknown watch name; call watch first")?;
+                    self.observer.snapshot(id, self.browser.as_mut())
+                } else {
+                    Observer::observe(&observation_query(c)?, self.browser.as_mut())
+                }
+            }
+            "watch" => {
+                let name = text(c, "name", "last")?;
+                if let Some(previous) = self.watches.remove(&name) {
+                    self.observer.close(&previous, self.browser.as_mut())?;
+                }
+                let result = self
+                    .observer
+                    .watch(observation_query(c)?, self.browser.as_mut())?;
+                let id = json::with_value(&result, |root| {
+                    root.get("watch")
+                        .ok_or("watch receipt has no identity".to_owned())
+                        .and_then(json::text)
+                })?;
+                self.watches.insert(name.clone(), id);
+                Ok(format!(
+                    "{{\"name\":{},\"receipt\":{result}}}",
+                    quote(&name)
+                ))
+            }
+            "watch.close" => {
+                let name = text(c, "name", "last")?;
+                let id = self.watches.remove(&name).ok_or("unknown watch name")?;
+                self.observer.close(&id, self.browser.as_mut())
+            }
+            "wait_until" => {
+                let name = text(c, "watch", "last")?;
+                let id = self
+                    .watches
+                    .get(&name)
+                    .ok_or("unknown watch name; call watch first")?;
+                self.observer.wait_until(
+                    id,
+                    &observation_condition(c)?,
+                    integer(c, "timeout", 30_000) as u64,
+                    &self.cancellation,
+                    self.browser.as_mut(),
+                )
+            }
+            "watch_until_click" => Observer::watch_until_click(
+                &click_watch_options(c)?,
+                &cancellation,
+                self.browser.as_mut(),
+            ),
+            #[cfg(feature = "vision")]
+            "timeline.start"
+            | "timeline.sample"
+            | "timeline.observe"
+            | "timeline.wait_until"
+            | "timeline.render"
+            | "timeline.close" => self.vision_step(c),
             "system.capabilities" => Ok(self.capabilities()),
             "touchpad.capabilities" => Ok(touchpad::capabilities_json()),
             "touchpad.swipe" | "touchpad.pinch" | "touchpad.rotate" => {
@@ -1123,6 +1596,38 @@ impl Runtime {
                 let point = mouse.position()?;
                 Ok(format!("{{\"x\":{},\"y\":{}}}", point.x, point.y))
             }
+            "target.locate" => {
+                let name = text(c, "name", "last")?;
+                // A failed replacement must never reuse an older target.
+                self.targets.remove(&name);
+                #[cfg(feature = "vision")]
+                {
+                    self.vision.targets.remove(&name);
+                    if c.get("template").is_some() {
+                        let options = image_match_options(c)?;
+                        self.desktop()?;
+                        return self.vision.locate(
+                            self.desktop.as_ref().unwrap(),
+                            Path::new(&text(c, "template", "")?),
+                            &text(c, "window", "active")?,
+                            &name,
+                            &options,
+                        );
+                    }
+                }
+                if self.targets.len() >= 64 {
+                    return Err("at most 64 named targets may be retained in one runtime".into());
+                }
+                let args = target_args(c)?;
+                let target = self.locate(&args.query(), &text(c, "window", "active")?)?;
+                let result = format!(
+                    "{{\"name\":{},\"location\":{}}}",
+                    quote(&name),
+                    target.to_json()
+                );
+                self.targets.insert(name, target);
+                Ok(result)
+            }
             "mouse.move_to" => {
                 let args = target_args(c)?;
                 let options = move_options(c)?;
@@ -1169,9 +1674,9 @@ impl Runtime {
                 for sample in motion {
                     let desired = Duration::from_millis(sample.at_ms as u64);
                     if let Some(delay) = desired.checked_sub(start.elapsed()) {
-                        std::thread::sleep(delay);
+                        cancellation.sleep(delay)?;
                     }
-                    mouse.submit(sample.point)?;
+                    cancellation.dispatch(|| mouse.submit(sample.point))?;
                 }
                 Ok(format!(
                     "{{\"x\":{},\"y\":{},\"samples\":{}}}",
@@ -1203,9 +1708,9 @@ impl Runtime {
                     let sample = sample.map_err(|e| e.to_string())?;
                     let due = Duration::from_millis(u64::from(sample.at_ms));
                     if let Some(delay) = due.checked_sub(start.elapsed()) {
-                        std::thread::sleep(delay);
+                        cancellation.sleep(delay)?;
                     }
-                    mouse.submit(sample.point)?;
+                    cancellation.dispatch(|| mouse.submit(sample.point))?;
                     samples += 1;
                 }
                 Ok(format!(
@@ -1224,26 +1729,54 @@ impl Runtime {
                 let action = c.name.rsplit('.').next().unwrap_or("click");
                 for i in 0..integer(c, "count", 1) {
                     if i > 0 {
-                        std::thread::sleep(
-                            Duration::from_millis(integer(c, "interval", 80) as u64),
-                        );
+                        cancellation
+                            .sleep(Duration::from_millis(integer(c, "interval", 80) as u64))?;
                     }
-                    self.mouse()?.button(button, action)?;
+                    if c.get("target").is_some() {
+                        let name = text(c, "target", "")?;
+                        if let Some(target) = self.targets.get(&name).cloned() {
+                            self.click_target(&target, button)?;
+                        } else {
+                            #[cfg(feature = "vision")]
+                            {
+                                let target = self.vision.targets.get(&name).cloned()
+                                    .ok_or("stale_target: no unique retained target has that name; use target.locate first")?;
+                                cancellation.dispatch(|| {
+                                    self.mouse()?.submit(Point {
+                                        x: target.x,
+                                        y: target.y,
+                                    })
+                                })?;
+                                target.verify(self.desktop()?)?;
+                                cancellation.dispatch(|| self.mouse()?.button(button, "click"))?;
+                            }
+                            #[cfg(not(feature = "vision"))]
+                            return Err("stale_target: no retained target has that name; use target.locate first".into());
+                        }
+                    } else {
+                        cancellation.dispatch(|| self.mouse()?.button(button, action))?;
+                    }
                 }
                 Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
             }
             "mouse.scroll" => {
-                self.mouse()?
-                    .scroll(integer(c, "dx", 0) as i32, integer(c, "dy", 0) as i32)?;
+                cancellation.dispatch(|| {
+                    self.mouse()?
+                        .scroll(integer(c, "dx", 0) as i32, integer(c, "dy", 0) as i32)
+                })?;
                 Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
+            }
+            "keyboard.state" => self.desktop()?.keyboard_status(),
+            "keyboard.num_lock" => {
+                cancellation.dispatch(|| self.desktop()?.num_lock(&text(c, "state", "")?))
             }
             "keyboard.type" => {
                 let value = text(c, "text", "")?;
                 let window = text(c, "window", "")?;
                 if window.is_empty() {
-                    self.desktop()?.type_text(&value)?;
+                    cancellation.dispatch(|| self.desktop()?.type_text(&value))?;
                 } else {
-                    self.desktop()?.type_into(&window, &value)?;
+                    cancellation.dispatch(|| self.desktop()?.type_into(&window, &value))?;
                 }
                 Ok(format!(
                     "{{\"typed_bytes\":{},\"submitted_bytes\":{},\"delivery\":\"submitted\",\"application_confirmation_required\":true}}",
@@ -1255,9 +1788,9 @@ impl Runtime {
                 let key = text(c, "key", "")?;
                 let window = text(c, "window", "")?;
                 if window.is_empty() {
-                    self.desktop()?.key(&key)?;
+                    cancellation.dispatch(|| self.desktop()?.key(&key))?;
                 } else {
-                    self.desktop()?.key_into(&window, &key)?;
+                    cancellation.dispatch(|| self.desktop()?.key_into(&window, &key))?;
                 }
                 Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
             }
@@ -1322,7 +1855,7 @@ impl Runtime {
                 let delay = Rng::new(integer(c, "seed", 1) as u64)
                     .range_u64(min, max)
                     .map_err(|e| format!("{e:?}"))?;
-                std::thread::sleep(Duration::from_millis(delay));
+                cancellation.sleep(Duration::from_millis(delay))?;
                 Ok(format!("{{\"waited_ms\":{delay}}}"))
             }
             "browser.launch" => {

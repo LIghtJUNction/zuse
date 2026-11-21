@@ -243,9 +243,16 @@ fn legacy_mouse_actions_never_fall_back_to_a_user_pointer() {
         assert!(!output.status.success(), "{source}");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // An explicitly selected user marker is supported on Wayland, but it
+        // must fail at this nonexistent private display instead of borrowing
+        // another pointer or falling back to the host session.
+        let expected = if source == r#"mouse.use(kind="user")"# {
+            "cannot connect the operation marker to Wayland"
+        } else {
+            "no independent-pointer support"
+        };
         assert!(
-            stdout.contains("no independent-pointer support")
-                || stderr.contains("no independent-pointer support"),
+            stdout.contains(expected) || stderr.contains(expected),
             "{source}: {stdout}\n{stderr}"
         );
     }

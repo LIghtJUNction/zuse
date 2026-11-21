@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zuse"
+  short_description: "把桌面与浏览器操作编成可复用的 Zuse 脚本，支持观察、等待、函数模块和计时"
+  default_prompt: "Use $zuse to build and run a bounded, reusable computer-use program."

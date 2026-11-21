@@ -130,6 +130,7 @@ def private_environment(source, directory, runtime):
         # An explicit libseat backend never tries logind/builtin on failure.
         # Do not run a seatd process at this path: failure is intentional.
         LIBSEAT_BACKEND="seatd", SEATD_SOCK=str(runtime / "disabled-seatd.sock"),
+        YDOTOOL_SOCKET=str(runtime / "disabled-ydotool.sock"),
         DBUS_SYSTEM_BUS_ADDRESS="unix:path=" + str(runtime / "disabled-system-bus.sock"),
         NO_AT_BRIDGE="1", GIO_USE_VFS="local", GSETTINGS_BACKEND="memory",
         GTK_A11Y="none", GTK_USE_PORTAL="0",
@@ -243,6 +244,9 @@ def main():
     parser.add_argument("--report", type=Path, default=ROOT / "target/native-wayland-private.json")
     parser.add_argument("--with-ime", action="store_true")
     parser.add_argument("--state-tests", action="store_true")
+    parser.add_argument("--marker-tests", action="store_true")
+    parser.add_argument("--scale", type=float, choices=(1.0, 1.25), default=1.0,
+                        help="owned monitor scale for coordinate/marker calibration")
     parser.add_argument("--ascii-background", action="store_true")
     parser.add_argument("--headless-parent", choices=("cage", "weston"), default="cage")
     parser.add_argument("--cage", default="cage", help="Cage parent executable; see build_private_cage.py for the v6 fixture")
@@ -269,6 +273,8 @@ def main():
         "host_focus_or_pointer_queries": False,
         "host_state_restoration": False,
         "seat_backend": "seatd-with-absent-private-socket",
+        "production_pointer_buttons": "disabled-private-ydotool-socket",
+        "requested_monitor_scale": args.scale,
     }
     write_report(report_path, {"native_wayland": "starting", "isolation": isolation})
     # Hyprland includes a 40-character revision plus timestamp/random suffix in
@@ -283,13 +289,14 @@ def main():
         for name in ("config", "cache", "data"):
             (directory / name).mkdir(mode=0o700)
         config = directory / "hyprland.lua"
-        config.write_text(CONFIG)
+        config.write_text(CONFIG.replace("scale=1", f"scale={args.scale:g}", 1))
         bus_config = directory / "dbus.conf"
         bus_config.write_text(BUS_CONFIG.replace("unix:tmpdir=/tmp", "unix:path=" + str(runtime / "dbus.sock")))
         log_path = directory / "private.log"
         log = log_path.open("w")
         env = private_environment(os.environ, directory, runtime)
         assert not Path(env["SEATD_SOCK"]).exists()
+        assert not Path(env["YDOTOOL_SOCKET"]).exists()
         bus = parent = child = ime = keyboard = None
         try:
             stage = "check-headless-parent-options"
@@ -397,8 +404,12 @@ def main():
             isolation["hyprland_version"] = json.loads(ready.stdout).get("tag")
             monitors = run(["hyprctl", "-j", "monitors"], env=env)
             monitors.check_returncode()
-            if not json.loads(monitors.stdout):
+            monitor_rows = json.loads(monitors.stdout)
+            if not monitor_rows:
                 raise RuntimeError("private compositor has no virtual monitor")
+            if any(abs(item.get("scale", 0) - args.scale) > 0.001 for item in monitor_rows):
+                raise RuntimeError("private compositor did not apply the requested monitor scale")
+            isolation["monitor_scales"] = [item["scale"] for item in monitor_rows]
 
             stage = "start-private-baseline-keyboard"
             # A headless parent advertises a seat without a physical keyboard.
@@ -449,7 +460,9 @@ def main():
                 command.append("--ascii-background")
             if args.state_tests:
                 command.append("--state-tests")
-            result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, timeout=60)
+            if args.marker_tests:
+                command.append("--marker-tests")
+            result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, timeout=90)
             if keyboard.poll() is not None:
                 raise RuntimeError("owned baseline keyboard exited during the native fixtures")
             isolation["physical_input_or_kms_fds"] = physical_device_fds(parent) + physical_device_fds(child)

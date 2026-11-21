@@ -793,38 +793,38 @@ impl X11 {
         }
         Ok((x, y, width, height))
     }
-    /// Resolve the frontmost root child at a point without changing focus or pointer.
+    /// Follow the frontmost child at the point until entering the target subtree.
+    /// A window-manager frame can contain an input cover beside the client, so
+    /// finding one of the target's ancestors is not sufficient evidence.
     pub fn window_hit_test(&self, id: &str, x: i32, y: i32) -> Result<bool> {
         let target = self.window_id(id)?;
-        let (mut dx, mut dy, mut hit) = (0, 0, 0);
-        let ok = unsafe {
-            (self.api.XTranslateCoordinates)(
-                self.display,
-                self.root,
-                self.root,
-                x,
-                y,
-                &mut dx,
-                &mut dy,
-                &mut hit,
-            )
-        };
-        if ok == 0 || hit == 0 {
+        if target == self.root {
             return Ok(false);
         }
-        let mut current = target;
+        let mut current = self.root;
         for _ in 0..32 {
-            if current == hit {
+            let (mut dx, mut dy, mut child) = (0, 0, 0);
+            // Keep the source in root coordinates at every level; child is
+            // the mapped immediate descendant containing this same point.
+            let ok = unsafe {
+                (self.api.XTranslateCoordinates)(
+                    self.display,
+                    self.root,
+                    current,
+                    x,
+                    y,
+                    &mut dx,
+                    &mut dy,
+                    &mut child,
+                )
+            };
+            if ok == 0 || child == 0 || child == current {
+                return Ok(false);
+            }
+            if child == target {
                 return Ok(true);
             }
-            if current <= 1 || current == self.root {
-                break;
-            }
-            let parent = self.parent(current)?;
-            if parent == current {
-                break;
-            }
-            current = parent;
+            current = child;
         }
         Ok(false)
     }

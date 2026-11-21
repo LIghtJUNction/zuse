@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Zuse local event click fixture</title>
+<style>
+  body { margin: 32px; font: 16px sans-serif; background: #fafafa; color: #202124; }
+  #arena { position: relative; width: 360px; height: 220px; border: 1px solid #ddd; }
+  #mole { position: absolute; left: 48px; top: 48px; width: 120px; height: 72px; }
+  #outside { position: absolute; left: 520px; top: 48px; width: 120px; height: 72px; }
+  #cover { position: absolute; inset: 0; z-index: 5; background: #eee; }
+  [hidden] { display: none !important; }
+</style>
+<h1>Local event click fixture</h1>
+<div id="arena"><button class="mole" id="mole" hidden>Target</button></div>
+<button class="mole" id="outside">Outside scope</button>
+<script>
+  const mole = document.getElementById('mole'), arena = document.getElementById('arena');
+  const fixture = window.fixture = {
+    clicks: [], appearances: [], outsideClicks: 0, round: 0, queries: 0,
+    start(mode = 'repeat', rounds = 2, delay = 80) {
+      fixture.mode = mode; fixture.rounds = rounds;
+      setTimeout(fixture.show, delay);
+      // Changes outside the observed container must never select this target.
+      setTimeout(() => document.getElementById('outside').textContent = 'Unrelated change', 20);
+      return true;
+    },
+    show() {
+      fixture.round++;
+      const at = performance.now();
+      fixture.appearances.push({round: fixture.round, at});
+      mole.dataset.round = String(fixture.round);
+      mole.hidden = false;
+      // Repeated mutations during the same visible episode are intentional.
+      for (const delay of [5, 10, 20, 40, 60, 100]) {
+        setTimeout(() => mole.setAttribute('data-noise', String(performance.now())), delay);
+      }
+    },
+    cover() {
+      const cover = document.createElement('div');
+      cover.id = 'cover'; arena.appendChild(cover); return true;
+    },
+    p95() {
+      const values = fixture.clicks.map(click => click.latency_ms).sort((a, b) => a - b);
+      return values[Math.ceil(values.length * 0.95) - 1];
+    }
+  };
+  const originalQuery = document.querySelectorAll.bind(document);
+  document.querySelectorAll = (...args) => { fixture.queries++; return originalQuery(...args); };
+  document.getElementById('outside').addEventListener('click', () => fixture.outsideClicks++);
+  mole.addEventListener('click', event => {
+    const at = performance.now(), appearance = fixture.appearances[fixture.appearances.length - 1];
+    fixture.clicks.push({round: fixture.round, at, trusted: event.isTrusted,
+      latency_ms: appearance ? at - appearance.at : null});
+    if (fixture.mode === 'repeat' && fixture.round < fixture.rounds) {
+      setTimeout(() => { mole.hidden = true; setTimeout(fixture.show, 24); }, 12);
+    }
+  });
+</script>

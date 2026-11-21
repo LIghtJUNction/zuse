@@ -817,7 +817,9 @@ mod num_lock_tests {
 
     fn events(bytes: &[u8]) -> Vec<(u16, u16, i32)> {
         bytes
-            .chunks_exact(INPUT_EVENT_SIZE)
+            .as_chunks::<INPUT_EVENT_SIZE>()
+            .0
+            .iter()
             .map(|event| {
                 let at = INPUT_EVENT_SIZE - 8;
                 (

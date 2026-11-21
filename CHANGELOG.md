@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — local programs and input-state iteration
+
+- Separate the active Wayland keyboard from other devices; preserve lock state during text entry and add explicit Num Lock read/set/toggle with native readback.
+- Add a click-through, non-focusable Wayland marker for the shared user pointer, including fractional output coordinates and cleanup. Independent pointer devices remain X11-only.
+- Add event-based browser/AT-SPI observation, retained watches, cancellable local waits, monotonic timers and bounded appearance-triggered browser clicks with explicit receipt and cleanup states.
+- Add optional multi-scale template matching, cached-target checks, native X11 input-surface hit testing, and explicitly captured/rendered visual timelines with bounded episode history.
+- Add transactional local file/source imports, explicit eval, namespaced functions and persistent Runtime/shell reuse. Preserve scoped borrowed mouse ownership and aggregate preflight limits.
+- Include a reusable Zuse skill, declaration-only WeChat helpers, owned browser examples, and isolated Wayland/X11/AT-SPI validation fixtures.
+
+See [local programs](docs/local-programs.md) and [validation](docs/validation-20261121.md).
+
 ## 0.3.0 — 2026-11-21
 
 - Publish GitHub binaries only. Project Z dependencies follow their GitHub default branches; the lockfile records the validated revisions. Registry publication is deferred until a compatible package can be staged separately.

@@ -194,6 +194,7 @@ struct Lexer<'a> {
     offset: usize,
     line: usize,
     column: usize,
+    module_syntax: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -203,6 +204,7 @@ impl<'a> Lexer<'a> {
             offset: usize::from(source.starts_with('\u{feff}')) * '\u{feff}'.len_utf8(),
             line: 1,
             column: 1,
+            module_syntax: false,
         }
     }
 
@@ -258,10 +260,9 @@ impl<'a> Lexer<'a> {
 
     fn name(&mut self) -> Result<Kind, ParseError> {
         let start = self.offset;
-        while self
-            .peek()
-            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+        while self.peek().is_some_and(|c| {
+            c.is_ascii_alphanumeric() || c == '_' || (self.module_syntax && c == '-')
+        }) {
             self.advance();
         }
         if self.offset - start > MAX_NAME_BYTES {
@@ -468,6 +469,7 @@ struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
     statements: usize,
+    module_syntax: bool,
 }
 
 impl Parser {
@@ -533,6 +535,18 @@ impl Parser {
                 _ => unreachable!(),
             },
             _ => Err(self.error(ErrorKind::ExpectedName)),
+        }
+    }
+
+    fn member_name(&mut self) -> Result<String, ParseError> {
+        if self.module_syntax
+            && let Kind::Name(name) = &self.current().kind
+        {
+            let name = name.clone();
+            self.take();
+            Ok(name)
+        } else {
+            self.binding_name()
         }
     }
 
@@ -635,7 +649,11 @@ impl Parser {
                 compound = true;
                 StatementKind::Function { name, params, body }
             }
-            Kind::Name(name) if matches!(name.as_str(), "parallel" | "sequence" | "serial") => {
+            Kind::Name(name)
+                if matches!(name.as_str(), "parallel" | "sequence" | "serial")
+                    && (!self.module_syntax
+                        || self.after_newlines(self.cursor + 1) == Some(&Kind::OpenBrace)) =>
+            {
                 let keyword = match self.take().kind {
                     Kind::Name(name) => name,
                     _ => unreachable!(),
@@ -694,7 +712,7 @@ impl Parser {
             Kind::Text(value) => return Ok(Expr::String(value)),
             Kind::Name(name) if name == "true" => return Ok(Expr::Bool(true)),
             Kind::Name(name) if name == "false" => return Ok(Expr::Bool(false)),
-            Kind::Name(name) if reserved(&name) => {
+            Kind::Name(name) if reserved(&name) && !self.module_syntax => {
                 return Err(ParseError {
                     kind: ErrorKind::ReservedName,
                     span: token.span,
@@ -708,18 +726,28 @@ impl Parser {
                 });
             }
         };
-        let (receiver, name) = if self.is(&Kind::Dot) {
+        let mut receiver = None;
+        let mut name = name;
+        while self.is(&Kind::Dot) {
             self.take();
             self.newlines();
-            (Some(name), self.binding_name()?)
-        } else {
-            (None, name)
-        };
+            receiver = Some(match receiver {
+                None => name,
+                Some(prefix) => format!("{prefix}.{name}"),
+            });
+            name = self.member_name()?;
+            if !self.module_syntax {
+                break;
+            }
+        }
         if self.after_newlines(self.cursor) == Some(&Kind::OpenParen) {
             self.newlines();
         }
-        if receiver.is_none() && !self.is(&Kind::OpenParen) {
-            return Ok(Expr::Identifier(name));
+        if !self.is(&Kind::OpenParen) && (receiver.is_none() || self.module_syntax) {
+            return Ok(Expr::Identifier(match receiver {
+                Some(prefix) => format!("{prefix}.{name}"),
+                None => name,
+            }));
         }
         self.expect(Kind::OpenParen, ErrorKind::ExpectedOpenParen)?;
         let mut args: Vec<Argument> = Vec::new();
@@ -733,7 +761,7 @@ impl Parser {
             let argument_name = if matches!(self.current().kind, Kind::Name(_))
                 && self.after_newlines(self.cursor + 1) == Some(&Kind::Equals)
             {
-                let name = self.binding_name()?;
+                let name = self.member_name()?;
                 self.newlines();
                 self.take();
                 self.newlines();
@@ -789,6 +817,16 @@ fn reserved(name: &str) -> bool {
 /// an ordinary braced child groups several statements into one sequential branch.
 /// ASCII binding names and decoded UTF-8 string values are supported.
 pub fn parse(source: &str) -> Result<Program, ParseError> {
+    parse_with_modules(source, false)
+}
+
+/// Parse module declarations and flat command names without changing the
+/// original scoped parser's identifier or borrowed-handle grammar.
+pub fn parse_module(source: &str) -> Result<Program, ParseError> {
+    parse_with_modules(source, true)
+}
+
+fn parse_with_modules(source: &str, module_syntax: bool) -> Result<Program, ParseError> {
     if source.len() > MAX_SCRIPT_BYTES {
         return Err(ParseError {
             kind: ErrorKind::ScriptTooLarge,
@@ -800,11 +838,14 @@ pub fn parse(source: &str) -> Result<Program, ParseError> {
             },
         });
     }
-    let tokens = Lexer::new(source).tokens()?;
+    let mut lexer = Lexer::new(source);
+    lexer.module_syntax = module_syntax;
+    let tokens = lexer.tokens()?;
     let mut parser = Parser {
         tokens,
         cursor: 0,
         statements: 0,
+        module_syntax,
     };
     Ok(Program {
         statements: parser.list(0, false)?,

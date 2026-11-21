@@ -12,6 +12,109 @@ pub fn snapshot(max_nodes: usize, max_depth: usize) -> Result<String> {
     }
     native::snapshot(max_nodes, max_depth)
 }
+/// Validate a desktop observation scope without opening the accessibility bus.
+pub fn validate_scope(path: &str) -> Result<()> {
+    validate_path(path)
+}
+
+/// Read only one already selected accessibility subtree.
+pub fn snapshot_scope(path: &str, max_nodes: usize, max_depth: usize) -> Result<String> {
+    validate_path(path)?;
+    if !(1..=4096).contains(&max_nodes) || max_depth > 32 {
+        return Err("accessibility limits: nodes 1..4096, depth 0..32".into());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        native::snapshot_scope(path, max_nodes, max_depth)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if path != "0" {
+            return Err("unsupported: scoped accessibility observation is currently available on Linux AT-SPI".into());
+        }
+        snapshot(max_nodes, max_depth)
+    }
+}
+
+/// Re-read this node only, including its current bounds and process identity.
+pub fn node(path: &str) -> Result<String> {
+    validate_path(path)?;
+    #[cfg(target_os = "linux")]
+    {
+        native::node(path)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("unsupported: single-node accessibility observation is currently available on Linux AT-SPI".into())
+    }
+}
+
+/// Check the selected node's branch at a screen point using its window and
+/// ancestors. This does not inspect other applications or establish window
+/// stacking; callers must separately verify the selected native window.
+pub fn hit_test(path: &str, x: i32, y: i32) -> Result<bool> {
+    validate_path(path)?;
+    #[cfg(target_os = "linux")]
+    {
+        native::hit_test(path, x, y)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (path, x, y);
+        Err("unsupported: lightweight accessibility hit testing is available only through Linux AT-SPI".into())
+    }
+}
+
+/// An event subscription bound to one native accessibility object. A changed
+/// child index never silently retargets this watch to another application.
+pub struct Watch {
+    #[cfg(target_os = "linux")]
+    inner: native::EventWatch,
+}
+impl Watch {
+    pub fn new(scope: &str) -> Result<Self> {
+        validate_path(scope)?;
+        if scope.split('/').count() < 3 {
+            return Err("accessibility watch requires an explicit window or subtree scope".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Ok(Self {
+                inner: native::EventWatch::new(scope)?,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err("unsupported: native accessibility event watches are currently available on Linux AT-SPI".into())
+        }
+    }
+    pub fn snapshot(&mut self) -> Result<String> {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.snapshot()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err("unsupported: native accessibility event watches are unavailable".into())
+        }
+    }
+    pub fn wait_event(
+        &mut self,
+        deadline: std::time::Instant,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.wait_event(deadline, cancellation)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (deadline, cancellation);
+            Err("unsupported: native accessibility event watches are unavailable".into())
+        }
+    }
+}
+
 /// Read an accessibility snapshot as plain text.
 pub fn text(max_nodes: usize, max_depth: usize) -> Result<String> {
     let snapshot = snapshot(max_nodes, max_depth)?;
@@ -92,10 +195,12 @@ pub(crate) fn insert_focused_x11(
 
 #[cfg(target_os = "linux")]
 mod native {
+    mod events;
     pub(super) mod x11_input;
     use super::*;
     use crate::platform::dylib::Library;
     use core::ffi::{c_char, c_int, c_void};
+    pub(super) use events::EventWatch;
     use std::{
         ffi::{CStr, CString},
         sync::{Mutex, OnceLock},
@@ -131,6 +236,7 @@ mod native {
         role: unsafe extern "C" fn(Obj, *mut ErrPtr) -> *mut c_char,
         count: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
         child: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> Obj,
+        parent: unsafe extern "C" fn(Obj, *mut ErrPtr) -> Obj,
         text_iface: unsafe extern "C" fn(Obj) -> Obj,
         text_count: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
         text: unsafe extern "C" fn(Obj, c_int, c_int, *mut ErrPtr) -> *mut c_char,
@@ -139,6 +245,7 @@ mod native {
         action_name: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> *mut c_char,
         do_action: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> c_int,
         component_iface: unsafe extern "C" fn(Obj) -> Obj,
+        at_point: unsafe extern "C" fn(Obj, c_int, c_int, c_int, *mut ErrPtr) -> Obj,
         extents: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> *mut Rect,
         grab_focus: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
         editable_iface: unsafe extern "C" fn(Obj) -> Obj,
@@ -181,6 +288,7 @@ mod native {
                     role: library.symbol(c"atspi_accessible_get_role_name")?,
                     count: library.symbol(c"atspi_accessible_get_child_count")?,
                     child: library.symbol(c"atspi_accessible_get_child_at_index")?,
+                    parent: library.symbol(c"atspi_accessible_get_parent")?,
                     text_iface: library.symbol(c"atspi_accessible_get_text_iface")?,
                     text_count: library.symbol(c"atspi_text_get_character_count")?,
                     text: library.symbol(c"atspi_text_get_text")?,
@@ -189,6 +297,7 @@ mod native {
                     action_name: library.symbol(c"atspi_action_get_action_name")?,
                     do_action: library.symbol(c"atspi_action_do_action")?,
                     component_iface: library.symbol(c"atspi_accessible_get_component_iface")?,
+                    at_point: library.symbol(c"atspi_component_get_accessible_at_point")?,
                     extents: library.symbol(c"atspi_component_get_extents")?,
                     grab_focus: library.symbol(c"atspi_component_grab_focus")?,
                     editable_iface: library.symbol(c"atspi_accessible_get_editable_text_iface")?,
@@ -332,7 +441,13 @@ mod native {
         exhausted: bool,
     }
     impl Scan<'_> {
-        fn visit(&mut self, object: Object<'_>, path: String, depth: usize) -> Result<()> {
+        fn visit(
+            &mut self,
+            object: Object<'_>,
+            path: String,
+            depth: usize,
+            inherited_pid: Option<u32>,
+        ) -> Result<()> {
             if self.exhausted
                 || self.nodes.len() >= self.max_nodes
                 || Instant::now() >= self.deadline
@@ -340,6 +455,20 @@ mod native {
                 self.truncated = true;
                 return Ok(());
             }
+            let pid = inherited_pid.or_else(|| {
+                if path == "0" {
+                    return None;
+                }
+                let mut error = core::ptr::null_mut();
+                let value = unsafe { (self.api.process_id)(object.ptr, &mut error) };
+                if self.api.error(error).is_ok() && value > 0 {
+                    Some(value)
+                } else {
+                    self.errors += 1;
+                    None
+                }
+            });
+            let pid_json = pid.map_or_else(|| "null".to_owned(), |value| value.to_string());
             let name = self
                 .api
                 .get_string(object.ptr, self.api.name)
@@ -443,7 +572,7 @@ mod native {
                 }
             }
             let node = format!(
-                r#"{{"path":{},"role":{},"name":{},"text":{},"children":{count},"bounds":{bounds},"visible":{visible},"showing":{showing},"actions":[{}]}}"#,
+                r#"{{"path":{},"pid":{pid_json},"role":{},"name":{},"text":{},"children":{count},"bounds":{bounds},"visible":{visible},"showing":{showing},"actions":[{}]}}"#,
                 quote(&path),
                 quote(&role),
                 quote(&name),
@@ -472,7 +601,7 @@ mod native {
                     break;
                 }
                 match self.api.child(object.ptr, index) {
-                    Ok(child) => self.visit(child, format!("{path}/{index}"), depth + 1)?,
+                    Ok(child) => self.visit(child, format!("{path}/{index}"), depth + 1, pid)?,
                     Err(_) => self.errors += 1,
                 }
             }
@@ -485,6 +614,16 @@ mod native {
             .map_err(|_| "accessibility state is poisoned")?;
         let api = load()?;
         let root = api.resolve("0")?;
+        scan_root(api, root, "0", max_nodes, max_depth)
+    }
+
+    fn scan_root(
+        api: &Api,
+        root: Object<'_>,
+        path: &str,
+        max_nodes: usize,
+        max_depth: usize,
+    ) -> Result<String> {
         let mut scan = Scan {
             api,
             nodes: Vec::new(),
@@ -496,7 +635,7 @@ mod native {
             bytes: 0,
             exhausted: false,
         };
-        scan.visit(root, "0".into(), 0)?;
+        scan.visit(root, path.into(), 0, None)?;
         Ok(format!(
             r#"{{"backend":"atspi","nodes":[{}],"truncated":{},"errors":{}}}"#,
             scan.nodes.join(","),
@@ -504,6 +643,123 @@ mod native {
             scan.errors
         ))
     }
+    pub(super) fn snapshot_scope(path: &str, max_nodes: usize, max_depth: usize) -> Result<String> {
+        let _guard = ACCESS
+            .lock()
+            .map_err(|_| "accessibility state is poisoned")?;
+        let api = load()?;
+        let root = api.resolve(path)?;
+        scan_root(api, root, path, max_nodes, max_depth)
+    }
+
+    pub(super) fn node(path: &str) -> Result<String> {
+        let _guard = ACCESS
+            .lock()
+            .map_err(|_| "accessibility state is poisoned")?;
+        let api = load()?;
+        let root = api.resolve(path)?;
+        unsafe {
+            (api.clear_cache)(root.ptr);
+        }
+        let snapshot = scan_root(api, root, path, 1, 0)?;
+        crate::browser::with_json(&snapshot, |value| {
+            if value.get("errors").and_then(|n| n.integer().ok()) != Some(0) {
+                return Err("accessibility node is unavailable or incomplete".into());
+            }
+            value
+                .get("nodes")
+                .and_then(|n| n.elements().next())
+                .map(|node| node.raw().to_owned())
+                .ok_or_else(|| "accessibility node is unavailable".into())
+        })
+    }
+
+    pub(super) fn hit_test(path: &str, x: i32, y: i32) -> Result<bool> {
+        let depth = path.split('/').count();
+        if depth < 4 {
+            return Err(
+                "unsupported: accessibility hit testing requires a node inside an explicit window"
+                    .into(),
+            );
+        }
+        let _guard = ACCESS
+            .lock()
+            .map_err(|_| "accessibility state is poisoned")?;
+        let api = load()?;
+        let parent = |object: Obj| -> Result<Option<Object<'static>>> {
+            let mut error = core::ptr::null_mut();
+            let pointer = unsafe { (api.parent)(object, &mut error) };
+            if let Err(error) = api.error(error) {
+                if !pointer.is_null() {
+                    unsafe {
+                        (api.unref)(pointer);
+                    }
+                }
+                return Err(format!(
+                    "unsupported: accessibility parent could not be verified: {error}"
+                ));
+            }
+            if pointer.is_null() {
+                Ok(None)
+            } else {
+                api.object(pointer).map(Some)
+            }
+        };
+        let mut branch = vec![api.resolve(path)?];
+        // The path begins desktop/application/window. Walk only that original
+        // branch, stopping at its window; never enumerate a subtree or sibling.
+        for _ in 3..depth {
+            let next = parent(branch.last().unwrap().ptr)?
+                .ok_or("unsupported: accessibility branch no longer reaches its window")?;
+            branch.push(next);
+        }
+        for index in 1..branch.len() {
+            let component = unsafe { (api.component_iface)(branch[index].ptr) };
+            if component.is_null() {
+                return Err(
+                    "unsupported: an accessibility ancestor does not provide point hit testing"
+                        .into(),
+                );
+            }
+            let component = api.object(component)?;
+            let mut error = core::ptr::null_mut();
+            // ATSPI_COORD_TYPE_SCREEN == 0; returned accessibles are owned.
+            let pointer = unsafe { (api.at_point)(component.ptr, x, y, 0, &mut error) };
+            if let Err(error) = api.error(error) {
+                if !pointer.is_null() {
+                    unsafe {
+                        (api.unref)(pointer);
+                    }
+                }
+                return Err(format!(
+                    "unsupported: accessibility point hit testing failed: {error}"
+                ));
+            }
+            if pointer.is_null() {
+                return Ok(false);
+            }
+            let mut hit = api.object(pointer)?;
+            let mut on_branch = false;
+            for _ in 0..34 {
+                if branch[..index].iter().any(|node| node.ptr == hit.ptr) {
+                    on_branch = true;
+                    break;
+                }
+                if hit.ptr == branch[index].ptr {
+                    break;
+                }
+                let Some(next) = parent(hit.ptr)? else {
+                    break;
+                };
+                hit = next;
+            }
+            if !on_branch {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(super) fn action(path: &str, index: usize) -> Result<String> {
         let _guard = ACCESS
             .lock()

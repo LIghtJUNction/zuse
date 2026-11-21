@@ -61,6 +61,180 @@ pub struct LocatedTarget {
     pub bounds: Bounds,
 }
 
+/// The observed native window and its coordinate scale, without input effects.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TargetWindow {
+    pub id: String,
+    pub pid: u32,
+    pub bounds: Bounds,
+    pub scale: f64,
+    pub focused: bool,
+}
+
+/// One semantic lookup retained for a later, inexpensive checked click.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowTarget {
+    pub target: LocatedTarget,
+    pub window: TargetWindow,
+}
+
+impl Bounds {
+    pub fn contains(&self, other: &Self) -> bool {
+        other.x >= self.x
+            && other.y >= self.y
+            && other.x + other.width <= self.x + self.width
+            && other.y + other.height <= self.y + self.height
+    }
+}
+
+impl TargetWindow {
+    pub fn from_windows(snapshot: &str, id: &str) -> Result<Self> {
+        crate::json::with_value(snapshot, |root| {
+            let windows = root
+                .elements()
+                .filter(|node| {
+                    if id == "active" {
+                        node.get("focused").and_then(Value::boolean) == Some(true)
+                    } else {
+                        node.get("id")
+                            .and_then(Value::string)
+                            .is_some_and(|v| v.matches(id))
+                    }
+                })
+                .collect::<Vec<_>>();
+            if windows.len() != 1 {
+                return Err("stale_target: a unique current target window is required".into());
+            }
+            let node = windows[0];
+            if node.get("mapped").and_then(Value::boolean) != Some(true) {
+                return Err("stale_target: the target window is not confirmed mapped".into());
+            }
+            let bounds = parse_bounds(Some(node))?;
+            let pid = node
+                .get("pid")
+                .and_then(|v| v.integer().ok())
+                .and_then(|v| u32::try_from(v).ok())
+                .filter(|&v| v != 0)
+                .ok_or("unsupported_state: target window process identity is unavailable")?;
+            let scale = node
+                .get("scale")
+                .and_then(|v| v.raw().parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .ok_or("unsupported_state: target window scale is unavailable")?;
+            let focused = node
+                .get("focused")
+                .and_then(Value::boolean)
+                .ok_or("unsupported_state: target window focus is unavailable")?;
+            Ok(Self {
+                id: string(node, "id"),
+                pid,
+                bounds,
+                scale,
+                focused,
+            })
+        })
+    }
+
+    pub fn to_json(&self) -> String {
+        let b = self.bounds;
+        format!(
+            "{{\"id\":{},\"pid\":{},\"x\":{},\"y\":{},\"width\":{},\"height\":{},\"scale\":{},\"focused\":{},\"mapped\":true}}",
+            crate::json::quote(&self.id),
+            self.pid,
+            b.x,
+            b.y,
+            b.width,
+            b.height,
+            self.scale,
+            self.focused
+        )
+    }
+}
+
+impl WindowTarget {
+    pub fn to_json(&self) -> String {
+        let t = &self.target;
+        let b = t.bounds;
+        format!(
+            "{{\"window\":{},\"target\":{{\"path\":{},\"role\":{},\"name\":{},\"bounds\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}}}},\"x\":{},\"y\":{},\"basis\":\"accessibility\",\"coordinate_space\":\"native_desktop\",\"recognition_passes\":1}}",
+            self.window.to_json(),
+            crate::json::quote(&t.path),
+            crate::json::quote(&t.role),
+            crate::json::quote(&t.name),
+            b.x,
+            b.y,
+            b.width,
+            b.height,
+            b.x + b.width / 2.0,
+            b.y + b.height / 2.0
+        )
+    }
+
+    /// Check native identity and this one retained node. No tree search or OCR.
+    pub fn verify(&self, windows: &str, node: &str) -> Result<()> {
+        let current = TargetWindow::from_windows(windows, &self.window.id)?;
+        if current != self.window || !current.focused {
+            return Err("stale_target: window identity, geometry, scale or focus changed; locate again before clicking".into());
+        }
+        crate::json::with_value(node, |node| {
+            let pid = node.get("pid").and_then(|v| v.integer().ok());
+            let visible = ["visible", "showing"]
+                .iter()
+                .all(|key| node.get(key).and_then(Value::boolean) == Some(true));
+            if pid != Some(i64::from(self.window.pid))
+                || !visible
+                || string(node, "path") != self.target.path
+                || string(node, "name") != self.target.name
+                || string(node, "role") != self.target.role
+                || parse_bounds(node.get("bounds"))? != self.target.bounds
+            {
+                return Err("stale_target: the located node changed or is not visible; locate again before clicking".into());
+            }
+            Ok(())
+        })
+    }
+}
+
+/// Resolve within a native window using process identity and current bounds.
+/// Other applications and out-of-window nodes never enter the candidate set.
+pub fn locate_in_window(
+    snapshot: &str,
+    query: &TargetQuery<'_>,
+    window: &TargetWindow,
+) -> Result<WindowTarget> {
+    validate_query(query)?;
+    let filtered = crate::json::with_value(snapshot, |root| {
+        let nodes = root
+            .get("nodes")
+            .ok_or("accessibility snapshot has no nodes")?;
+        let mut has_identity = false;
+        let retained = nodes
+            .elements()
+            .filter(|node| {
+                let pid = node.get("pid").and_then(|v| v.integer().ok());
+                has_identity |= pid.is_some();
+                pid == Some(i64::from(window.pid))
+                    && parse_bounds(node.get("bounds"))
+                        .is_ok_and(|bounds| window.bounds.contains(&bounds))
+            })
+            .map(|node| node.raw().to_owned())
+            .collect::<Vec<_>>();
+        if !has_identity {
+            return Err("unsupported_state: accessibility snapshot has no process identities for window-scoped lookup".into());
+        }
+        Ok(format!(
+            "{{\"nodes\":[{}],\"truncated\":{},\"errors\":{}}}",
+            retained.join(","),
+            root.get("truncated").map(|v| v.raw()).unwrap_or("false"),
+            root.get("errors").map(|v| v.raw()).unwrap_or("0")
+        ))
+    })?;
+    Ok(WindowTarget {
+        target: locate_in(&filtered, query)?,
+        window: window.clone(),
+    })
+}
+
 /// Validate a query before observing the desktop or moving the pointer.
 pub fn validate_query(query: &TargetQuery<'_>) -> Result<()> {
     if query.text.trim().is_empty() || query.text.contains('\0') || query.text.len() > 65536 {

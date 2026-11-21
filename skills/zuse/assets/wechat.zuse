@@ -1,0 +1,11 @@
+# Import this module to register functions. Importing sends no input.
+# Resolve and verify the intended chat and current node paths before calling.
+fn read_chat(scope) {
+    observe(source="desktop", scope=scope)
+}
+fn prepare_message(editor, message) {
+    accessibility.set_text(path=editor, text=message)
+}
+fn send_prepared(send_button, action_index) {
+    accessibility.action(path=send_button, index=action_index)
+}

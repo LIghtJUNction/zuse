@@ -1,0 +1,6 @@
+# This example only reads a local module and uses the monotonic timer.
+import(path="functions.zuse", as="demo")
+demo.measure_pause(ms=1)
+eval(source="fn mark(){timer.status()}", as="inline")
+inline.mark()
+demo.clock()

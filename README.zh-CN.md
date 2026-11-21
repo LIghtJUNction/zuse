@@ -4,7 +4,7 @@
 
 zuse 执行一小段可检查的代码，完成观察窗口、移动鼠标、输入文字、读取无障碍树、控制后台浏览器、Android 显示目标与手机 Chrome、iOS，以及串口和 USB 设备。遇到密码、安全密钥或账号登录时，程序可以暂停，请人类处理，再从剩余步骤继续。
 
-[English](README.md) · [语法](docs/language.md) · [作用域鼠标](docs/scoped-mice.md) · [文本定位与轨迹](docs/target-motion.md) · [平台能力](docs/platforms.md)
+[English](README.md) · [语法](docs/language.md) · [函数与本地观察](docs/local-programs.md) · [作用域鼠标](docs/scoped-mice.md) · [文本定位与轨迹](docs/target-motion.md) · [平台能力](docs/platforms.md)
 
 ## 安装与使用
 
@@ -32,6 +32,22 @@ mouse.release()
 ~~~
 
 `zuse check 文件.zuse` 或 `--dry-run` 返回执行计划；`--read-only` 拒绝输入、程序启动、JavaScript 执行和设置修改。运行时先检查整个程序，再执行第一步；执行失败时返回已完成步骤并停止。
+
+## 可复用函数与本地事件
+
+在同一个 `zuse shell` 会话中导入一次，后续命令直接调用：
+
+~~~text
+import(path="skills/zuse/assets/wechat.zuse", as="wechat")
+eval(source="fn pause(ms){wait(ms=ms)}", as="local")
+local.pause(ms=10)
+~~~
+
+微信示例只登记读取、准备文本和发送按钮三个函数；调用前必须从实际应用确认窗口、会话和节点，创建函数不会自动发送消息。也可用 `import(source="...", as="模块名")` 导入源码。显式 `eval` 可同时定义函数并执行动作。整段展开结果共用预检查、只读限制和累计预算；预检失败或 dry-run 不提交新定义。文件中的相对导入以该文件目录为基准。
+
+`observe`、`watch`、`wait_until` 默认返回结构化文本，通过局部 DOM 或 AT-SPI 事件等待变化。明确调用 `watch_until_click` 才把出现事件连接到点击，限定原标签页、域名、容器、次数和超时。`timer.start/reset/stop/status` 提供每条命令及累计耗时。可选 `--features vision` 增加多尺度图标匹配与按需渲染的视觉时间切片。完整用法见[本地程序说明](docs/local-programs.md)、[Zuse 技能](skills/zuse/SKILL.md)和[实测记录](docs/validation-20261121.md)。
+
+`keyboard.state()` 将当前 Wayland 键盘与其它设备分开；文本输入保持锁状态。明确设置 NumLock 使用 `keyboard.num_lock(state="on")`、`off` 或 `toggle` 并读取实际回读。Wayland 的彩色标记跟随共享用户鼠标、点击穿透；独立多鼠标仍依赖 X11 MPX。原生 pinch 不可用时明确返回不支持。
 
 ## 独立鼠标、变量生命周期与并行轨迹
 
