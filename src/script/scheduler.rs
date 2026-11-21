@@ -74,6 +74,10 @@ struct Context<H> {
     live: BTreeSet<MouseId>,
     events: Vec<String>,
     event_bytes: usize,
+    event_tokens: usize,
+    events_omitted: usize,
+    cleanup_attempted: usize,
+    cleanup_failed: usize,
     dynamic_remaining: u64,
     started: Instant,
 }
@@ -84,31 +88,40 @@ impl<H: Host> Context<H> {
             json::quote(kind),
             self.started.elapsed().as_millis()
         );
-        self.record(event, kind == "close")
+        self.record(event)
     }
     fn global_event(&mut self, kind: &str, detail: &str) -> Result<(), String> {
-        self.record(
-            format!(
-                "{{\"mouse\":null,\"event\":{},\"at_ms\":{},\"detail\":{detail}}}",
-                json::quote(kind),
-                self.started.elapsed().as_millis()
-            ),
-            false,
-        )
+        self.record(format!(
+            "{{\"mouse\":null,\"event\":{},\"at_ms\":{},\"detail\":{detail}}}",
+            json::quote(kind),
+            self.started.elapsed().as_millis()
+        ))
     }
-    fn record(&mut self, event: String, closing: bool) -> Result<(), String> {
-        // Leave room for the final 32 close receipts, the plan and an error.
-        let limit = 768 * 1024 + if closing { 8192 } else { 0 };
-        if self.event_bytes.saturating_add(event.len() + 1) > limit {
-            return Err("script receipt exceeds its output budget; the last operation may already have been submitted".into());
+    fn record(&mut self, event: String) -> Result<(), String> {
+        // Preserve an explicit, bounded prefix without turning successful input
+        // into a failure because its observation log no longer fits.
+        if self.events_omitted != 0 || self.event_bytes.saturating_add(event.len() + 1) > 768 * 1024
+        {
+            self.events_omitted += 1;
+            return Ok(());
+        }
+        let tokens = json::token_count(&event)?;
+        // Reserve tokens for the plan, status/error, cleanup summary and the
+        // MCP envelope, which adds fields around this same structured value.
+        if self.event_tokens.saturating_add(tokens) > json::MAX_TOKENS - 256 {
+            self.events_omitted += 1;
+            return Ok(());
         }
         self.event_bytes += event.len() + 1;
+        self.event_tokens += tokens;
         self.events.push(event);
         Ok(())
     }
     fn close(&mut self, id: MouseId) -> Result<(), String> {
         if self.live.remove(&id) {
+            self.cleanup_attempted += 1;
             let result = self.host.close(id);
+            self.cleanup_failed += usize::from(result.is_err());
             let recorded = self.event(
                 id,
                 "close",
@@ -482,6 +495,10 @@ fn execute_on<H: Host, F: FnMut() -> bool>(
         live: BTreeSet::new(),
         events: Vec::new(),
         event_bytes: 0,
+        event_tokens: 0,
+        events_omitted: 0,
+        cleanup_attempted: 0,
+        cleanup_failed: 0,
         dynamic_remaining: options
             .max_wait_ms
             .checked_sub(plan.summary.static_wait_ms)
@@ -513,7 +530,7 @@ fn execute_on<H: Host, F: FnMut() -> bool>(
         (Err(e), Err(cleanup)) => Some(format!("{e}; mouse cleanup failed: {cleanup}")),
     };
     let receipt = format!(
-        "{{\"status\":{},\"language\":\"zuse script\",\"plan\":{},\"elapsed_ms\":{},\"events\":[{}],\"error\":{}}}",
+        "{{\"status\":{},\"language\":\"zuse script\",\"plan\":{},\"elapsed_ms\":{},\"events\":[{}],\"events_omitted\":{},\"cleanup\":{{\"attempted\":{},\"failed\":{}}},\"error\":{}}}",
         json::quote(if error.is_some() {
             "failed"
         } else {
@@ -522,6 +539,9 @@ fn execute_on<H: Host, F: FnMut() -> bool>(
         plan.summary.to_json(),
         ctx.started.elapsed().as_millis(),
         ctx.events.join(","),
+        ctx.events_omitted,
+        ctx.cleanup_attempted,
+        ctx.cleanup_failed,
         error
             .as_deref()
             .map(json::quote)
@@ -539,6 +559,7 @@ mod tests {
         calls: Vec<(String, MouseId)>,
         submitted: Vec<(MouseId, Point)>,
         fail_move: bool,
+        fail_close: bool,
         cancel_after_sample: Option<super::super::CancellationToken>,
         cancel_on_locate: Option<super::super::CancellationToken>,
         observed_name: Option<String>,
@@ -552,7 +573,11 @@ mod tests {
         fn close(&mut self, id: MouseId) -> Result<(), String> {
             self.points.remove(&id);
             self.calls.push(("close".into(), id));
-            Ok(())
+            if self.fail_close {
+                Err("injected cleanup failure".into())
+            } else {
+                Ok(())
+            }
         }
         fn position(&self, id: MouseId) -> Result<Point, String> {
             self.points.get(&id).copied().ok_or("missing mouse".into())
@@ -797,19 +822,108 @@ mod tests {
         assert!(host.points.is_empty());
     }
     #[test]
-    fn oversized_observation_receipts_stop_and_still_release_mice() {
+    fn oversized_observation_receipts_are_bounded_without_stopping_actions() {
         let (out, host) = run(
-            "let p=mouse();repeat 3 {p.move_to(text=\"Save\",duration=0);}",
+            "let p=mouse();repeat 3 {p.move_to(text=\"Save\",duration=0);}p.click();",
             MockHost {
                 observed_name: Some("x".repeat(300_000)),
                 ..MockHost::default()
             },
             Options::default(),
         );
-        assert!(crate::runtime::failed(&out));
-        assert!(out.contains("output budget"));
+        assert!(!crate::runtime::failed(&out));
         assert!(out.len() < 1_048_576);
         assert!(host.points.is_empty());
-        assert!(out.contains("\"released\":true"));
+        assert_eq!(
+            host.calls
+                .iter()
+                .filter(|(name, _)| name == "click")
+                .count(),
+            1
+        );
+        json::with_value(&out, |value| {
+            assert_eq!(value.get("events_omitted").unwrap().integer().unwrap(), 3);
+            assert_eq!(value.get("events").unwrap().elements().count(), 3);
+            let cleanup = value.get("cleanup").unwrap();
+            assert_eq!(cleanup.get("attempted").unwrap().integer().unwrap(), 1);
+            assert_eq!(cleanup.get("failed").unwrap().integer().unwrap(), 0);
+            assert_eq!(value.get("error").unwrap().raw(), "null");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn script_receipt_summary_preserves_effects_errors_and_cleanup() {
+        for (fail_move, fail_close, cancel) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, false, true),
+        ] {
+            let options = Options {
+                max_steps: 2600,
+                ..Options::default()
+            };
+            let plan = super::super::compile(
+                "let p=mouse();p.down();repeat 2500 {touchpad.capabilities();}p.move(x=20,y=30,duration=0);p.up();",
+                options,
+            )
+            .unwrap();
+            let token = super::super::CancellationToken::default();
+            let host = MockHost {
+                fail_move,
+                fail_close,
+                cancel_after_sample: cancel.then(|| token.clone()),
+                ..MockHost::default()
+            };
+            let (out, host) = execute_on(host, &plan, options, || token.is_cancelled()).unwrap();
+            assert_eq!(
+                crate::runtime::failed(&out),
+                fail_move || fail_close || cancel
+            );
+            assert!(host.points.is_empty());
+            assert_eq!(
+                host.calls.iter().filter(|(name, _)| name == "down").count(),
+                1
+            );
+            assert_eq!(
+                host.calls
+                    .iter()
+                    .filter(|(name, _)| name == "close")
+                    .count(),
+                1
+            );
+            assert_eq!(host.submitted.is_empty(), fail_move);
+            json::with_value(&out, |value| {
+                assert!(value.get("events_omitted").unwrap().integer().unwrap() > 0);
+                let cleanup = value.get("cleanup").unwrap();
+                assert_eq!(cleanup.get("attempted").unwrap().integer().unwrap(), 1);
+                assert_eq!(
+                    cleanup.get("failed").unwrap().integer().unwrap(),
+                    i64::from(fail_close)
+                );
+                let error = value.get("error").unwrap();
+                if fail_move {
+                    assert!(json::text(error)?.contains("injected native failure"));
+                }
+                if fail_close {
+                    assert!(json::text(error)?.contains("injected cleanup failure"));
+                }
+                if cancel {
+                    assert!(json::text(error)?.contains("script cancelled"));
+                }
+                if !fail_move && !fail_close && !cancel {
+                    assert_eq!(error.raw(), "null");
+                    assert_eq!(
+                        host.calls.iter().filter(|(name, _)| name == "up").count(),
+                        1
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+        }
     }
 }

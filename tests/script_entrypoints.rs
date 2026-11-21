@@ -117,3 +117,111 @@ fn mcp_script_cannot_weaken_server_read_only_policy() {
         assert!(result.contains("read-only"));
     }
 }
+
+fn assert_capability_receipt(receipt: &str, steps: usize, truncated: bool) {
+    json::with_value(receipt, |value| {
+        assert!(
+            value
+                .get("status")
+                .unwrap()
+                .string()
+                .unwrap()
+                .matches("completed")
+        );
+        assert_eq!(
+            value
+                .get("plan")
+                .unwrap()
+                .get("steps")
+                .unwrap()
+                .integer()
+                .unwrap(),
+            steps as i64
+        );
+        let recorded = value.get("events").unwrap().elements().count();
+        let omitted = value.get("events_omitted").unwrap().integer().unwrap() as usize;
+        assert_eq!(recorded + omitted, steps);
+        assert_eq!(omitted > 0, truncated);
+        let cleanup = value.get("cleanup").unwrap();
+        assert_eq!(cleanup.get("attempted").unwrap().integer().unwrap(), 0);
+        assert_eq!(cleanup.get("failed").unwrap().integer().unwrap(), 0);
+        assert_eq!(value.get("error").unwrap().raw(), "null");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn script_receipt_cli_keeps_completion_when_details_are_bounded() {
+    let output = cli(
+        "repeat 2500 { touchpad.capabilities(); }",
+        &["--max-steps", "2500"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt = String::from_utf8(output.stdout).unwrap();
+    assert_capability_receipt(&receipt, 2500, true);
+}
+
+#[test]
+fn script_receipt_mcp_encodes_large_results_and_serves_the_next_request() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_zuse"))
+        .args(["mcp", "--stdio", "--max-steps", "2500"])
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let cases = [(2200, false), (2500, true), (1, false)];
+    let mut input = child.stdin.take().unwrap();
+    for (index, (steps, _)) in cases.iter().enumerate() {
+        let source = format!("repeat {steps} {{ touchpad.capabilities(); }}");
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{{"name":"zuse.script","arguments":{{"code":{}}},"_meta":{{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{{}}}}}}}}"#,
+            index + 1,
+            json::quote(&source),
+        );
+        writeln!(input, "{request}").unwrap();
+    }
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let responses: Vec<_> = stdout.lines().collect();
+    assert_eq!(responses.len(), cases.len());
+    for (index, (response, (steps, truncated))) in responses.iter().zip(cases).enumerate() {
+        json::with_value(response, |value| {
+            assert_eq!(
+                value.get("id").unwrap().integer().unwrap(),
+                (index + 1) as i64
+            );
+            assert!(value.get("error").is_none());
+            let result = value.get("result").unwrap();
+            assert_eq!(result.get("isError").unwrap().boolean(), Some(false));
+            let structured = result.get("structuredContent").unwrap();
+            let text = json::text(
+                result
+                    .get("content")
+                    .unwrap()
+                    .elements()
+                    .next()
+                    .unwrap()
+                    .get("text")
+                    .unwrap(),
+            )?;
+            assert_eq!(text, structured.raw());
+            assert_capability_receipt(&text, steps, truncated);
+            Ok(())
+        })
+        .unwrap();
+    }
+}
