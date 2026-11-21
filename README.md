@@ -32,6 +32,10 @@ cargo install --git https://github.com/LIghtJUNction/zuse --locked
 
 Native archives for Linux, Windows, and macOS are published on the [Releases page](https://github.com/LIghtJUNction/zuse/releases). Extract the matching archive and place its zuse executable on your PATH. Remove that executable to uninstall; Cargo installations use `cargo uninstall zuse-computer`.
 
+## Project Z dependencies
+
+Project Z dependencies use their GitHub repositories directly. Each currently uses `main` as its default branch. Refresh the pinned Git commits with `cargo update -p zmcpio -p zclap -p z64 -p zsys -p zcall -p zconv`, review the lockfile diff, and run CI before merging a refresh. CI and release builds use `--locked`. GitHub publishes the native binaries; registry packaging is separate and must not silently substitute a different dependency graph.
+
 ## First program
 
 ~~~sh

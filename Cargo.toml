@@ -20,10 +20,10 @@ default = ["std"]
 std = ["dep:zmcpio", "dep:zclap", "dep:z64", "dep:zsys"]
 
 [dependencies]
-zmcpio = { version = "=0.4.0", default-features = false, features = ["std"], optional = true, git = "https://github.com/LIghtJUNction/zmcpio.git"}
-zclap = { version = "=0.1.4", default-features = false, optional = true, git = "https://github.com/LIghtJUNction/zclap.git"}
-z64 = { version = "=0.1.2", default-features = false, optional = true, git = "https://github.com/LIghtJUNction/z64.git"}
-zsys = { version = "=0.1.1", default-features = false, features = ["dylib"], optional = true, git = "https://github.com/LIghtJUNction/zsys.git"}
+zmcpio = { default-features = false, features = ["std"], optional = true, git = "https://github.com/LIghtJUNction/zmcpio.git"}
+zclap = { default-features = false, optional = true, git = "https://github.com/LIghtJUNction/zclap.git"}
+z64 = { default-features = false, optional = true, git = "https://github.com/LIghtJUNction/z64.git"}
+zsys = { default-features = false, features = ["dylib"], optional = true, git = "https://github.com/LIghtJUNction/zsys.git"}
 
 [[bin]]
 name = "zuse"

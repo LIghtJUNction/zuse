@@ -2,6 +2,8 @@
 
 ## 0.3.0 — 2026-11-21
 
+- Publish GitHub binaries only. Project Z dependencies follow their GitHub default branches; the lockfile records the validated revisions. Registry publication is deferred until a compatible package can be staged separately.
+
 - Update the transitive zcall Git lock to `317c52f1` (release tooling only; no runtime API changes in that dependency).
 
 - Add `zuse script` and MCP `zuse.script` with owned mouse variables, lexical blocks, borrowed aliases and function parameters, bounded repeats, and cooperative parallel or sequential trajectories.
