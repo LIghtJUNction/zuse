@@ -44,7 +44,7 @@ GitHub's **Bump and release** workflow exposes the same version input. It calls 
 | macOS | x86_64-apple-darwin, aarch64-apple-darwin |
 | Windows | x86_64-pc-windows-msvc |
 
-Release identity is checked against Cargo.toml and the exact tagged commit. Each native build is packaged with its license, README, documentation, and runnable examples. GitHub releases publish all required archives. CARGO_REGISTRY_TOKEN enables Cargo publication.
+Release identity is checked against Cargo.toml and the exact tagged commit. Each native build is packaged with its license, README, documentation, and runnable examples. GitHub releases publish all required archives. Publishing to crates.io requires a separately validated registry stage; the native release workflow does not publish the Cargo package.
 
 The CI workflow runs for pull requests or manual dispatch. Local verification is the development gate; tagged native builds and publication remain the release gate.
 
