@@ -67,6 +67,18 @@ impl Desktop {
             Backend::Wayland(w) => w.key(chord),
         }
     }
+    pub(crate) fn hold(
+        &self,
+        chord: &str,
+        window: &str,
+        ms: u64,
+        cancel: &crate::observation::Cancellation,
+    ) -> Result<()> {
+        match &self.inner {
+            Backend::Wayland(w) => w.hold(chord, window, ms, cancel),
+            Backend::X11(_) => Err("unsupported_state: keyboard.hold requires Hyprland with targeted key-state dispatch".into()),
+        }
+    }
     pub fn keyboard_status(&self) -> Result<String> {
         match &self.inner {
             Backend::X11(x) => x.keyboard_status(),

@@ -20,6 +20,8 @@ pub mod integrations;
 #[cfg(feature = "std")]
 pub mod json;
 #[cfg(feature = "std")]
+mod key_hold;
+#[cfg(feature = "std")]
 pub mod mcp;
 #[cfg(feature = "std")]
 pub mod observation;

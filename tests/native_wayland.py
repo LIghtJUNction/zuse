@@ -15,6 +15,7 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
@@ -315,6 +316,41 @@ def main():
                 return image
             evaluate("window_capture",capture)
             if args.state_tests:
+                def bounded_key_hold():
+                    def edges(index):
+                        return [line.split()[1:] for line in (directory/f"{index}.log").read_text().splitlines()
+                                if line.startswith("HOLD ")]
+                    def await_edges(count):
+                        deadline = time.monotonic() + 2
+                        while len(edges(0)) < count:
+                            if time.monotonic() >= deadline:
+                                raise AssertionError(f"F8 edges missing from original fixture: {edges(0)}")
+                            time.sleep(.005)
+                    focus(first)
+                    key = "keyboard.hold(window=" + json.dumps(first) + ',key="F8",duration='
+                    zuse(key + "80)")
+                    await_edges(2)
+                    initial = edges(0)
+                    assert [edge for edge, _ in initial] == ["down", "up"], initial
+                    held_ms = (int(initial[1][1]) - int(initial[0][1])) / 1000
+                    assert held_ms >= 75, held_ms
+                    active(first)
+                    with subprocess.Popen([str(binary), "eval", key + "30000)"], env=env,
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+                        try:
+                            await_edges(3)
+                            process.send_signal(signal.SIGINT)
+                            receipt, _ = process.communicate(timeout=3)
+                            assert process.returncode == 1 and json.loads(receipt)["error_code"] == "cancelled", receipt
+                        finally:
+                            if process.poll() is None:
+                                process.kill()
+                    await_edges(4)
+                    assert [edge for edge, _ in edges(0)] == ["down", "up", "down", "up"], edges(0)
+                    assert not edges(1), edges(1)
+                    active(first)
+                    return {"key":"F8", "normal_hold_ms":held_ms, "cancelled_release_received":True}
+                evaluate("bounded_key_hold", bounded_key_hold)
                 def unsupported_states():
                     helper_path=directory/"keyboard-fixture"
                     flags=shlex.split(command(["pkg-config","--cflags","--libs","wayland-client","xkbcommon"]).stdout)

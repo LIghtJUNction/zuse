@@ -1,14 +1,19 @@
+#[path = "wayland_hold.rs"]
+mod hold;
 #[path = "wayland_keyboard.rs"]
 mod keyboard;
 #[path = "wayland_keymap.rs"]
 mod keymap;
 #[path = "wayland_xkb.rs"]
 mod xkb;
-use super::super::{Result, image_metadata, quote, split_chord, validate_text};
+use super::super::{Result, hypr_keys, image_metadata, quote, validate_text};
 use std::{
     fs::File,
     io::{Read, Write},
-    os::unix::net::UnixStream,
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::{ffi::OsStrExt, net::UnixStream},
+    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -120,28 +125,83 @@ impl Wayland {
         )
     }
     fn request(&self, command: &str) -> Result<String> {
-        let socket=self.socket.as_ref().ok_or("this operation requires Hyprland IPC; other Wayland compositors need their accessibility/portal backend")?;
-        let mut stream = UnixStream::connect(socket).map_err(|e| format!("Hyprland IPC: {e}"))?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .map_err(|e| e.to_string())?;
-        stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
-            .map_err(|e| e.to_string())?;
+        let mut stream = self.ipc_stream(Duration::from_secs(5))?;
         stream
             .write_all(command.as_bytes())
             .map_err(|e| e.to_string())?;
+        Self::read_reply(stream, Duration::from_secs(5))
+    }
+    fn ipc_stream(&self, timeout: Duration) -> Result<UnixStream> {
+        let socket = self.socket.as_ref().ok_or("this operation requires Hyprland IPC; other Wayland compositors need their accessibility/portal backend")?;
+        // SO_SNDTIMEO applies to connect as well as write on Linux. Install it
+        // before connecting: a full compositor listen queue can otherwise
+        // block the target check or release indefinitely after a key-down.
+        let path = socket.as_os_str().as_bytes();
+        #[repr(C)]
+        struct UnixAddress {
+            family: u16,
+            path: [u8; 108],
+        }
+        let mut address = UnixAddress {
+            family: 1,
+            path: [0; 108],
+        };
+        if path.is_empty() || path.len() >= address.path.len() || path.contains(&0) {
+            return Err("invalid Hyprland IPC socket path".into());
+        }
+        address.path[..path.len()].copy_from_slice(path);
+        unsafe extern "C" {
+            #[link_name = "socket"]
+            fn unix_socket(domain: i32, kind: i32, protocol: i32) -> i32;
+            fn connect(fd: i32, address: *const UnixAddress, len: u32) -> i32;
+        }
+        let stream_type = if cfg!(any(
+            target_arch = "mips",
+            target_arch = "mips32r6",
+            target_arch = "mips64",
+            target_arch = "mips64r6"
+        )) {
+            2
+        } else {
+            1
+        };
+        let cloexec = if cfg!(any(target_arch = "sparc", target_arch = "sparc64")) {
+            1 << 22
+        } else {
+            1 << 19
+        };
+        // SAFETY: Linux AF_UNIX stream socket. The new descriptor is owned by
+        // this UnixStream on every subsequent return path.
+        let fd = unsafe { unix_socket(1, stream_type | cloexec, 0) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let stream = unsafe { UnixStream::from_raw_fd(fd) };
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|e| e.to_string())?;
+        // SAFETY: initialized sockaddr_un including the terminating NUL.
+        let len = size_of::<u16>() + path.len() + 1;
+        if unsafe { connect(stream.as_raw_fd(), &address, len as u32) } < 0 {
+            return Err(format!("Hyprland IPC: {}", std::io::Error::last_os_error()));
+        }
+        Ok(stream)
+    }
+    fn read_reply(mut stream: UnixStream, timeout: Duration) -> Result<String> {
         let mut bytes = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + timeout;
         let mut buffer = [0; 8192];
         loop {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
-                .ok_or("Hyprland IPC exceeded five seconds")?;
+                .ok_or("Hyprland IPC exceeded its deadline")?;
             stream
                 .set_read_timeout(Some(remaining))
                 .map_err(|e| e.to_string())?;
-            let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+            let count = match stream.read(&mut buffer) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => result.map_err(|e| e.to_string())?,
+            };
             if count == 0 {
                 break;
             }
@@ -341,23 +401,11 @@ impl Wayland {
     pub fn key_into(&mut self, id: &str, chord: &str) -> Result<()> {
         self.key_target(Some(id), chord)
     }
-    fn selector(id: &str) -> Result<String> {
-        if id == "active" {
-            return Ok("active".into());
-        }
-        let hex = id
-            .strip_prefix("0x")
-            .ok_or("Hyprland window ID must be 0x hexadecimal or active")?;
-        if hex.is_empty() || hex.len() > 16 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err("invalid Hyprland window ID".into());
-        }
-        Ok(format!("address:0x{hex}"))
-    }
     fn require_foreground_target(&self, window: Option<&str>) -> Result<()> {
         let Some(id) = window else {
             return Ok(());
         };
-        Self::selector(id)?;
+        hypr_keys::selector(id)?;
         if id == "active" {
             return Ok(());
         }
@@ -377,45 +425,7 @@ impl Wayland {
         }
     }
     fn key_target(&self, window: Option<&str>, chord: &str) -> Result<()> {
-        let parts = split_chord(chord)?;
-        let last = *parts.last().ok_or("empty key chord")?;
-        let key = match last.to_ascii_lowercase().as_str() {
-            "enter" | "return" => "Return",
-            "esc" | "escape" => "Escape",
-            "backspace" => "BackSpace",
-            "tab" => "Tab",
-            "space" => "space",
-            "left" => "Left",
-            "right" => "Right",
-            "up" => "Up",
-            "down" => "Down",
-            "delete" | "del" => "Delete",
-            "pageup" => "Page_Up",
-            "pagedown" => "Page_Down",
-            "home" => "Home",
-            "end" => "End",
-            _ => last,
-        };
-        let raw_code = key.strip_prefix("code:");
-        if let Some(code) = raw_code {
-            if !code.bytes().all(|b| b.is_ascii_digit())
-                || !code.parse::<u16>().is_ok_and(|n| (8..=255).contains(&n))
-            {
-                return Err("XKB keycode must be in 8..255".into());
-            }
-        } else if !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-            return Err("use XKB key names or code:8..255 in chords".into());
-        }
-        let mut modifiers = Vec::new();
-        for p in &parts[..parts.len() - 1] {
-            modifiers.push(match p.to_ascii_lowercase().as_str() {
-                "ctrl" | "control" => "CTRL",
-                "alt" => "ALT",
-                "shift" => "SHIFT",
-                "super" | "meta" | "win" | "cmd" => "SUPER",
-                _ => return Err(format!("unsupported modifier {p}")),
-            });
-        }
+        let (key, modifiers) = hypr_keys::chord(chord)?;
         if self.socket.is_some() {
             let state = self.keyboard_state(true)?;
             if state.num_lock {
@@ -434,7 +444,10 @@ impl Wayland {
                 });
             }
             let mods = modifiers.join(" ");
-            let selector = window.map(Self::selector).transpose()?.unwrap_or_default();
+            let selector = window
+                .map(hypr_keys::selector)
+                .transpose()?
+                .unwrap_or_default();
             let modern = if selector.is_empty() {
                 format!(
                     "hl.dsp.send_shortcut({{mods={},key={}}})",
@@ -479,7 +492,7 @@ impl Wayland {
     pub fn type_into(&mut self, id: &str, text: &str) -> Result<()> {
         validate_text(text)?;
         keymap::validate(text)?;
-        Self::selector(id)?;
+        hypr_keys::selector(id)?;
         if self.socket.is_none() {
             return Err("background text requires Hyprland targeted input".into());
         }
@@ -496,7 +509,7 @@ impl Wayland {
                 return Err("Hyprland target window is unavailable".into());
             }
         }
-        let selector = Self::selector(id)?;
+        let selector = hypr_keys::selector(id)?;
         // Resolve the whole string without changing the live keymap. This
         // remains valid when an input method restores the original map while
         // Hyprland temporarily routes a shortcut to an unfocused surface.
@@ -529,7 +542,7 @@ impl Wayland {
         )
     }
     pub fn focus(&mut self, id: &str) -> Result<()> {
-        let s = Self::selector(id)?;
+        let s = hypr_keys::selector(id)?;
         self.dispatch(
             &format!("focuswindow {s}"),
             &format!("hl.dsp.focus({{window={}}})", quote(&s)),
@@ -538,7 +551,7 @@ impl Wayland {
     pub fn screenshot(&self, path: &Path, window: Option<&str>) -> Result<String> {
         let mut command = Command::new("grim");
         if let Some(id) = window {
-            Self::selector(id)?;
+            hypr_keys::selector(id)?;
             let response = if id == "active" {
                 self.request("j/activewindow")?
             } else {

@@ -2,6 +2,7 @@
 use std::path::Path;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) mod dylib;
+pub(crate) mod hypr_keys;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -28,6 +29,19 @@ pub type Result<T> = std::result::Result<T, String>;
 
 #[cfg(not(target_os = "linux"))]
 impl Desktop {
+    pub(crate) fn hold(
+        &self,
+        _: &str,
+        _: &str,
+        _: u64,
+        _: &crate::observation::Cancellation,
+    ) -> Result<()> {
+        Err(
+            "unsupported_state: keyboard.hold requires Hyprland with targeted key-state dispatch"
+                .into(),
+        )
+    }
+
     pub fn window_hit_test(&self, _id: &str, _x: i32, _y: i32) -> Result<bool> {
         Err(
             "unsupported_state: native window hit testing is not implemented for this backend"

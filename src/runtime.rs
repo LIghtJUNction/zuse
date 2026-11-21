@@ -96,6 +96,7 @@ static SPECS: &[Spec] = &[
     spec!("mouse.scroll",false,["dx":I:false,"dy":I:false]),
     spec!("keyboard.type",false,["text":T:true,"window":T:false]),
     spec!("keyboard.key",false,["key":T:true,"window":T:false]),
+    spec!("keyboard.hold",false,["key":T:true,"duration":I:true,"window":T:false]),
     spec!("keyboard.state", true, []),
     spec!("keyboard.num_lock",false,["state":T:true]),
     spec!("window.list", true, []),
@@ -118,6 +119,7 @@ static SPECS: &[Spec] = &[
     spec!("browser.click",false,["selector":T:true]),
     spec!("browser.fill",false,["selector":T:true,"text":T:true]),
     spec!("browser.key",false,["key":T:true]),
+    spec!("browser.hold",false,["key":T:true,"duration":I:true]),
     spec!("browser.capture",true,["path":T:true]),
     spec!("browser.close", false, []),
     spec!("human.request",false,["kind":T:true,"message":T:true,"url":T:false,"window":T:false,"timeout":I:false]),
@@ -939,6 +941,22 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             "ide.open" => {
                 range(&call, "line", 1, 1, i32::MAX as i64)?;
                 range(&call, "column", 1, 1, i32::MAX as i64)?;
+            }
+            "keyboard.hold" | "browser.hold" => {
+                let key = text(&call, "key", "")?;
+                if call.name == "browser.hold" {
+                    crate::browser::hold_events(&key)?;
+                } else {
+                    crate::platform::hypr_keys::chord(&key)?;
+                    crate::platform::hypr_keys::selector(&text(&call, "window", "active")?)?;
+                }
+                wait_budget = wait_budget.saturating_add(range(
+                    &call,
+                    "duration",
+                    0,
+                    1,
+                    crate::key_hold::MAX_MS,
+                )? as u64);
             }
             "keyboard.key" => {
                 crate::platform::split_chord(&text(&call, "key", "")?)?;
@@ -1794,6 +1812,23 @@ impl Runtime {
                     "{{\"typed_bytes\":{},\"submitted_bytes\":{},\"delivery\":\"submitted\",\"application_confirmation_required\":true}}",
                     value.len(),
                     value.len()
+                ))
+            }
+            "keyboard.hold" | "browser.hold" => {
+                let key = text(c, "key", "")?;
+                let duration = integer(c, "duration", 0) as u64;
+                if c.name == "keyboard.hold" {
+                    self.desktop()?.hold(
+                        &key,
+                        &text(c, "window", "active")?,
+                        duration,
+                        &cancellation,
+                    )?;
+                } else {
+                    self.browser()?.hold(&key, duration, &cancellation)?;
+                }
+                Ok(format!(
+                    r#"{{"duration_ms":{duration},"delivery":"submitted","application_confirmation_required":true}}"#
                 ))
             }
             "keyboard.key" => {

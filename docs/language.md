@@ -30,11 +30,11 @@ The entire source is parsed and validated before any effect. Fixed durations cou
 | Family | Operations |
 | --- | --- |
 | mouse | use, release, position, move, move_to, circle, click, down, up, scroll |
-| keyboard | type, key, optional explicit window target |
+| keyboard | type, key, hold, optional explicit window target |
 | window / screen | list, focus, capture, text |
 | wine | windows |
 | accessibility | tree, focus, action, set_text |
-| browser | launch, connect, tabs, select, navigate, snapshot, text, evaluate, click, fill, key, viewport, capture, close |
+| browser | launch, connect, tabs, select, navigate, snapshot, text, evaluate, click, fill, key, hold, viewport, capture, close |
 | android | devices, connect, status, snapshot, capture, tap, swipe, key, type, start |
 | human | request, pending |
 | process / harness | start, list/read, write/send, stop |
@@ -50,6 +50,12 @@ Pointer actions create an independent runtime mouse by default, currently requir
 `touchpad.capabilities()` reports the current gesture capabilities without a display. `touchpad.swipe`, `touchpad.pinch`, `touchpad.rotate`, and `touchpad.cancel` support validation and dry-run planning; native gesture injection is currently unsupported and fails whole-program preflight. See [gesture arguments and planning semantics](scoped-mice.md#touchpad-gesture-planning).
 
 `keyboard.key(key="ctrl+a")` sends a chord. `keyboard.type(text="...")` sends text. On backends that support targeted window events, supplying `window="ID"` directs input to that window without changing the active window. Applications can reject synthetic targeted events; accessibility actions and browser commands are preferred when the target exposes them.
+
+Use `keyboard.hold(key="Return", duration=250)` or `browser.hold(key="Space", duration=250)` for a single press and release. Both commands require 1–60,000 milliseconds and reserve that time from the program wait budget. The hold starts after the press acknowledgement. Target checks and transport acknowledgements add elapsed time. The runtime sends one key-down and one matching key-up on completion or cancellation while the original target is valid. Applications may implement their own key repeat. A successful receipt reports submission.
+
+`keyboard.hold` uses Hyprland's targeted `send_key_state` dispatcher. It requires an inspectable, idle keyboard with Caps Lock and Num Lock off, layout group zero, and a focused window with a stable ID. An explicit `window="0x…"` must match that focused window. Each edge checks the original address and stable ID in the compositor. Other native desktop backends currently return `unsupported_state`.
+
+`browser.hold` binds the selected desktop page, main document and focused element. Frame and author shadow-host focus are unsupported. A detected focus or document change stops execution with `stale_target` and suppresses further key events. CDP checks and input use separate protocol commands, so a renderer change can race the final send. A transport failure can leave delivery unconfirmed.
 
 `screen.text()` reads accessibility text. `screen.text(ocr=true)` captures the display and uses the installed Tesseract executable. Screenshots are PNG files. MCP's screenshot tool also returns an image content block.
 

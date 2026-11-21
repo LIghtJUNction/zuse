@@ -34,7 +34,9 @@ struct CancelState {
 impl Cancellation {
     /// Bind an embedding host's permit to every input dispatch for the lifetime
     /// of this token. A permit is held only while sending input, never while
-    /// waiting for a browser acknowledgement or an observation event.
+    /// waiting for a browser acknowledgement or an observation event. A
+    /// bounded key hold uses its press authorization for the matching, target-
+    /// checked release, including during cleanup after cancellation.
     pub fn with_dispatch_guard(
         acquire: impl Fn() -> Result<Box<dyn Send>> + Send + Sync + 'static,
     ) -> Self {

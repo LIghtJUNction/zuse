@@ -14,9 +14,20 @@ static gboolean key(GtkEventControllerKey *controller, guint keyval, guint code,
                     GdkModifierType state, gpointer data) {
     (void)controller; (void)data;
     printf("KEY %u %u %u\n",keyval,code,(unsigned)state);fflush(stdout);
+    if (keyval==GDK_KEY_F8) {
+        printf("HOLD down %" G_GINT64_FORMAT "\n",g_get_monotonic_time());fflush(stdout);
+        return TRUE;
+    }
     /* A deterministic shortcut target: log Ctrl+T without letting an entry
      * action transpose text and obscure the following keypad assertion. */
     return keyval==GDK_KEY_t && (state&GDK_CONTROL_MASK)!=0;
+}
+static void released(GtkEventControllerKey *controller, guint keyval, guint code,
+                     GdkModifierType state, gpointer data) {
+    (void)controller; (void)code; (void)state; (void)data;
+    if (keyval==GDK_KEY_F8) {
+        printf("HOLD up %" G_GINT64_FORMAT "\n",g_get_monotonic_time());fflush(stdout);
+    }
 }
 static void click(GtkGestureClick *gesture, int count, double x,double y,gpointer data) {
     (void)count;(void)data;
@@ -51,6 +62,7 @@ static void activate(GtkApplication *app,gpointer data) {
     GtkEventController *keys=gtk_event_controller_key_new();
     gtk_event_controller_set_propagation_phase(keys,GTK_PHASE_CAPTURE);
     g_signal_connect(keys,"key-pressed",G_CALLBACK(key),NULL);
+    g_signal_connect(keys,"key-released",G_CALLBACK(released),NULL);
     gtk_widget_add_controller(window,keys);
     GtkGesture *pointer=gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(pointer),0);

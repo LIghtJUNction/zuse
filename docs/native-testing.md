@@ -48,6 +48,19 @@ CARGO_TARGET_DIR=target/native-validation cargo build --locked
 
 The acceptance reports must distinguish shared-desktop tests, isolated graphical fixtures, and cross-target compilation. Passing a compiler check does not establish live desktop compatibility.
 
+### Bounded key holds
+
+Run the protocol and application fixtures from a local checkout.
+
+```sh
+cargo build --locked
+python3 tests/hyprland_hold_fixture.py target/debug/zuse
+cargo test --locked --test key_hold
+cargo test --locked --test key_hold -- --ignored
+```
+
+The Python runner executes Hyprland IPC Lua commands against a private window model and records their edges. It requires Lua 5.3+, lua5.4 or texlua. The opt-in Rust tests start sandboxed headless Chromium on a private blank page and inspect trusted DOM keyboard events. For native Wayland application receipts, run `python3 tests/native_wayland_private.py --headless --state-tests --binary target/debug/zuse` on a host with the private compositor prerequisites. The `bounded_key_hold` check observes F8 press/release timestamps and cancellation in the GTK fixture.
+
 ## Evidence and references
 
 Record the tested binary hash, version, platform/API version, delivered values, screenshot dimensions, failure behavior, and cleanup result. Keep measurement claims separate from inferred causes. A failed fixture observation can indicate a stale test-state record rather than a failed product input operation.

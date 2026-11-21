@@ -16,6 +16,7 @@ use std::{
 use zmcpio::json::{Document, Limits, Token, Value};
 
 mod click_watch;
+mod hold;
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
@@ -782,28 +783,9 @@ impl Browser {
 
     /// Press a key or chord, e.g. `Enter`, `Control+a`, or `Meta+l`.
     pub fn key(&mut self, chord: &str) -> Result<String> {
-        let mut parts = chord.split('+').collect::<Vec<_>>();
-        let key = parts.pop().filter(|v| !v.is_empty()).ok_or("missing key")?;
-        let mut modifiers = 0;
-        for part in parts {
-            modifiers |= match part.to_ascii_lowercase().as_str() {
-                "alt" => 1,
-                "control" | "ctrl" => 2,
-                "meta" | "super" | "cmd" => 4,
-                "shift" => 8,
-                _ => return Err(format!("unknown modifier: {part}")),
-            };
-        }
-        let (code, vk, printable) = key_code(key)?;
-        let text = if printable && modifiers & 7 == 0 {
-            format!(",\"text\":{}", quote(key))
-        } else if key == "Enter" {
-            ",\"text\":\"\\r\"".into()
-        } else {
-            String::new()
-        };
-        self.request("Input.dispatchKeyEvent", &format!(r#"{{"type":"keyDown","key":{},"code":{},"windowsVirtualKeyCode":{vk},"modifiers":{modifiers}{text}}}"#, quote(key), quote(&code)), true)?;
-        self.request("Input.dispatchKeyEvent", &format!(r#"{{"type":"keyUp","key":{},"code":{},"windowsVirtualKeyCode":{vk},"modifiers":{modifiers}}}"#, quote(key), quote(&code)), true)
+        let (down, up) = key_events(chord)?;
+        self.request("Input.dispatchKeyEvent", &down, true)?;
+        self.request("Input.dispatchKeyEvent", &up, true)
     }
 
     /// Save the selected page as a PNG screenshot.
@@ -1195,6 +1177,56 @@ pub(crate) fn quote(text: &str) -> String {
     }
     output.push('"');
     output
+}
+
+pub(crate) fn hold_events(chord: &str) -> Result<(String, String)> {
+    let mut parts = crate::platform::split_chord(chord)?;
+    let key = parts.pop().ok_or("missing key")?;
+    let key = if key.eq_ignore_ascii_case("Space") {
+        " "
+    } else {
+        key
+    };
+    build_key_events(parts, key)
+}
+
+fn key_events(chord: &str) -> Result<(String, String)> {
+    let mut parts = chord.split('+').collect::<Vec<_>>();
+    let key = parts.pop().filter(|v| !v.is_empty()).ok_or("missing key")?;
+    build_key_events(parts, key)
+}
+
+fn build_key_events(parts: Vec<&str>, key: &str) -> Result<(String, String)> {
+    let mut modifiers = 0;
+    for part in parts {
+        modifiers |= match part.to_ascii_lowercase().as_str() {
+            "alt" => 1,
+            "control" | "ctrl" => 2,
+            "meta" | "super" | "cmd" => 4,
+            "shift" => 8,
+            _ => return Err(format!("unknown modifier: {part}")),
+        };
+    }
+    let (code, vk, printable) = key_code(key)?;
+    let text = if printable && modifiers & 7 == 0 {
+        format!(",\"text\":{}", quote(key))
+    } else if key == "Enter" {
+        ",\"text\":\"\\r\"".into()
+    } else {
+        String::new()
+    };
+    Ok((
+        format!(
+            r#"{{"type":"keyDown","key":{},"code":{},"windowsVirtualKeyCode":{vk},"modifiers":{modifiers}{text}}}"#,
+            quote(key),
+            quote(&code)
+        ),
+        format!(
+            r#"{{"type":"keyUp","key":{},"code":{},"windowsVirtualKeyCode":{vk},"modifiers":{modifiers}}}"#,
+            quote(key),
+            quote(&code)
+        ),
+    ))
 }
 
 fn key_code(key: &str) -> Result<(String, u32, bool)> {
