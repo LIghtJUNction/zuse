@@ -75,6 +75,61 @@ The explicit `script` command also preserves the original scoped engine's bounde
 event receipts for compatible wait/capability-only programs, using pure preflight
 of the already expanded source to decide.
 
+## Discover callable functions
+
+Write a description as consecutive `///` lines immediately before a function.
+The loader keeps those lines with the declaration and derives its name, ordered
+parameters and source location from the parsed program.
+
+~~~text
+/// Inspect the timer without starting it.
+fn inspect() {
+    timer.status()
+}
+
+/// Wait for the requested number of milliseconds.
+fn pause(ms) {
+    wait(ms=ms)
+}
+~~~
+
+After importing the module, query its catalog before choosing a function:
+
+~~~text
+import(path="examples/function-library.zuse", as="tools")
+functions(namespace="tools")
+~~~
+
+`functions()` lists every retained function. `namespace="tools"` includes
+`tools.inspect` and nested modules under `tools`, while excluding `tools_extra`.
+The result contains `functions` and `count`. Each entry has `name`, `parameters`,
+`description`, `source`, `line` and `column`, sorted by fully qualified name.
+It does not include function bodies, reopen source files or invoke functions.
+Run the complete read-only example with:
+
+~~~sh
+zuse run examples/function-catalog.zuse --read-only
+~~~
+
+MCP clients use `zuse.functions` with an optional `namespace` after loading
+declarations through `zuse.execute` in the same session. Rust integrations use
+`ModuleSession::function_metadata()` or `Runtime::function_metadata()` for typed
+`FunctionMetadata` values; `Runtime::function_catalog(namespace)` returns the
+same JSON catalog. The existing `functions()` Rust methods still return names.
+
+A blank line or ordinary comment ends a documentation block. Trailing `///`
+comments, text inside strings and block comments are not function descriptions.
+Descriptions are UTF-8, limited to 4096 bytes per function, and count toward the
+session's retained-source budget. Missing documentation produces an empty
+description. The metadata states what the author wrote; it does not infer
+parameter types, grant input permission or establish runtime success.
+
+Changing a retained description follows the same replacement rules as changing
+its function. Failed preflight, dry runs and already cancelled submissions leave
+the existing catalog unchanged. Imported module names follow lexical scope:
+a same-named mouse variable shadows a module only after its declaration and
+within its own block or parallel branch.
+
 ## Structured observation and local waiting
 
 ```text
