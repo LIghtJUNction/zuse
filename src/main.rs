@@ -8,11 +8,14 @@ use zuse::{
     runtime::{self, Options, Runtime},
 };
 
+mod update;
+
 const CLI: Command = Command::new("zuse").args(&[
     Arg::flag("help").short('h'),
     Arg::flag("version").short('V'),
     Arg::flag("read-only"),
     Arg::flag("dry-run"),
+    Arg::flag("check").conflicts("dry-run"),
     Arg::value("max-steps"),
     Arg::value("max-wait-ms"),
     Arg::flag("stdio").conflicts_with(&["host", "port", "socket"]),
@@ -31,6 +34,8 @@ USAGE
   zuse check FILE               Validate every statement without execution
   zuse shell                    Persistent line-oriented interactive shell
   zuse doctor                   Inspect available backends and integrations
+  zuse update                   Update a tracked user Cargo installation
+  zuse update --check           Check the latest stable version without installing
   zuse schema                   Print the supported commands and arguments
   zuse resume REQUEST_ID        Continue after completed human assistance
   zuse human list
@@ -43,6 +48,7 @@ USAGE
 
 OPTIONS
   --dry-run                     Validate and return an execution plan
+  --check                       Only check for an update (zuse update)
   --read-only                   Permit observation commands only
   --max-steps NUMBER             Bound statements per execution
   --max-wait-ms NUMBER           Bound an execution's cumulative wait budget
@@ -249,6 +255,7 @@ fn run() -> Result<i32, String> {
     let mut host = None;
     let mut port = None;
     let mut socket = None;
+    let mut update_check = false;
     while let Some(event) = parser.next().map_err(|e| e.to_string())? {
         match event {
             Event::Flag { arg: "help" } => {
@@ -261,6 +268,7 @@ fn run() -> Result<i32, String> {
             }
             Event::Flag { arg: "read-only" } => options.read_only = true,
             Event::Flag { arg: "dry-run" } => options.dry_run = true,
+            Event::Flag { arg: "check" } => update_check = true,
             Event::Flag { arg: "stdio" } => stdio = true,
             Event::Value {
                 arg: "max-steps",
@@ -302,6 +310,9 @@ fn run() -> Result<i32, String> {
     if command != "mcp" && (stdio || host.is_some() || port.is_some() || socket.is_some()) {
         return Err("transport options are only valid for zuse mcp".into());
     }
+    if command != "update" && update_check {
+        return Err("--check is only valid for zuse update".into());
+    }
     match command {
         "help" => {
             print!("{HELP}");
@@ -332,6 +343,15 @@ fn run() -> Result<i32, String> {
         "doctor" => {
             exactly(&words, 1, "doctor")?;
             output(Runtime::new().capabilities())
+        }
+        "update" => {
+            exactly(&words, 1, "update [--check | --dry-run]")?;
+            if options.read_only && !update_check && !options.dry_run {
+                return Err(
+                    "updates are blocked in read-only mode; use zuse update --check".into(),
+                );
+            }
+            output(update::run(update_check, options.dry_run)?)
         }
         "schema" => {
             exactly(&words, 1, "schema")?;

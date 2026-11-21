@@ -9,7 +9,7 @@ zuse 执行一小段可检查的代码，完成观察窗口、移动鼠标、输
 ## 安装与使用
 
 ~~~sh
-cargo install zuse-computer --locked
+cargo install zuse-computer --version 0.4.1 --locked
 zuse doctor
 zuse schema
 zuse eval 'window.list()'
@@ -18,6 +18,18 @@ zuse shell
 ~~~
 
 Rust 要求 1.100 或更高版本。Cargo 包名为 `zuse-computer`，项目、库导入名和可执行文件都叫 `zuse`。crates.io 的短包名已被其他项目注册。
+
+### 更新命令
+
+~~~sh
+zuse update --check       # 查询最新稳定版，不安装
+zuse update --dry-run     # 返回具体更新命令，不安装
+zuse update              # 更新有 Cargo 所属记录的用户安装
+~~~
+
+更新器通过 `curl` 读取 HTTPS 发行信息，核对当前可执行文件旁的 Cargo 所属记录，然后在原安装目录调用 Cargo。原有 features、profile、target 和用户目录保持；注册表安装固定到已核对的 crates.io 稳定版本，官方 Git 安装使用已确认存在的稳定发行标签。较新的开发版本保留。
+
+AUR 和系统安装继续通过包管理器更新。便携归档、无 Cargo 跟踪记录、自定义注册表及显式固定 Git 分支或 revision 的安装会返回手动更新说明。命令不会自动提权，也不会改用另一个安装目录。stdout 返回 JSON，stderr 显示进度与失败原因；详见[更新行为与验证](docs/update.md)。
 
 下面的普通命令示例明确选择用户的系统鼠标：
 

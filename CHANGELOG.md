@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — 2026-11-21
+
+- Add `zuse update`, `update --check`, and `update --dry-run` with JSON receipts and explicit progress. Preserve the running CLI's tracked Cargo root, source, features, profile, and target.
+- Verify the official stable package or Git release/tag before installation; retain newer development versions and require manual updates for system, portable, untracked, or explicitly pinned installations.
+- Bound metadata requests and installation subprocesses, reuse CLI cancellation and owned-process cleanup, and verify the installed package identity and executable version after Cargo succeeds.
+
 ## 0.4.0 — local programs and input-state iteration
 
 - Align the Git development lock with zmcpio 0.5.0, zcall 0.4.1 and zconv 0.4.1. A separate registry projection must preserve this dependency graph and the complete published source contents.
