@@ -4,6 +4,8 @@
 
 - Align the Git development lock with zmcpio 0.5.0, zcall 0.4.1 and zconv 0.4.1. A separate registry projection must preserve this dependency graph and the complete published source contents.
 
+- Add read-only function catalogs to Runtime/CLI and MCP, with explicit `///` descriptions, ordered parameters, source locations and namespace filtering. Keep the existing Rust name-list methods compatible.
+- Preserve lexical module names across local mouse variables, blocks, sequences, repeats and parallel branches; detect recursive functions even when a later local binding uses the same name.
 - Separate the active Wayland keyboard from other devices; preserve lock state during text entry and add explicit Num Lock read/set/toggle with native readback.
 - Add a click-through, non-focusable Wayland marker for the shared user pointer, including fractional output coordinates and cleanup. Independent pointer devices remain X11-only.
 - Add event-based browser/AT-SPI observation, retained watches, cancellable local waits, monotonic timers and bounded appearance-triggered browser clicks with explicit receipt and cleanup states.
@@ -11,7 +13,7 @@
 - Add transactional local file/source imports, explicit eval, namespaced functions and persistent Runtime/shell reuse. Preserve scoped borrowed mouse ownership and aggregate preflight limits.
 - Include a reusable Zuse skill, declaration-only WeChat helpers, owned browser examples, and isolated Wayland/X11/AT-SPI validation fixtures.
 
-See [local programs](docs/local-programs.md) and [validation](docs/validation-20261121.md).
+See [local programs](docs/local-programs.md) and [validation](docs/validation-20261121.md). Function discovery and lexical-scope checks are recorded in the [additional validation](docs/validation-function-metadata-20261121.md).
 
 ## 0.3.0 — 2026-11-21
 

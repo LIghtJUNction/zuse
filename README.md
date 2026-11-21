@@ -77,6 +77,12 @@ eval(source="fn clock(){timer.status()}", as="tools")
 tools.clock()
 ~~~
 
+Add consecutive `///` descriptions immediately before declarations, then call
+`functions(namespace="local")` to inspect names, ordered parameters, descriptions
+and source locations without invoking functions. MCP exposes the same catalog
+through `zuse.functions`; Rust exposes typed `function_metadata()` values. Run
+`zuse run examples/function-catalog.zuse --read-only` for a complete example.
+
 File imports use `import(path="module.zuse", as="name")`; loading only registers declarations. Explicit `eval` may also execute actions. The whole expanded program shares one preflight, read-only policy and budget. Failed preflight and dry runs do not replace retained definitions. `run`, `script` and `check` resolve file imports relative to the containing source file.
 
 `observe`, `watch` and `wait_until` return structured text and use local DOM or AT-SPI events. Explicit `watch_until_click` binds a tab, origin, container and bounded appearance count. `timer.start/reset/stop/status` expose monotonic command and cumulative timing. Optional `--features vision` adds multi-scale image matching and explicitly rendered visual timelines. See [local programs](docs/local-programs.md), the [bundled Zuse skill](skills/zuse/SKILL.md), and [validation evidence](docs/validation-20261121.md).
@@ -162,6 +168,7 @@ Typical MCP client configuration:
 
 | Tool | Purpose |
 | --- | --- |
+| zuse.functions | Inspect retained function metadata, optionally filtered by module namespace |
 | zuse.script | Run scoped mice, functions, and parallel tracks; close the run's mice before returning |
 | zuse.execute | Validate and run a program |
 | zuse.check | Return a plan without effects |

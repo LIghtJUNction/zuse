@@ -15,7 +15,7 @@ use crate::{
     observation::{Cancellation, Condition, Observer, Query as ObservationQuery},
     platform::Desktop,
     pointer::{MoveOptions, MovePlan},
-    script::{ModuleSession, Prepared, ProgramMode},
+    script::{FunctionMetadata, ModuleSession, Prepared, ProgramMode},
     serial::{self, SerialPort},
     target::{self, LocatedTarget, TargetQuery, TargetWindow, WindowTarget},
     touchpad::{self, Command as TouchpadCommand, Gesture, GestureOptions, GesturePlan},
@@ -61,6 +61,7 @@ struct Spec {
 }
 macro_rules! spec { ($name:literal, $read:literal, [$($arg:literal:$ty:ident:$required:literal),* $(,)?]) => { Spec{name:$name,args:&[$(($arg,$ty,$required)),*],read_only:$read} }; }
 static SPECS: &[Spec] = &[
+    spec!("functions", true, ["namespace":T:false]),
     spec!("timer.start", true, []),
     spec!("timer.reset", true, []),
     spec!("timer.stop", true, []),
@@ -1084,6 +1085,16 @@ impl Runtime {
         self.modules.functions()
     }
 
+    /// Inspect retained callable metadata without executing or reloading modules.
+    pub fn function_metadata(&self) -> Vec<FunctionMetadata> {
+        self.modules.function_metadata()
+    }
+
+    /// The same read-only catalog exposed by functions() and zuse.functions.
+    pub fn function_catalog(&self, namespace: &str) -> String {
+        self.modules.functions_json(namespace)
+    }
+
     pub fn cancellation(&self) -> Cancellation {
         self.cancellation.clone()
     }
@@ -1474,6 +1485,7 @@ impl Runtime {
         let done = || Ok("{\"ok\":true}".into());
         let cancellation = self.cancellation.clone();
         match c.name {
+            "functions" => Ok(self.function_catalog(&text(c, "namespace", "")?)),
             "timer.start" => {
                 self.timer.start();
                 Ok(self.timer.status())

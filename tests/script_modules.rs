@@ -365,3 +365,99 @@ fn syntax_selection_ignores_strings_and_keeps_existing_flat_spellings() {
     assert_eq!(plan.summary.mice, 1);
     assert_eq!(plan.summary.steps, 2);
 }
+
+#[test]
+fn scoped_module_aliases_follow_block_and_declaration_order() {
+    let import = r#"import(source="fn tap(m){m.click()}",as="ops");let pointer=mouse();"#;
+    for (body, steps) in [
+        (
+            "ops.tap(pointer);{let ops=mouse();ops.click();}ops.tap(pointer);",
+            5,
+        ),
+        (
+            "ops.tap(pointer);sequence{let ops=mouse();ops.click();}ops.tap(pointer);",
+            5,
+        ),
+        (
+            "ops.tap(pointer);repeat 1{let ops=mouse();ops.click();}ops.tap(pointer);",
+            5,
+        ),
+        ("ops.tap(pointer);let ops=mouse();ops.click();", 4),
+    ] {
+        let source = format!("{import}{body}");
+        let prepared = ModuleSession::default()
+            .prepare(&source, Options::default())
+            .unwrap();
+        let plan = prepared.compile_scoped(Options::default()).unwrap();
+        assert_eq!(plan.summary.mice, 2, "{body}");
+        assert_eq!(plan.summary.steps, steps, "{body}");
+    }
+}
+
+#[test]
+fn scoped_module_aliases_are_not_shadowed_by_parallel_siblings() {
+    let import = r#"import(source="fn tap(m){m.click()}",as="ops");let pointer=mouse();"#;
+    for branches in [
+        "{let ops=mouse();ops.click();} ops.tap(pointer);",
+        "ops.tap(pointer); {let ops=mouse();ops.click();}",
+        "let ops=mouse(); ops.tap(pointer);",
+    ] {
+        let source = format!("{import}parallel{{{branches}}}");
+        let prepared = ModuleSession::default()
+            .prepare(&source, Options::default())
+            .unwrap();
+        let plan = prepared.compile_scoped(Options::default()).unwrap();
+        assert_eq!(plan.summary.mice, 2, "{branches}");
+        assert_eq!(plan.summary.parallel_groups, 1, "{branches}");
+        assert_eq!(
+            plan.summary.steps,
+            if branches.starts_with("let") { 3 } else { 4 },
+            "{branches}"
+        );
+    }
+}
+
+#[test]
+fn scoped_module_functions_keep_local_and_parameter_shadowing() {
+    let source = r#"
+        import(source="fn tap(m){m.click()}",as="ops");
+        fn invoke(m){
+            ops.tap(m);
+            {let ops=mouse();ops.click();}
+            ops.tap(m);
+        }
+        let pointer=mouse();
+        invoke(pointer);
+    "#;
+    let prepared = ModuleSession::default()
+        .prepare(source, Options::default())
+        .unwrap();
+    let plan = prepared.compile_scoped(Options::default()).unwrap();
+    assert_eq!(plan.summary.mice, 2);
+    assert_eq!(plan.summary.steps, 5);
+
+    let source = r#"
+        import(source="fn click(m){m.down();m.up()}",as="ops");
+        fn invoke(ops){ops.click();}
+        let pointer=mouse();
+        invoke(pointer);
+    "#;
+    let prepared = ModuleSession::default()
+        .prepare(source, Options::default())
+        .unwrap();
+    let plan = prepared.compile_scoped(Options::default()).unwrap();
+    assert_eq!(plan.summary.mice, 1);
+    assert_eq!(plan.summary.steps, 2);
+}
+
+#[test]
+fn module_alias_shadowing_does_not_hide_function_cycles() {
+    let source = r#"
+        import(source="fn b(){a()}",as="ops");
+        fn a(){ops.b();{let ops=mouse();}}
+    "#;
+    let error = ModuleSession::default()
+        .prepare(source, Options::default())
+        .unwrap_err();
+    assert!(error.contains("recursive function cycle"), "{error}");
+}

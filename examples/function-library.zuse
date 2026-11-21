@@ -1,0 +1,9 @@
+/// Inspect the timer without starting it.
+fn inspect() {
+    timer.status()
+}
+
+/// Wait for the requested number of milliseconds.
+fn pause(ms) {
+    wait(ms=ms)
+}

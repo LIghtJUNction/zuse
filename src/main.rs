@@ -58,6 +58,7 @@ Programs use named calls, for example:
 
 Reusable functions can be loaded once in the persistent shell:
   import(path="wechat.zuse", as="wechat")
+  functions(namespace="wechat")
   wechat.read_chat(scope="0/1")
   eval(source="fn pause(ms) { wait(ms=ms) }", as="local")
   local.pause(ms=10)

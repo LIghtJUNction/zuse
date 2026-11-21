@@ -43,6 +43,8 @@ eval(source="fn pause(ms){wait(ms=ms)}", as="local")
 local.pause(ms=10)
 ~~~
 
+在函数前写连续的 `///` 描述，再用 `functions(namespace="wechat")` 查询限定名称、参数顺序、说明和源码位置。查询只读取已登记的元信息，不调用函数、不重新读取文件。MCP 提供同一个 `zuse.functions` 目录，Rust 提供类型化的 `function_metadata()`。可运行 `zuse run examples/function-catalog.zuse --read-only` 查看完整例子。
+
 微信示例只登记读取、准备文本和发送按钮三个函数；调用前必须从实际应用确认窗口、会话和节点，创建函数不会自动发送消息。也可用 `import(source="...", as="模块名")` 导入源码。显式 `eval` 可同时定义函数并执行动作。整段展开结果共用预检查、只读限制和累计预算；预检失败或 dry-run 不提交新定义。文件中的相对导入以该文件目录为基准。
 
 `observe`、`watch`、`wait_until` 默认返回结构化文本，通过局部 DOM 或 AT-SPI 事件等待变化。明确调用 `watch_until_click` 才把出现事件连接到点击，限定原标签页、域名、容器、次数和超时。`timer.start/reset/stop/status` 提供每条命令及累计耗时。可选 `--features vision` 增加多尺度图标匹配与按需渲染的视觉时间切片。完整用法见[本地程序说明](docs/local-programs.md)、[Zuse 技能](skills/zuse/SKILL.md)和[实测记录](docs/validation-20261121.md)。
