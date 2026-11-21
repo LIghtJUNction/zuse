@@ -78,6 +78,7 @@ impl Mock {
                         Err(error) => return Err(error.to_string()),
                     }
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
                 stream.set_write_timeout(Some(Duration::from_secs(1))).unwrap();
                 let request = read_request(&mut stream)?;
