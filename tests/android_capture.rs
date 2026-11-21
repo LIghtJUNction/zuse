@@ -93,6 +93,7 @@ fn capture_server(images: Vec<Vec<u8>>) -> (SocketAddr, thread::JoinHandle<()>) 
                     Err(error) => panic!("fixture accept: {error}"),
                 }
             };
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();

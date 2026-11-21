@@ -337,30 +337,31 @@ impl Mouse {
     }
 
     pub fn close(&mut self) -> Result<(), String> {
-        let Some(mut backend) = self.backend.take() else {
-            return Ok(());
-        };
-        let result = match &mut backend {
-            #[cfg(target_os = "linux")]
-            Backend::X11(native) => {
-                self.held.clear();
-                native.close()
-            }
-            Backend::System(desktop) => {
-                let mut errors = Vec::new();
-                for b in std::mem::take(&mut self.held) {
-                    if let Err(e) = desktop.button(&b, "up") {
-                        errors.push(e);
+        let result = {
+            let Some(mut backend) = self.backend.take() else {
+                return Ok(());
+            };
+            match &mut backend {
+                #[cfg(target_os = "linux")]
+                Backend::X11(native) => {
+                    self.held.clear();
+                    native.close()
+                }
+                Backend::System(desktop) => {
+                    let mut errors = Vec::new();
+                    for b in std::mem::take(&mut self.held) {
+                        if let Err(e) = desktop.button(&b, "up") {
+                            errors.push(e);
+                        }
+                    }
+                    if errors.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(errors.join("; "))
                     }
                 }
-                if errors.is_empty() {
-                    Ok(())
-                } else {
-                    Err(errors.join("; "))
-                }
             }
         };
-        drop(backend);
         self.user_lease.take();
         result
     }
