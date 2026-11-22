@@ -190,6 +190,13 @@ impl Map {
         Ok(locked)
     }
 }
+
+/// Compare actual maps after libxkbcommon's deterministic V1 serialization.
+/// This does not infer a map from its display name or change keyboard state.
+pub(super) fn normalized_keymap(bytes: &[u8]) -> Result<Vec<u8>> {
+    Map::open(bytes)?.canonical_bytes()
+}
+
 impl Drop for Map {
     fn drop(&mut self) {
         // SAFETY: all objects originate from this loaded ABI. Release them
@@ -308,6 +315,36 @@ pub(super) fn ordinary_keycodes(original: &[u8], num_lock: bool) -> Result<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restored_maps_are_compared_by_content_not_layout_display_name() {
+        if Library::open(c"libxkbcommon.so.0").is_err() {
+            return;
+        }
+        let map = |text| {
+            let mut bytes = keymap::Batches::new(text)
+                .next()
+                .unwrap()
+                .keymap
+                .into_bytes();
+            bytes.push(0);
+            bytes
+        };
+        let original = map("zuse");
+        let different = map("safe");
+        // Both maps report the same synthetic "zuse" layout name.
+        assert_ne!(
+            normalized_keymap(&original).unwrap(),
+            normalized_keymap(&different).unwrap()
+        );
+        let mut equivalent = vec![b'\n'];
+        equivalent.extend_from_slice(&original);
+        assert_eq!(
+            normalized_keymap(&original).unwrap(),
+            normalized_keymap(&equivalent).unwrap()
+        );
+        assert!(normalized_keymap(b"invalid").is_err());
+    }
 
     fn num_keymap() -> Vec<u8> {
         let mut bytes = br#"xkb_keymap {
@@ -467,7 +504,7 @@ mod tests {
         let strokes = resolve("!中🙂", &map).unwrap();
         assert_eq!(
             strokes.iter().map(|s| s.code).collect::<Vec<_>>(),
-            vec![10, 11, 12]
+            vec![11, 12, 13]
         );
         assert!(strokes.iter().all(|s| s.modifiers.is_empty()));
         assert!(

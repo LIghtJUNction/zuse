@@ -50,3 +50,32 @@ fn browser_receives_a_real_hold_and_releases_on_cancellation_or_focus_change() {
     assert_eq!(browser.evaluate("events.length===2 && events[0].type==='keydown' && events[1].type==='keyup' && events.every(e=>e.key==='ArrowDown')").unwrap(), "true");
     browser.close().unwrap();
 }
+
+#[test]
+#[ignore = "requires installed sandboxed Chromium; uses an owned profile only"]
+fn browser_receives_overlapping_direction_keys_and_releases_both_on_cancel() {
+    let mut browser = Browser::launch(true).unwrap();
+    browser.navigate(&fixture()).unwrap();
+    browser
+        .evaluate("document.querySelector('#one').focus()")
+        .unwrap();
+    let result = browser
+        .hold_keys("Up,Right", 180, &Cancellation::default())
+        .unwrap();
+    assert!(result.contains(r#""keys":["ArrowUp","ArrowRight"]"#));
+    assert_eq!(browser.evaluate("events.length===4&&events[0].type==='keydown'&&events[0].key==='ArrowUp'&&events[1].type==='keydown'&&events[1].key==='ArrowRight'&&events[2].type==='keyup'&&events[2].key==='ArrowUp'&&events[3].type==='keyup'&&events[3].key==='ArrowRight'&&events.every(e=>e.trusted)&&events[2].time-events[1].time>=140").unwrap(), "true");
+    browser.evaluate("events=[]").unwrap();
+    let token = Cancellation::default();
+    let cancel = token.clone();
+    let worker = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(120));
+        cancel.cancel();
+    });
+    let began = Instant::now();
+    let error = browser.hold_keys("Up,Right", 5000, &token).unwrap_err();
+    worker.join().unwrap();
+    assert!(error.starts_with("cancelled:"), "{error}");
+    assert!(began.elapsed() < Duration::from_secs(1));
+    assert_eq!(browser.evaluate("events.length===4&&events.filter(e=>e.type==='keydown').length===2&&events.filter(e=>e.type==='keyup').length===2&&events.every(e=>e.trusted)").unwrap(), "true");
+    browser.close().unwrap();
+}

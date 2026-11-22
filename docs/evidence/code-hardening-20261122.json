@@ -1,0 +1,295 @@
+{
+  "schema": "zuse.acceptance.code-hardening.v1",
+  "date": "2026-11-22",
+  "status": "selected_final_sandbox_gates_passed_native_gates_pending",
+  "candidate": {
+    "package": "zuse-computer",
+    "version": "0.6.0",
+    "base_commit": "f13412e3c148ecf01c347423caba509d45df9ccc",
+    "source_kind": "uncommitted_working_tree_candidate",
+    "final_source_commit": null,
+    "release": false
+  },
+  "provenance": {
+    "source": "Original local test logs and the main execution session reported exit codes and post-format checks. This documentation step did not rerun product tests or operate a UI.",
+    "source_identity_limit": "The final source commit has not been created. Earlier candidate runs are retained separately and are not asserted to have one identical source digest.",
+    "logs": [
+      {
+        "file": "zuse-build15b-all-targets.log",
+        "bytes": 32905,
+        "sha256": "fe3d32e1a7838d0b0384ed81ecab80287c209ec6cdc3fc35c10945b2e706a6f0"
+      },
+      {
+        "file": "zuse-build15b-integration.log",
+        "bytes": 10596,
+        "sha256": "d23e1204ed0dafceb88579960a32feb2834c7f40e73f939c923683c32045b3c2"
+      },
+      {
+        "file": "zuse-final-sandbox-lib.log",
+        "bytes": 27329,
+        "sha256": "5f2307a307f8442413554b55bd57c492ac17301d4e056b0b2c1ea6c1e1e4b5bc"
+      },
+      {
+        "file": "zuse-final-sandbox-integration.log",
+        "bytes": 41973,
+        "sha256": "70017f4ea80e362c83e514cd91a260a3ed285155110d18c3a97cdc511e33073e"
+      },
+      {
+        "file": "zuse-final-sandbox-doc.log",
+        "bytes": 204,
+        "sha256": "0f6fd4bb7e8b34339dafad3129e80ee958d72bb58e007e3abf9f9adc763a359f"
+      },
+      {
+        "file": "zuse-clippy-final4.log",
+        "bytes": 146,
+        "sha256": "86f84e6bb58fc7f52b38dead5b11b6f4bbda61277454e8d9c7bf2ff87c526bee"
+      }
+    ]
+  },
+  "initial_all_targets_gate": {
+    "label": "Build 15b all-targets attempt",
+    "compilation": "succeeded",
+    "compilation_seconds": 53.46,
+    "exit_code": 101,
+    "status": "failed_in_unix_socket_fixture_setup",
+    "lib": {
+      "passed": 261,
+      "failed": 9,
+      "ignored": 8,
+      "filtered_out": 0,
+      "duration_seconds": 2.94
+    },
+    "failure_evidence": {
+      "operation": "UnixListener::bind in fixture setup",
+      "os_code": 1,
+      "kind": "PermissionDenied",
+      "message": "Operation not permitted",
+      "evidence_kind": "direct_error_in_log_with_fixture_source_confirmation",
+      "tests": [
+        "clipboard::wayland::tests::missing_protocol_and_nontext_selection_do_not_become_empty_text",
+        "clipboard::wayland::tests::utf8_source_is_served_after_write_returns_until_owner_is_dropped",
+        "platform::linux::wayland::capture::tests::native_connection_reports_missing_protocol_without_fallback",
+        "platform::linux::wayland::capture::tests::native_connection_wait_has_a_total_deadline",
+        "platform::linux::wayland::capture::tests::native_connection_wait_observes_runtime_cancellation",
+        "platform::linux::wayland::pointer::tests::frames_preserve_coordinates_and_reuse_one_virtual_pointer",
+        "platform::linux::wayland::pointer::tests::missing_virtual_pointer_protocol_fails_before_input",
+        "platform::linux::wayland::pointer::tests::unacknowledged_frame_times_out_without_replay",
+        "platform::linux::wayland::state_tests::keyboard_inspection_rejects_held_or_unreported_keys_before_input"
+      ]
+    },
+    "log": "zuse-build15b-all-targets.log"
+  },
+  "final_sandbox_gates": {
+    "status": "passed_with_explicit_exclusions",
+    "reported_sequence_exit_code": 0,
+    "lib": {
+      "passed": 261,
+      "failed": 0,
+      "ignored": 8,
+      "filtered_out": 9,
+      "duration_seconds": 18.32,
+      "filtered_tests": [
+        "clipboard::wayland::tests::missing_protocol_and_nontext_selection_do_not_become_empty_text",
+        "clipboard::wayland::tests::utf8_source_is_served_after_write_returns_until_owner_is_dropped",
+        "platform::linux::wayland::capture::tests::native_connection_reports_missing_protocol_without_fallback",
+        "platform::linux::wayland::capture::tests::native_connection_wait_has_a_total_deadline",
+        "platform::linux::wayland::capture::tests::native_connection_wait_observes_runtime_cancellation",
+        "platform::linux::wayland::pointer::tests::frames_preserve_coordinates_and_reuse_one_virtual_pointer",
+        "platform::linux::wayland::pointer::tests::missing_virtual_pointer_protocol_fails_before_input",
+        "platform::linux::wayland::pointer::tests::unacknowledged_frame_times_out_without_replay",
+        "platform::linux::wayland::state_tests::keyboard_inspection_rejects_held_or_unreported_keys_before_input"
+      ],
+      "filtered_reason": "The nine previously recorded UnixListener::bind EPERM cases are deferred to a host that permits their Unix socket fixtures; filtering does not validate them.",
+      "log": "zuse-final-sandbox-lib.log"
+    },
+    "integrations": {
+      "target_count": 59,
+      "passed": 300,
+      "failed": 0,
+      "ignored": 27,
+      "filtered_out": 0,
+      "targets": [
+        "accessibility_controls",
+        "accessibility_guard_native",
+        "accessibility_native",
+        "accessibility_reveal_native",
+        "accessibility_semantics",
+        "accessibility_semantics_native",
+        "accessibility_windows",
+        "android_capture",
+        "android_review",
+        "browser_activation",
+        "browser_background",
+        "browser_canvas",
+        "browser_capture",
+        "browser_click_watch",
+        "browser_control_keys",
+        "browser_hold_keys",
+        "browser_hold_until",
+        "browser_native",
+        "browser_pointer",
+        "browser_selection_native",
+        "chatgpt_desktop_module",
+        "cli_code",
+        "clipboard",
+        "core",
+        "cursor",
+        "drawing",
+        "function_metadata",
+        "functional_motion",
+        "key_hold",
+        "key_hold_browser",
+        "move_to",
+        "native_wayland_capture",
+        "observation",
+        "observation_native",
+        "package_imports",
+        "packages",
+        "pointer",
+        "process_launch",
+        "runtime",
+        "runtime_cancellation",
+        "runtime_mice",
+        "runtime_modules",
+        "runtime_review",
+        "scalar_programs",
+        "script_compile",
+        "script_entrypoints",
+        "script_modules",
+        "script_syntax",
+        "shell_idle",
+        "shell_signals",
+        "target",
+        "target_window",
+        "timing",
+        "touchpad_entrypoints",
+        "vision",
+        "vision_runtime_native",
+        "visual_timeline",
+        "window_capture",
+        "x11_utf8_native"
+      ],
+      "ignored_by_target": {
+        "accessibility_guard_native": 2,
+        "accessibility_native": 1,
+        "accessibility_reveal_native": 2,
+        "accessibility_semantics_native": 1,
+        "browser_canvas": 4,
+        "browser_capture": 1,
+        "browser_click_watch": 4,
+        "browser_native": 1,
+        "browser_pointer": 1,
+        "browser_selection_native": 1,
+        "key_hold_browser": 2,
+        "observation": 2,
+        "observation_native": 1,
+        "process_launch": 1,
+        "vision_runtime_native": 2,
+        "x11_utf8_native": 1
+      },
+      "omitted_target": {
+        "target": "sessions",
+        "file": "tests/sessions.rs",
+        "test_count": 11,
+        "reason": "Unix socket session tests are deferred to the development host; the entire target was not run."
+      },
+      "log": "zuse-final-sandbox-integration.log"
+    },
+    "doc_tests": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "status": "command_succeeded_no_tests_present",
+      "log": "zuse-final-sandbox-doc.log"
+    },
+    "aggregate": {
+      "passed": 561,
+      "failed": 0,
+      "ignored": 35,
+      "filtered_lib_tests": 9,
+      "unrun_session_tests": 11,
+      "counting_rule": "261 library passes plus 300 integration passes are disjoint. Ignored, filtered and unrun tests are excluded. Earlier subset runs are not added again."
+    },
+    "all_targets_passed": false
+  },
+  "earlier_selected_integration_gate": {
+    "label": "Build 15b selected integration subset",
+    "target_count": 18,
+    "passed": 64,
+    "failed": 0,
+    "ignored": 7,
+    "exit_code": 0,
+    "counted_in_final_aggregate": false,
+    "log": "zuse-build15b-integration.log"
+  },
+  "final_static_checks": {
+    "format_check": {
+      "configuration": "cargo fmt --check",
+      "status": "passed",
+      "provenance": "main execution session reported final rerun"
+    },
+    "no_std_check": {
+      "status": "passed",
+      "provenance": "main execution session reported final rerun"
+    },
+    "cli_build": {
+      "status": "passed",
+      "provenance": "main execution session reported post-format build"
+    },
+    "clippy": {
+      "version": "1.100",
+      "configuration": "--all-targets -- -D warnings",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_seconds": 10.76,
+      "log": "zuse-clippy-final4.log"
+    },
+    "declaration_examples": {
+      "status": "passed_offline_check",
+      "checks": [
+        {
+          "file": "examples/browser-visible-controls.zuse",
+          "valid": true,
+          "steps": 0
+        },
+        {
+          "file": "examples/desktop-semantic-controls.zuse",
+          "valid": true,
+          "steps": 0
+        }
+      ],
+      "functions_invoked": false,
+      "real_ui_executed": false,
+      "provenance": "main execution session reported zuse check results; declaration-only checks do not validate executing the function bodies against a live application."
+    }
+  },
+  "included_regressions": {
+    "at_spi_abi_mock_tests": 8,
+    "prepared_dispatch_and_cancellation_tests": 2,
+    "counted_within_lib_passes": true,
+    "scope": "Same retained target rechecks after permission, action-index consistency, cancellation/deadline boundaries, no input replay and native-call diagnostics. Mock tests are not real desktop acceptance."
+  },
+  "pending_validation": [
+    "Nine Unix socket library fixtures on a permitted host",
+    "The eleven tests in the omitted sessions integration target",
+    "Ignored native tests that were not explicitly run in a separately linked historical receipt",
+    "Native JPEG capture gate for the current candidate",
+    "Native browser.activate gate for the current candidate",
+    "Final source commit identity and any later immutable artifact validation"
+  ],
+  "acceptance_limits": {
+    "new_ui_actions_executed_for_these_gates": false,
+    "game_pure_zuse_levels_passed": 10,
+    "game_last_observed_level": 11,
+    "game_fully_completed": false,
+    "quick_completion_proven": false,
+    "chatgpt_archives_confirmed": 0,
+    "full_desktop_acceptance": false
+  },
+  "redaction": {
+    "private_absolute_paths_omitted": true,
+    "connection_and_job_ids_omitted": true,
+    "raw_logs_not_copied_into_repository": true,
+    "note": "Log filenames are evidence labels, not public download links. SHA-256 values refer to the original unredacted files; test counts, test names, versions and error meaning are preserved."
+  }
+}

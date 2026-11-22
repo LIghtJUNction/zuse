@@ -1,0 +1,660 @@
+{
+  "schema": "zuse.acceptance.consumer-propagation.v1",
+  "date": "2026-11-22",
+  "status": "prepared_partial_compatibility_tested_not_propagated",
+  "scope": "Preparation snapshot for the current uncommitted Zuse acceptance candidate, with one temporary ztype compatibility fixture recorded separately. Existing pins and historical validations remain observations; no formal candidate propagation has occurred.",
+  "implementation_owner": "/root",
+  "commitments": {
+    "external_maintainer_commitments_recorded": false,
+    "note": "Planned follow-up work is assigned only to /root in this session; no other maintainer promise is asserted."
+  },
+  "provenance": {
+    "source": "Previously verified inventory.json and fixed catalog/source snapshots, supplemented by the linked ztype compatibility receipt. This documentation update performed no new network or consumer execution.",
+    "inventory_schema": "zuse.release_inventory.v1",
+    "inventory_observed_at_utc": "2026-11-22T12:35:45Z",
+    "inventory_sha256": "d17f132200d0e4ba25ccdd214068a073a68158277fccd8187bba5ff3e4f54662",
+    "main_refs_rechecked_by_inventory": [
+      "project-z",
+      "zuse"
+    ],
+    "compatibility_receipts": [
+      "ztype-compatibility-20261122.json"
+    ]
+  },
+  "candidate": {
+    "package": "zuse-computer",
+    "observed_base_version": "0.6.0",
+    "observed_base_commit": "f13412e3c148ecf01c347423caba509d45df9ccc",
+    "final_tested_commit": null,
+    "release_version": null,
+    "released_artifact": null
+  },
+  "current_blocker": {
+    "codes": [
+      "candidate_has_no_final_tested_commit",
+      "candidate_artifact_not_released"
+    ],
+    "description": "The current candidate has not yet become a final tested commit and no candidate artifact has been released. ztype has partial desktop-only compatibility evidence for a temporary local path snapshot; its complete gate remains environment-blocked. Formal propagation and final immutable-candidate validation remain pending."
+  },
+  "totals": {
+    "consumer_repositories": 6,
+    "consumers_propagated": 0,
+    "consumers_tested": 1,
+    "project_z_catalog_propagated": false,
+    "project_z_catalog_tested": false,
+    "consumers_validation_complete": 0
+  },
+  "observed_heads": {
+    "zuse": "f13412e3c148ecf01c347423caba509d45df9ccc",
+    "project-z": "68badf28bf344ccf2a2a564059e0ed8f38cdf8ee",
+    "ztype": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80",
+    "ssmcp": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0",
+    "zrc": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+    "oh-my-ztty": "2eb8340987a96fd8ecacc81a8e83742c86716525",
+    "zuse-std": "d79f43f8f3c2a1bff05962420f014b6c16403c5c",
+    "zuse-skills": "201a7508d3ed2928295ebaf0853ea4528212b980"
+  },
+  "consumers": [
+    {
+      "name": "ztype",
+      "observed_head": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80",
+      "observed_versions": [
+        {
+          "name": "ztype",
+          "version": "0.4.2"
+        }
+      ],
+      "relationship": "direct Cargo dependency",
+      "observed_binding": {
+        "kind": "Cargo Git dependency",
+        "source": "git+https://github.com/LIghtJUNction/zuse.git#f13412e3c148ecf01c347423caba509d45df9ccc",
+        "zuse_version": "0.6.0",
+        "manifest_pin": "unversioned canonical Git URL; immutable pin is in Cargo.lock"
+      },
+      "implementation_owner": "/root",
+      "propagation": {
+        "status": "not_started",
+        "propagated": false,
+        "resulting_commit": null
+      },
+      "validation": {
+        "status": "partial_compatibility_tested_environment_blocked",
+        "tested": true,
+        "validation_complete": false,
+        "configuration": "desktop-only temporary local path fixture",
+        "candidate_commit": null,
+        "candidate_source_manifest_sha256": "d5ce5903b3382c9472e44e36e2baba863f78d48b04073c7fd7008b4f5e97562e",
+        "passed": 65,
+        "failed": 3,
+        "ignored": 1,
+        "all_targets_gate_exit_code": 101,
+        "receipts": [
+          "ztype-compatibility-20261122.json"
+        ]
+      },
+      "planned_next_step": "Resolve or rerun the three blocked service tests on a permitted host, then validate against the final immutable Zuse commit and update the Cargo lock only when an actual propagation is performed.",
+      "source_refs": [
+        "ztype:Cargo.lock",
+        "ztype:Cargo.toml"
+      ]
+    },
+    {
+      "name": "ssmcp",
+      "observed_head": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0",
+      "observed_versions": [
+        {
+          "name": "ssmcp",
+          "version": "0.10.27"
+        }
+      ],
+      "relationship": "direct standalone runtime integration",
+      "observed_binding": {
+        "kind": "standalone CLI release integration",
+        "zuse_static_source_pin": null,
+        "release_selection": "explicit stable version or latest official release; downloaded release receipt retains release_id, asset_id, sha256, size and version"
+      },
+      "implementation_owner": "/root",
+      "propagation": {
+        "status": "not_started",
+        "propagated": false,
+        "resulting_commit": null
+      },
+      "validation": {
+        "status": "not_started",
+        "tested": false,
+        "candidate_commit": null,
+        "receipts": []
+      },
+      "planned_next_step": "Validate standalone CLI selection, startup and release-receipt verification against the finalized candidate artifact; do not invent a Zuse Cargo pin.",
+      "source_refs": [
+        "ssmcp:Cargo.toml",
+        "ssmcp:src/computer/release.rs",
+        "ssmcp:src/computer.rs"
+      ]
+    },
+    {
+      "name": "zrc",
+      "observed_head": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+      "observed_versions": [
+        {
+          "name": "zrc",
+          "version": "0.1.2"
+        }
+      ],
+      "relationship": "transitive runtime/configuration via ssmcp",
+      "observed_binding": {
+        "kind": "runtime/configuration through ssmcp",
+        "static_ssmcp_or_zuse_source_pin": null
+      },
+      "implementation_owner": "/root",
+      "propagation": {
+        "status": "not_started",
+        "propagated": false,
+        "resulting_commit": null
+      },
+      "validation": {
+        "status": "not_started",
+        "tested": false,
+        "candidate_commit": null,
+        "receipts": []
+      },
+      "planned_next_step": "Check the ssmcp-facing runtime/configuration path against the finalized standalone candidate; record whether any source change is needed.",
+      "source_refs": [
+        "zrc:Cargo.toml",
+        "zrc:VERSION",
+        "zrc:registry.json"
+      ]
+    },
+    {
+      "name": "oh-my-ztty",
+      "observed_head": "2eb8340987a96fd8ecacc81a8e83742c86716525",
+      "observed_versions": [],
+      "relationship": "transitive suite via ssmcp and zrc",
+      "observed_binding": {
+        "kind": "suite component lock",
+        "version": "0.2.13",
+        "components": {
+          "ssmcp": {
+            "repository": "https://github.com/LIghtJUNction/ssmcp.git",
+            "branch": "main",
+            "commit": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0",
+            "observed_at": "2026-11-22T10:51:52+00:00"
+          },
+          "zrc": {
+            "repository": "https://github.com/LIghtJUNction/zrc.git",
+            "branch": "main",
+            "commit": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+            "observed_at": "2026-11-21T21:22:07+00:00"
+          }
+        }
+      },
+      "implementation_owner": "/root",
+      "propagation": {
+        "status": "not_started",
+        "propagated": false,
+        "resulting_commit": null
+      },
+      "validation": {
+        "status": "not_started",
+        "tested": false,
+        "candidate_commit": null,
+        "receipts": []
+      },
+      "planned_next_step": "Validate the suite integration and record its ssmcp/zrc component locks; update only confirmed changed component commits.",
+      "source_refs": [
+        "oh-my-ztty:VERSION",
+        "oh-my-ztty:dependencies.lock.json"
+      ]
+    },
+    {
+      "name": "zuse-std",
+      "observed_head": "d79f43f8f3c2a1bff05962420f014b6c16403c5c",
+      "observed_versions": [],
+      "relationship": "direct source package",
+      "observed_binding": {
+        "kind": "Zuse source package",
+        "version": "0.1.0",
+        "minimum_zuse_version": "0.6.0",
+        "zuse_static_source_pin": null
+      },
+      "implementation_owner": "/root",
+      "propagation": {
+        "status": "not_started",
+        "propagated": false,
+        "resulting_commit": null
+      },
+      "validation": {
+        "status": "not_started",
+        "tested": false,
+        "candidate_commit": null,
+        "receipts": []
+      },
+      "planned_next_step": "Check package imports and existing examples against the finalized Zuse candidate, then record compatibility and any required metadata change.",
+      "source_refs": [
+        "zuse-std:README.md",
+        "zuse-std:zuse.json"
+      ]
+    },
+    {
+      "name": "zuse-skills",
+      "observed_head": "201a7508d3ed2928295ebaf0853ea4528212b980",
+      "observed_versions": [],
+      "relationship": "direct source modules",
+      "observed_binding": {
+        "kind": "Zuse source modules",
+        "minimum_zuse_version": "0.5 or equivalent guard interfaces",
+        "zuse_static_source_pin": null,
+        "historical_published_validation": {
+          "runtime_version": "0.5.0",
+          "source_commit": "b5ebbd3679af215706cbd73b17045e014f5e0524"
+        }
+      },
+      "implementation_owner": "/root",
+      "propagation": {
+        "status": "not_started",
+        "propagated": false,
+        "resulting_commit": null
+      },
+      "validation": {
+        "status": "not_started",
+        "tested": false,
+        "candidate_commit": null,
+        "receipts": []
+      },
+      "planned_next_step": "Check source-module imports and guarded interfaces against the finalized Zuse candidate; keep historical 0.5.0 validation separate.",
+      "source_refs": [
+        "zuse-skills:README.md",
+        "zuse-skills:catalog.json",
+        "zuse-skills:docs/validation-zuse-0.5.0.json"
+      ]
+    }
+  ],
+  "project_z": {
+    "observed_head": "68badf28bf344ccf2a2a564059e0ed8f38cdf8ee",
+    "observed_repository_count": 47,
+    "observed_package_count": 73,
+    "implementation_owner": "/root",
+    "propagated": false,
+    "tested": false,
+    "catalog_regenerated": false,
+    "resulting_commit": null,
+    "validation_receipts": [],
+    "planned_next_step": "After actual consumer outcomes and the final Zuse identity are available, regenerate/check the Project Z catalog and record resulting source commits and validation.",
+    "source_refs": [
+      "project-z:project-z.toml",
+      "project-z:catalog.json"
+    ]
+  },
+  "graph": {
+    "direction": "consumer or catalog -> dependency or catalog member",
+    "nodes": [
+      {
+        "name": "zuse",
+        "role": "candidate runtime",
+        "observed_head": "f13412e3c148ecf01c347423caba509d45df9ccc"
+      },
+      {
+        "name": "project-z",
+        "role": "catalog aggregator",
+        "observed_head": "68badf28bf344ccf2a2a564059e0ed8f38cdf8ee"
+      },
+      {
+        "name": "ztype",
+        "role": "consumer",
+        "observed_head": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80"
+      },
+      {
+        "name": "ssmcp",
+        "role": "consumer",
+        "observed_head": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0"
+      },
+      {
+        "name": "zrc",
+        "role": "consumer",
+        "observed_head": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705"
+      },
+      {
+        "name": "oh-my-ztty",
+        "role": "consumer",
+        "observed_head": "2eb8340987a96fd8ecacc81a8e83742c86716525"
+      },
+      {
+        "name": "zuse-std",
+        "role": "consumer",
+        "observed_head": "d79f43f8f3c2a1bff05962420f014b6c16403c5c"
+      },
+      {
+        "name": "zuse-skills",
+        "role": "consumer",
+        "observed_head": "201a7508d3ed2928295ebaf0853ea4528212b980"
+      }
+    ],
+    "edges": [
+      {
+        "from": "ztype",
+        "to": "zuse",
+        "kind": "Cargo Git dependency",
+        "observed_dependency_commit": "f13412e3c148ecf01c347423caba509d45df9ccc",
+        "source_refs": [
+          "ztype:Cargo.toml",
+          "ztype:Cargo.lock"
+        ]
+      },
+      {
+        "from": "ssmcp",
+        "to": "zuse",
+        "kind": "standalone CLI release integration",
+        "static_source_pin": null,
+        "source_refs": [
+          "ssmcp:src/computer.rs",
+          "ssmcp:src/computer/release.rs"
+        ]
+      },
+      {
+        "from": "zrc",
+        "to": "ssmcp",
+        "kind": "runtime/configuration integration",
+        "static_source_pin": null,
+        "source_refs": [
+          "zrc:registry.json",
+          "zrc:Cargo.toml"
+        ]
+      },
+      {
+        "from": "oh-my-ztty",
+        "to": "ssmcp",
+        "kind": "suite component lock",
+        "observed_dependency_commit": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0",
+        "source_refs": [
+          "oh-my-ztty:dependencies.lock.json"
+        ]
+      },
+      {
+        "from": "oh-my-ztty",
+        "to": "zrc",
+        "kind": "suite component lock",
+        "observed_dependency_commit": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+        "source_refs": [
+          "oh-my-ztty:dependencies.lock.json"
+        ]
+      },
+      {
+        "from": "zuse-std",
+        "to": "zuse",
+        "kind": "source-package runtime requirement",
+        "minimum_version": "0.6.0",
+        "static_source_pin": null,
+        "source_refs": [
+          "zuse-std:zuse.json",
+          "zuse-std:README.md"
+        ]
+      },
+      {
+        "from": "zuse-skills",
+        "to": "zuse",
+        "kind": "source-module runtime interfaces",
+        "minimum_version": "0.5 or equivalent guard interfaces",
+        "static_source_pin": null,
+        "source_refs": [
+          "zuse-skills:README.md",
+          "zuse-skills:catalog.json"
+        ]
+      },
+      {
+        "from": "project-z",
+        "to": "zuse",
+        "kind": "catalog aggregation",
+        "observed_catalog_commit": "f13412e3c148ecf01c347423caba509d45df9ccc",
+        "source_refs": [
+          "project-z:catalog.json"
+        ]
+      },
+      {
+        "from": "project-z",
+        "to": "ztype",
+        "kind": "catalog aggregation",
+        "observed_catalog_commit": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80",
+        "source_refs": [
+          "project-z:catalog.json"
+        ]
+      },
+      {
+        "from": "project-z",
+        "to": "ssmcp",
+        "kind": "catalog aggregation",
+        "observed_catalog_commit": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0",
+        "source_refs": [
+          "project-z:catalog.json"
+        ]
+      },
+      {
+        "from": "project-z",
+        "to": "zrc",
+        "kind": "catalog aggregation",
+        "observed_catalog_commit": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+        "source_refs": [
+          "project-z:catalog.json"
+        ]
+      },
+      {
+        "from": "project-z",
+        "to": "oh-my-ztty",
+        "kind": "catalog aggregation",
+        "observed_catalog_commit": "2eb8340987a96fd8ecacc81a8e83742c86716525",
+        "source_refs": [
+          "project-z:catalog.json"
+        ]
+      },
+      {
+        "from": "project-z",
+        "to": "zuse-std",
+        "kind": "catalog aggregation",
+        "observed_catalog_commit": "d79f43f8f3c2a1bff05962420f014b6c16403c5c",
+        "source_refs": [
+          "project-z:catalog.json"
+        ]
+      },
+      {
+        "from": "project-z",
+        "to": "zuse-skills",
+        "kind": "catalog aggregation",
+        "observed_catalog_commit": "201a7508d3ed2928295ebaf0853ea4528212b980",
+        "source_refs": [
+          "project-z:catalog.json"
+        ]
+      }
+    ],
+    "catalog_edges_are_runtime_dependencies": false
+  },
+  "additional_repositories_not_counted_as_consumers": [
+    {
+      "name": "zchat",
+      "observed_head": "8da8def04b0529a6f9a03709be8e043f043ea57b",
+      "version": "0.1.4",
+      "in_catalog": false,
+      "inventory_finding": "No Zuse dependency in fixed complete source snapshot; no zuse-computer, zuse, ztype, zrc or oh-my-ztty references. ssmcp occurs only in an ignore rule.",
+      "candidate_propagation_performed": false,
+      "candidate_tests_run": false
+    },
+    {
+      "name": "zobs",
+      "observed_head": "6bddc40f46cc8eb97d9f5219ef3654adb06486bb",
+      "version": "0.1.0",
+      "in_catalog": false,
+      "inventory_finding": "No Zuse or existing consumer dependency found in fixed complete source snapshot or Cargo manifests/lock.",
+      "candidate_propagation_performed": false,
+      "candidate_tests_run": false
+    }
+  ],
+  "sources": [
+    {
+      "id": "project-z:project-z.toml",
+      "repository": "project-z",
+      "commit": "68badf28bf344ccf2a2a564059e0ed8f38cdf8ee",
+      "path": "project-z.toml",
+      "url": "https://github.com/LIghtJUNction/project-z/blob/68badf28bf344ccf2a2a564059e0ed8f38cdf8ee/project-z.toml",
+      "sha256": "c265dd6d315848801a18e896eb85212af1ba2dd9e20d67089ae55041527e5731",
+      "git_blob_sha": "c7c2c34e8395657a83683014b7c3d7c837555e6b"
+    },
+    {
+      "id": "project-z:catalog.json",
+      "repository": "project-z",
+      "commit": "68badf28bf344ccf2a2a564059e0ed8f38cdf8ee",
+      "path": "catalog.json",
+      "url": "https://github.com/LIghtJUNction/project-z/blob/68badf28bf344ccf2a2a564059e0ed8f38cdf8ee/catalog.json",
+      "sha256": "ecd94bd4c1a3e4862639c76bfe2e6b154fea4c00745cb0a692c8d259283b482f",
+      "git_blob_sha": "c8388ff7210b45f05abb98faf64f1d1ecf507256"
+    },
+    {
+      "id": "oh-my-ztty:VERSION",
+      "repository": "oh-my-ztty",
+      "commit": "2eb8340987a96fd8ecacc81a8e83742c86716525",
+      "path": "VERSION",
+      "url": "https://github.com/LIghtJUNction/oh-my-ztty/blob/2eb8340987a96fd8ecacc81a8e83742c86716525/VERSION",
+      "sha256": "a2360447b0685602375f211322ff397b0eb8be1d291f4c95173fccb189d19175",
+      "git_blob_sha": "27792457cb5073fab2fc78d02c0052e0c4e43844"
+    },
+    {
+      "id": "oh-my-ztty:dependencies.lock.json",
+      "repository": "oh-my-ztty",
+      "commit": "2eb8340987a96fd8ecacc81a8e83742c86716525",
+      "path": "dependencies.lock.json",
+      "url": "https://github.com/LIghtJUNction/oh-my-ztty/blob/2eb8340987a96fd8ecacc81a8e83742c86716525/dependencies.lock.json",
+      "sha256": "5afe2ff2c9562f3853b542cd960d6945d751f74e0d92225415e72ba263e5c667",
+      "git_blob_sha": "07f01d50bc8675db6d65921e0fdff650904d4c1e"
+    },
+    {
+      "id": "ssmcp:Cargo.toml",
+      "repository": "ssmcp",
+      "commit": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0",
+      "path": "Cargo.toml",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/87c4a17faf0dd2c140cb707ec59b1f05725f06f0/Cargo.toml",
+      "sha256": "3904f240c218e3210ee61862fa81afed1f5f73bad9d8ba581a0b680380e3d69c",
+      "git_blob_sha": "7beca66688ca405d6d6f88c4e88de9f3c23b163b"
+    },
+    {
+      "id": "ssmcp:src/computer/release.rs",
+      "repository": "ssmcp",
+      "commit": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0",
+      "path": "src/computer/release.rs",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/87c4a17faf0dd2c140cb707ec59b1f05725f06f0/src/computer/release.rs",
+      "sha256": "5eb063cec5ab132c76c1a08949c0294c14e0de9549745fb215bfa4ff32070f87",
+      "git_blob_sha": "14937781f19e5d926fa825df2164a42a9e3e17be"
+    },
+    {
+      "id": "ssmcp:src/computer.rs",
+      "repository": "ssmcp",
+      "commit": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0",
+      "path": "src/computer.rs",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/87c4a17faf0dd2c140cb707ec59b1f05725f06f0/src/computer.rs",
+      "sha256": "506541d76f8631e100f5b843e6e6bd1c0cc511561abf6026b2941d8d3c4a1111",
+      "git_blob_sha": "ac79e5858af8b2ac116657db4701327dcd01c500"
+    },
+    {
+      "id": "zrc:Cargo.toml",
+      "repository": "zrc",
+      "commit": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+      "path": "Cargo.toml",
+      "url": "https://github.com/LIghtJUNction/zrc/blob/31f37e9bb8f5c5adcf195f68692c47ec7ea26705/Cargo.toml",
+      "sha256": "688c312499b11b89ad8919290b0d0aba206886ccc70ab3d396837bfface647aa",
+      "git_blob_sha": "be0154ff5dea4fa738cb8f1fe68dd7d025acc88f"
+    },
+    {
+      "id": "zrc:VERSION",
+      "repository": "zrc",
+      "commit": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+      "path": "VERSION",
+      "url": "https://github.com/LIghtJUNction/zrc/blob/31f37e9bb8f5c5adcf195f68692c47ec7ea26705/VERSION",
+      "sha256": "297b50f08386d3521f8fdaf2f78eb8d9d0acdf452d2e61596905fba37208c792",
+      "git_blob_sha": "d917d3e26adc9854b4569871e20111c38de2606f"
+    },
+    {
+      "id": "zrc:registry.json",
+      "repository": "zrc",
+      "commit": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+      "path": "registry.json",
+      "url": "https://github.com/LIghtJUNction/zrc/blob/31f37e9bb8f5c5adcf195f68692c47ec7ea26705/registry.json",
+      "sha256": "f8e0f5ff7dbb186d542a25de85c13a3f916f74aa5055e8d1d80bef7a7fbd0182",
+      "git_blob_sha": "eb3f1830208e20186cb04b846140807f61ef8cbf"
+    },
+    {
+      "id": "ztype:Cargo.lock",
+      "repository": "ztype",
+      "commit": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80",
+      "path": "Cargo.lock",
+      "url": "https://github.com/LIghtJUNction/ztype/blob/5d245e5b0633b5ce0f9479fec9741fb23b7b5b80/Cargo.lock",
+      "sha256": "ce85b32f99c9066780c1298f775e9c14d6218f886e9e7744355053ad5b008995",
+      "git_blob_sha": "d4ae7bdd7b801654ed7786b2434152bc5f92ecb4"
+    },
+    {
+      "id": "ztype:Cargo.toml",
+      "repository": "ztype",
+      "commit": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80",
+      "path": "Cargo.toml",
+      "url": "https://github.com/LIghtJUNction/ztype/blob/5d245e5b0633b5ce0f9479fec9741fb23b7b5b80/Cargo.toml",
+      "sha256": "97293ab1431b4c13b9876ae4d320b8d6e9342a4b4b57df083a08836a16a2c860",
+      "git_blob_sha": "8e74edfb294b6b978936e405350b115ee165ffe9"
+    },
+    {
+      "id": "zuse:Cargo.toml",
+      "repository": "zuse",
+      "commit": "f13412e3c148ecf01c347423caba509d45df9ccc",
+      "path": "Cargo.toml",
+      "url": "https://github.com/LIghtJUNction/zuse/blob/f13412e3c148ecf01c347423caba509d45df9ccc/Cargo.toml",
+      "sha256": "d965066cfc08c23b19eafb18066666f5900bcd7075f81f9d6cabb658422e5e69",
+      "git_blob_sha": "6f8412b803a3decac113fa03290aa5d1804635c1"
+    },
+    {
+      "id": "zuse-skills:README.md",
+      "repository": "zuse-skills",
+      "commit": "201a7508d3ed2928295ebaf0853ea4528212b980",
+      "path": "README.md",
+      "url": "https://github.com/LIghtJUNction/zuse-skills/blob/201a7508d3ed2928295ebaf0853ea4528212b980/README.md",
+      "sha256": "ee86075f4899cf92d5dc40bb9ab6066e42de5e8a88e0ad6a04324d5b278e5463",
+      "git_blob_sha": "fc9eb564dc4cdedfece8f1639b045986058226a6"
+    },
+    {
+      "id": "zuse-skills:catalog.json",
+      "repository": "zuse-skills",
+      "commit": "201a7508d3ed2928295ebaf0853ea4528212b980",
+      "path": "catalog.json",
+      "url": "https://github.com/LIghtJUNction/zuse-skills/blob/201a7508d3ed2928295ebaf0853ea4528212b980/catalog.json",
+      "sha256": "76b8dc5e06e0b15123fc1144bc2a004503f43883374be8056e082c6e1f1984bf",
+      "git_blob_sha": "54eb8ac813a4d0943bcc846f3c8a477896c087df"
+    },
+    {
+      "id": "zuse-skills:docs/validation-zuse-0.5.0.json",
+      "repository": "zuse-skills",
+      "commit": "201a7508d3ed2928295ebaf0853ea4528212b980",
+      "path": "docs/validation-zuse-0.5.0.json",
+      "url": "https://github.com/LIghtJUNction/zuse-skills/blob/201a7508d3ed2928295ebaf0853ea4528212b980/docs/validation-zuse-0.5.0.json",
+      "sha256": "6b9dde78bc61b64e4cd85b9dee16477e11d1a73a9f771136f3f934166cc257c0",
+      "git_blob_sha": "343a222ab168803ddbbe4f0bfdd0a96ee6306ddc"
+    },
+    {
+      "id": "zuse-std:README.md",
+      "repository": "zuse-std",
+      "commit": "d79f43f8f3c2a1bff05962420f014b6c16403c5c",
+      "path": "README.md",
+      "url": "https://github.com/LIghtJUNction/zuse-std/blob/d79f43f8f3c2a1bff05962420f014b6c16403c5c/README.md",
+      "sha256": "fcc407b72246e1ea916d5e11bb251722992265de8d46f9c47532e9ed3b8b31e8",
+      "git_blob_sha": "4c1c5ad0c380150e9635d6691703f6efc4e7c198"
+    },
+    {
+      "id": "zuse-std:zuse.json",
+      "repository": "zuse-std",
+      "commit": "d79f43f8f3c2a1bff05962420f014b6c16403c5c",
+      "path": "zuse.json",
+      "url": "https://github.com/LIghtJUNction/zuse-std/blob/d79f43f8f3c2a1bff05962420f014b6c16403c5c/zuse.json",
+      "sha256": "fef3cdb0e983894703e2dd715c6582b5a8a0525fa21170aafd80d442828c09cc",
+      "git_blob_sha": "9530af54eeed05e792417873cb0f22c169654b06"
+    }
+  ],
+  "exclusions": [
+    "The initial inventory did not change consumer repositories or run their tests; the later ztype fixture is recorded separately above.",
+    "The temporary ztype path fixture was removed, its original Cargo.lock was restored, and its worktree is clean. No formal consumer propagation or released artifact update occurred.",
+    "No candidate test is recorded for the other five consumers, and no Project Z regeneration was run.",
+    "No update or promise is attributed to other maintainers.",
+    "Observed SHAs are fixed to the inventory timestamp and are not a claim about current live repository heads."
+  ]
+}

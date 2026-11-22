@@ -3,14 +3,48 @@
 #[cfg(target_os = "linux")]
 use crate::browser::quote;
 type Result<T> = std::result::Result<T, String>;
+pub mod controls;
+
+/// Maximum child depth below desktop 0 for native accessibility paths.
+/// Modern Electron editors can sit beyond 32 ancestors in their real UI tree.
+pub(crate) const MAX_DEPTH: usize = 64;
+
+fn validate_snapshot_limits(max_nodes: usize, max_depth: usize) -> Result<()> {
+    if !(1..=4096).contains(&max_nodes) || max_depth > MAX_DEPTH {
+        return Err(format!(
+            "accessibility limits: nodes 1..4096, depth 0..{MAX_DEPTH}"
+        ));
+    }
+    Ok(())
+}
 
 /// Read roles, names, text, screen bounds and supported actions.
 /// Password text is redacted. Partial observations carry truncated/errors.
 pub fn snapshot(max_nodes: usize, max_depth: usize) -> Result<String> {
-    if !(1..=4096).contains(&max_nodes) || max_depth > 32 {
-        return Err("accessibility limits: nodes 1..4096, depth 0..32".into());
-    }
+    validate_snapshot_limits(max_nodes, max_depth)?;
     native::snapshot(max_nodes, max_depth)
+}
+/// Discover one process's directly exported window/popup scopes. Other
+/// applications are inspected only for process identity, never traversed.
+/// Returned child-index paths are observations, not persistent identifiers.
+/// The adapter checks its deadline between native calls. libatspi's first PID
+/// lookup uses the D-Bus default timeout, rather than atspi_set_timeout.
+pub fn windows(
+    expected_pid: u32,
+    cancellation: &crate::observation::Cancellation,
+) -> Result<String> {
+    if expected_pid == 0 {
+        return Err("accessibility.windows expected_pid must be a positive u32".into());
+    }
+    cancellation.check()?;
+    #[cfg(target_os = "linux")]
+    {
+        native::controls::enumerate_windows(expected_pid, cancellation)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("unsupported_state: accessibility.windows requires Linux AT-SPI".into())
+    }
 }
 /// Validate a desktop observation scope without opening the accessibility bus.
 pub fn validate_scope(path: &str) -> Result<()> {
@@ -20,9 +54,7 @@ pub fn validate_scope(path: &str) -> Result<()> {
 /// Read only one already selected accessibility subtree.
 pub fn snapshot_scope(path: &str, max_nodes: usize, max_depth: usize) -> Result<String> {
     validate_path(path)?;
-    if !(1..=4096).contains(&max_nodes) || max_depth > 32 {
-        return Err("accessibility limits: nodes 1..4096, depth 0..32".into());
-    }
+    validate_snapshot_limits(max_nodes, max_depth)?;
     #[cfg(target_os = "linux")]
     {
         native::snapshot_scope(path, max_nodes, max_depth)
@@ -146,16 +178,143 @@ pub fn text(max_nodes: usize, max_depth: usize) -> Result<String> {
 }
 /// Invoke an action advertised in a fresh snapshot.
 pub fn action(path: &str, index: usize) -> Result<String> {
-    validate_path(path)?;
+    action_checked(path, index, None, None, None)
+}
+
+/// Verify the selected native object's identity before invoking its action.
+/// The same owned object reference is used for checks and dispatch; the child
+/// path is not resolved again. These application calls are not an atomic UI
+/// transaction. Omitted checks preserve the existing action behavior.
+pub fn action_checked(
+    path: &str,
+    index: usize,
+    expected_pid: Option<u32>,
+    expected_role: Option<&str>,
+    expected_name: Option<&str>,
+) -> Result<String> {
+    action_checked_with_cancel(
+        path,
+        index,
+        expected_pid,
+        expected_role,
+        expected_name,
+        &crate::observation::Cancellation::default(),
+    )
+}
+
+pub(crate) fn action_checked_with_cancel(
+    path: &str,
+    index: usize,
+    expected_pid: Option<u32>,
+    expected_role: Option<&str>,
+    expected_name: Option<&str>,
+    cancellation: &crate::observation::Cancellation,
+) -> Result<String> {
+    validate_identity_target(path, expected_pid, expected_role, expected_name)?;
     if index > 63 {
         return Err("accessibility action index exceeds 63".into());
     }
-    native::action(path, index)
+    let checks = IdentityChecks {
+        pid: expected_pid,
+        role: expected_role,
+        name: expected_name,
+    };
+    #[cfg(target_os = "linux")]
+    {
+        native::action(path, index, checks, cancellation)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if !checks.is_empty() {
+            return Err(
+                "unsupported_state: guarded accessibility actions currently require Linux AT-SPI"
+                    .into(),
+            );
+        }
+        cancellation.dispatch(|| native::action(path, index))
+    }
 }
 /// Request accessibility focus without moving the pointer.
 pub fn focus(path: &str) -> Result<String> {
+    focus_checked(path, None, None, None)
+}
+
+/// Verify and focus the same native object, without a second path lookup.
+pub fn focus_checked(
+    path: &str,
+    expected_pid: Option<u32>,
+    expected_role: Option<&str>,
+    expected_name: Option<&str>,
+) -> Result<String> {
+    focus_checked_with_cancel(
+        path,
+        expected_pid,
+        expected_role,
+        expected_name,
+        &crate::observation::Cancellation::default(),
+    )
+}
+
+pub(crate) fn focus_checked_with_cancel(
+    path: &str,
+    expected_pid: Option<u32>,
+    expected_role: Option<&str>,
+    expected_name: Option<&str>,
+    cancellation: &crate::observation::Cancellation,
+) -> Result<String> {
+    validate_identity_target(path, expected_pid, expected_role, expected_name)?;
+    let checks = IdentityChecks {
+        pid: expected_pid,
+        role: expected_role,
+        name: expected_name,
+    };
+    #[cfg(target_os = "linux")]
+    {
+        native::focus(path, checks, cancellation)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if !checks.is_empty() {
+            return Err(
+                "unsupported_state: guarded accessibility focus currently requires Linux AT-SPI"
+                    .into(),
+            );
+        }
+        cancellation.dispatch(|| native::focus(path))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct IdentityChecks<'a> {
+    pid: Option<u32>,
+    role: Option<&'a str>,
+    name: Option<&'a str>,
+}
+impl IdentityChecks<'_> {
+    fn is_empty(self) -> bool {
+        self.pid.is_none() && self.role.is_none() && self.name.is_none()
+    }
+}
+
+pub(crate) fn validate_identity_target(
+    path: &str,
+    expected_pid: Option<u32>,
+    expected_role: Option<&str>,
+    expected_name: Option<&str>,
+) -> Result<()> {
     validate_path(path)?;
-    native::focus(path)
+    if expected_pid == Some(0) {
+        return Err("expected_pid must be a positive native process ID".into());
+    }
+    if expected_role
+        .is_some_and(|value| value.is_empty() || value.len() > 4096 || value.contains('\0'))
+    {
+        return Err("expected_role must contain 1..4096 NUL-free bytes".into());
+    }
+    if expected_name.is_some_and(|value| value.len() > 65536 || value.contains('\0')) {
+        return Err("expected_name must be NUL-free and at most 64 KiB".into());
+    }
+    Ok(())
 }
 /// Replace an editable node's contents. Password nodes require human assistance.
 pub fn set_text(path: &str, text: &str) -> Result<String> {
@@ -212,7 +371,7 @@ pub(crate) fn validate_text_edit(
 }
 fn validate_path(path: &str) -> Result<()> {
     if path.len() > 1024
-        || path.split('/').count() > 33
+        || path.split('/').count() > MAX_DEPTH + 1
         || path.split('/').next() != Some("0")
         || path.split('/').any(|s| {
             s.is_empty()
@@ -240,6 +399,7 @@ pub(crate) fn insert_focused_x11(
 
 #[cfg(target_os = "linux")]
 mod native {
+    pub(super) mod controls;
     mod events;
     mod text_edit;
     pub(super) mod x11_input;
@@ -277,6 +437,7 @@ mod native {
     static LIBRARY: OnceLock<std::result::Result<Api, String>> = OnceLock::new();
     static ACCESS: Mutex<()> = Mutex::new(());
     struct Api {
+        set_timeout: unsafe extern "C" fn(c_int, c_int),
         desktop: unsafe extern "C" fn(c_int) -> Obj,
         name: unsafe extern "C" fn(Obj, *mut ErrPtr) -> *mut c_char,
         role: unsafe extern "C" fn(Obj, *mut ErrPtr) -> *mut c_char,
@@ -294,6 +455,7 @@ mod native {
         at_point: unsafe extern "C" fn(Obj, c_int, c_int, c_int, *mut ErrPtr) -> Obj,
         extents: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> *mut Rect,
         grab_focus: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
+        scroll_to: Option<unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> c_int>,
         editable_iface: unsafe extern "C" fn(Obj) -> Obj,
         process_id: unsafe extern "C" fn(Obj, *mut ErrPtr) -> u32,
         clear_cache: unsafe extern "C" fn(Obj),
@@ -307,6 +469,7 @@ mod native {
         insert: unsafe extern "C" fn(Obj, c_int, *const c_char, c_int, *mut ErrPtr) -> c_int,
         delete: unsafe extern "C" fn(Obj, c_int, c_int, *mut ErrPtr) -> c_int,
         free: unsafe extern "C" fn(Obj),
+        ref_object: unsafe extern "C" fn(Obj) -> Obj,
         unref: unsafe extern "C" fn(Obj),
         error_free: unsafe extern "C" fn(ErrPtr),
     }
@@ -316,8 +479,17 @@ mod native {
             .as_ref()
             .map_err(Clone::clone)
     }
+    fn load_bounded(startup_timeout_ms: c_int) -> Result<&'static Api> {
+        LIBRARY
+            .get_or_init(|| Api::open_with_timeout(startup_timeout_ms))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
     impl Api {
         fn open() -> Result<Self> {
+            Self::open_with_timeout(1000)
+        }
+        fn open_with_timeout(startup_timeout_ms: c_int) -> Result<Self> {
             let library = Library::open(c"libatspi.so.0").map_err(|error| {
                 format!("AT-SPI unavailable; install at-spi2-core and enable the session accessibility bus: {error}")
             })?;
@@ -328,6 +500,7 @@ mod native {
                 let set_timeout: unsafe extern "C" fn(c_int, c_int) =
                     library.symbol(c"atspi_set_timeout")?;
                 let api = Self {
+                    set_timeout,
                     desktop: library.symbol(c"atspi_get_desktop")?,
                     name: library.symbol(c"atspi_accessible_get_name")?,
                     role: library.symbol(c"atspi_accessible_get_role_name")?,
@@ -345,6 +518,9 @@ mod native {
                     at_point: library.symbol(c"atspi_component_get_accessible_at_point")?,
                     extents: library.symbol(c"atspi_component_get_extents")?,
                     grab_focus: library.symbol(c"atspi_component_grab_focus")?,
+                    // Older AT-SPI libraries can still enumerate and activate
+                    // controls; reveal reports its own missing capability.
+                    scroll_to: library.symbol(c"atspi_component_scroll_to").ok(),
                     editable_iface: library.symbol(c"atspi_accessible_get_editable_text_iface")?,
                     process_id: library.symbol(c"atspi_accessible_get_process_id")?,
                     clear_cache: library
@@ -360,17 +536,22 @@ mod native {
                     insert: library.symbol(c"atspi_editable_text_insert_text")?,
                     delete: library.symbol(c"atspi_editable_text_delete_text")?,
                     free: library.symbol(c"g_free")?,
+                    ref_object: library.symbol(c"g_object_ref")?,
                     unref: library.symbol(c"g_object_unref")?,
                     error_free: library.symbol(c"g_error_free")?,
                 };
                 // atspi_init can create process-global state even on failure.
                 // Pin before invoking it so callbacks never outlive the image.
                 library.pin();
+                set_timeout(
+                    startup_timeout_ms.clamp(1, 500),
+                    startup_timeout_ms.clamp(1, 1000),
+                );
                 let status = init();
+                set_timeout(500, 1000);
                 if status != 0 && status != 1 {
                     return Err(format!("AT-SPI initialization failed ({status})"));
                 }
-                set_timeout(500, 1000);
                 Ok(api)
             }
         }
@@ -421,6 +602,36 @@ mod native {
             let string = unsafe { getter(object, &mut error) };
             self.string(string, error)
         }
+        fn identity_string(
+            &self,
+            object: Obj,
+            getter: unsafe extern "C" fn(Obj, *mut ErrPtr) -> *mut c_char,
+            max_bytes: usize,
+        ) -> Result<String> {
+            let mut error = core::ptr::null_mut();
+            // Identity checks must not compare the clipped snapshot preview.
+            // SAFETY: the caller holds the native object; getters return an
+            // owned C string which is freed even when decoding fails.
+            let pointer = unsafe { getter(object, &mut error) };
+            let value = if pointer.is_null() {
+                Err("accessibility identity is unavailable".to_owned())
+            } else {
+                unsafe {
+                    let value = CStr::from_ptr(pointer).to_bytes();
+                    let result = if value.len() > max_bytes {
+                        Err("accessibility identity exceeds its check bound".to_owned())
+                    } else {
+                        std::str::from_utf8(value)
+                            .map(str::to_owned)
+                            .map_err(|_| "accessibility identity is not UTF-8".to_owned())
+                    };
+                    (self.free)(pointer.cast());
+                    result
+                }
+            };
+            self.error(error)?;
+            value
+        }
         fn count(&self, object: Obj) -> Result<usize> {
             let mut error = core::ptr::null_mut();
             // SAFETY: object is live and error output is initialized.
@@ -430,6 +641,11 @@ mod native {
                 return Err("AT-SPI returned a negative child count".into());
             }
             Ok(value as usize)
+        }
+        fn count_at(&self, object: Obj, path: &str, phase: &str) -> Result<usize> {
+            self.count(object).map_err(|error| {
+                format!("accessibility query failed: phase={phase} path={path} operation=ChildCount: {error}")
+            })
         }
         fn object(&self, ptr: Obj) -> Result<Object<'_>> {
             if ptr.is_null() {
@@ -453,12 +669,19 @@ mod native {
         fn resolve(&self, path: &str) -> Result<Object<'_>> {
             // SAFETY: desktop 0 is supported and returns an owned reference.
             let mut object = self.object(unsafe { (self.desktop)(0) })?;
+            let mut current_path = "0".to_owned();
             for index in path.split('/').skip(1) {
+                // Match semantic resolution: refresh properties of this exact
+                // ancestor before using its child list. No action is replayed.
+                unsafe { (self.clear_cache)(object.ptr) };
                 let index = index.parse::<usize>().map_err(|_| "invalid child index")?;
-                if index >= self.count(object.ptr)? {
-                    return Err("accessibility path is stale; take a fresh snapshot".into());
+                if index >= self.count_at(object.ptr, &current_path, "resolve")? {
+                    return Err(format!(
+                        "accessibility path is stale: phase=resolve path={current_path}/{index}; take a fresh snapshot"
+                    ));
                 }
                 object = self.child(object.ptr, index)?;
+                current_path.push_str(&format!("/{index}"));
             }
             Ok(object)
         }
@@ -477,6 +700,7 @@ mod native {
         api: &'a Api,
         nodes: Vec<String>,
         errors: usize,
+        diagnostics: Vec<String>,
         truncated: bool,
         deadline: Instant,
         max_nodes: usize,
@@ -493,12 +717,16 @@ mod native {
             inherited_pid: Option<u32>,
         ) -> Result<()> {
             if self.exhausted
+                || path.len() > 1024
                 || self.nodes.len() >= self.max_nodes
                 || Instant::now() >= self.deadline
             {
                 self.truncated = true;
                 return Ok(());
             }
+            // Refresh each descendant, not only the selected scope root.
+            // SAFETY: this visit owns the node reference and holds ACCESS.
+            unsafe { (self.api.clear_cache)(object.ptr) };
             let pid = inherited_pid.or_else(|| {
                 if path == "0" {
                     return None;
@@ -527,19 +755,45 @@ mod native {
                     self.errors += 1;
                     String::new()
                 });
-            let count = self.api.count(object.ptr).unwrap_or_else(|_| {
-                self.errors += 1;
-                0
-            });
-            let (visible, showing) =
+            let count = self
+                .api
+                .count_at(object.ptr, &path, "scan")
+                .unwrap_or_else(|error| {
+                    self.errors += 1;
+                    // Preserve partial tree observations, but retain bounded
+                    // context instead of hiding which descendant failed.
+                    let detail = quote(&error.chars().take(1024).collect::<String>());
+                    if self.diagnostics.len() < 32 && self.bytes + detail.len() <= 2 << 20 {
+                        self.bytes += detail.len();
+                        self.diagnostics.push(detail);
+                    }
+                    0
+                });
+            let (visible, showing, enabled, focusable, focused) =
                 match self.api.object(unsafe { (self.api.state_set)(object.ptr) }) {
                     Ok(states) => {
-                        // AtspiStateType: VISIBLE == 30, SHOWING == 25.
+                        // AtspiStateType: ENABLED == 8, FOCUSABLE == 11,
+                        // FOCUSED == 12, SHOWING == 25, VISIBLE == 30.
                         let visible = unsafe { (self.api.state_contains)(states.ptr, 30) != 0 };
                         let showing = unsafe { (self.api.state_contains)(states.ptr, 25) != 0 };
-                        (visible.to_string(), showing.to_string())
+                        let enabled = unsafe { (self.api.state_contains)(states.ptr, 8) != 0 };
+                        let focusable = unsafe { (self.api.state_contains)(states.ptr, 11) != 0 };
+                        let focused = unsafe { (self.api.state_contains)(states.ptr, 12) != 0 };
+                        (
+                            visible.to_string(),
+                            showing.to_string(),
+                            enabled.to_string(),
+                            focusable.to_string(),
+                            focused.to_string(),
+                        )
                     }
-                    Err(_) => ("null".into(), "null".into()),
+                    Err(_) => (
+                        "null".into(),
+                        "null".into(),
+                        "null".into(),
+                        "null".into(),
+                        "null".into(),
+                    ),
                 };
             let password = role.to_ascii_lowercase().contains("password");
             let mut text = if password {
@@ -616,7 +870,7 @@ mod native {
                 }
             }
             let node = format!(
-                r#"{{"path":{},"pid":{pid_json},"role":{},"name":{},"text":{},"children":{count},"bounds":{bounds},"visible":{visible},"showing":{showing},"actions":[{}]}}"#,
+                r#"{{"path":{},"pid":{pid_json},"role":{},"name":{},"text":{},"children":{count},"bounds":{bounds},"visible":{visible},"showing":{showing},"enabled":{enabled},"focusable":{focusable},"focused":{focused},"actions":[{}]}}"#,
                 quote(&path),
                 quote(&role),
                 quote(&name),
@@ -672,19 +926,23 @@ mod native {
             api,
             nodes: Vec::new(),
             errors: 0,
+            diagnostics: Vec::new(),
             truncated: false,
             deadline: Instant::now() + Duration::from_secs(5),
             max_nodes,
-            max_depth,
+            // Depth is relative to this scope, but every emitted child path
+            // must remain actionable within the global path depth bound.
+            max_depth: max_depth.min(MAX_DEPTH.saturating_sub(path.split('/').count() - 1)),
             bytes: 0,
             exhausted: false,
         };
         scan.visit(root, path.into(), 0, None)?;
         Ok(format!(
-            r#"{{"backend":"atspi","nodes":[{}],"truncated":{},"errors":{}}}"#,
+            r#"{{"backend":"atspi","nodes":[{}],"truncated":{},"errors":{},"diagnostics":[{}]}}"#,
             scan.nodes.join(","),
             scan.truncated,
-            scan.errors
+            scan.errors,
+            scan.diagnostics.join(",")
         ))
     }
     pub(super) fn snapshot_scope(path: &str, max_nodes: usize, max_depth: usize) -> Result<String> {
@@ -784,7 +1042,7 @@ mod native {
             }
             let mut hit = api.object(pointer)?;
             let mut on_branch = false;
-            for _ in 0..34 {
+            for _ in 0..MAX_DEPTH + 2 {
                 if branch[..index].iter().any(|node| node.ptr == hit.ptr) {
                     on_branch = true;
                     break;
@@ -804,7 +1062,66 @@ mod native {
         Ok(true)
     }
 
-    pub(super) fn action(path: &str, index: usize) -> Result<String> {
+    fn check_identity(object: &Object<'_>, checks: IdentityChecks<'_>) -> Result<()> {
+        check_identity_with_check(object, checks, || Ok(()))
+    }
+
+    fn check_identity_with_check(
+        object: &Object<'_>,
+        checks: IdentityChecks<'_>,
+        mut before: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        if checks.is_empty() {
+            return Ok(());
+        }
+        before()?;
+        let api = object.api;
+        // Hold this exact native object until dispatch. Clearing its cache
+        // refreshes properties without resolving the child-index path again.
+        unsafe { (api.clear_cache)(object.ptr) };
+        if let Some(expected) = checks.pid {
+            before()?;
+            let mut error = core::ptr::null_mut();
+            let actual = unsafe { (api.process_id)(object.ptr, &mut error) };
+            api.error(error).map_err(|error| {
+                format!("stale_target: accessibility process could not be verified: {error}")
+            })?;
+            if actual != expected {
+                return Err(
+                    "stale_target: accessibility process does not match expected_pid".into(),
+                );
+            }
+        }
+        for (field, expected, getter, limit) in [
+            ("role", checks.role, api.role, 4096),
+            ("name", checks.name, api.name, 65536),
+        ] {
+            if let Some(expected) = expected {
+                before()?;
+                let actual = api
+                    .identity_string(object.ptr, getter, limit)
+                    .map_err(|error| {
+                        format!(
+                            "stale_target: accessibility {field} could not be verified: {error}"
+                        )
+                    })?;
+                if actual != expected {
+                    return Err(format!(
+                        "stale_target: accessibility {field} does not match expected_{field}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn action(
+        path: &str,
+        index: usize,
+        checks: IdentityChecks<'_>,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        cancellation.check()?;
         let _guard = ACCESS
             .lock()
             .map_err(|_| "accessibility state is poisoned")?;
@@ -818,30 +1135,43 @@ mod native {
         if count < 0 || index >= count as usize {
             return Err("accessibility action does not exist".into());
         }
-        let mut error = core::ptr::null_mut();
-        let success = unsafe { (api.do_action)(interface.ptr, index as c_int, &mut error) };
-        api.error(error)?;
-        if success == 0 {
-            return Err("application rejected the accessibility action".into());
-        }
+        check_identity(&object, checks)?;
+        cancellation.dispatch(|| {
+            let mut error = core::ptr::null_mut();
+            let success = unsafe { (api.do_action)(interface.ptr, index as c_int, &mut error) };
+            api.error(error)?;
+            if success == 0 {
+                return Err("application rejected the accessibility action".into());
+            }
+            Ok(())
+        })?;
         Ok(format!(
             r#"{{"path":{},"action":{index},"completed":true}}"#,
             quote(path)
         ))
     }
-    pub(super) fn focus(path: &str) -> Result<String> {
+    pub(super) fn focus(
+        path: &str,
+        checks: IdentityChecks<'_>,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        cancellation.check()?;
         let _guard = ACCESS
             .lock()
             .map_err(|_| "accessibility state is poisoned")?;
         let api = load()?;
         let object = api.resolve(path)?;
         let interface = api.object(unsafe { (api.component_iface)(object.ptr) })?;
-        let mut error = core::ptr::null_mut();
-        let success = unsafe { (api.grab_focus)(interface.ptr, &mut error) };
-        api.error(error)?;
-        if success == 0 {
-            return Err("application rejected accessibility focus".into());
-        }
+        check_identity(&object, checks)?;
+        cancellation.dispatch(|| {
+            let mut error = core::ptr::null_mut();
+            let success = unsafe { (api.grab_focus)(interface.ptr, &mut error) };
+            api.error(error)?;
+            if success == 0 {
+                return Err("application rejected accessibility focus".into());
+            }
+            Ok(())
+        })?;
         Ok(format!(r#"{{"path":{},"focused":true}}"#, quote(path)))
     }
     pub(super) fn set_text(path: &str, text: &str) -> Result<String> {
@@ -992,7 +1322,24 @@ mod tests {
             assert!(validate_path(path).is_err());
         }
         assert!(snapshot(0, 4).is_err());
-        assert!(snapshot(5, 33).is_err());
+        assert!(snapshot(5, MAX_DEPTH + 1).is_err());
         assert!(action("0", 64).is_err());
+    }
+
+    #[test]
+    fn deeper_paths_retain_depth_byte_and_node_bounds() {
+        for depth in [33, 35, 64] {
+            let path = format!("0{}", "/0".repeat(depth));
+            assert!(validate_scope(&path).is_ok(), "depth {depth}");
+        }
+        let too_deep = format!("0{}", "/0".repeat(65));
+        assert!(validate_scope(&too_deep).is_err());
+        let largest_path = format!("0/{}", "0".repeat(1022));
+        assert!(validate_scope(&largest_path).is_ok());
+        assert!(validate_scope(&format!("{largest_path}0")).is_err());
+        assert!(validate_snapshot_limits(4096, 64).is_ok());
+        assert!(validate_snapshot_limits(4097, 64).is_err());
+        assert!(validate_snapshot_limits(4096, 65).is_err());
+        assert!(snapshot_scope("0/1", 4096, 65).is_err());
     }
 }

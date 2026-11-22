@@ -28,7 +28,19 @@ pub(super) fn write_png(
     path: &Path,
     width: u32,
     height: u32,
+    pixel: impl FnMut(u32, u32) -> [u8; 3],
+) -> Result<()> {
+    write_png_checked(path, width, height, pixel, || Ok(()))
+}
+
+/// The checked variant bounds cooperative encoding work for a native capture.
+/// Its caller owns the temporary output and commits it only after validation.
+pub(super) fn write_png_checked(
+    path: &Path,
+    width: u32,
+    height: u32,
     mut pixel: impl FnMut(u32, u32) -> [u8; 3],
+    mut check: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     if width == 0
         || height == 0
@@ -38,6 +50,7 @@ pub(super) fn write_png(
     {
         return Err("capture dimensions exceed 64 megapixels or 16384 pixels per axis".into());
     }
+    check()?;
     let mut encode = || -> std::io::Result<()> {
         let mut writer = BufWriter::new(File::create(path)?);
         writer.write_all(b"\x89PNG\r\n\x1a\n")?;
@@ -89,6 +102,7 @@ pub(super) fn write_png(
             Ok(())
         };
         for y in 0..height {
+            check().map_err(std::io::Error::other)?;
             buffer.push(0);
             if buffer.len() == 65_535 {
                 flush(
@@ -131,6 +145,7 @@ pub(super) fn write_png(
         crc = crc_update(crc, &adler);
         writer.write_all(&(crc ^ u32::MAX).to_be_bytes())?;
         chunk(&mut writer, b"IEND", &[])?;
+        check().map_err(std::io::Error::other)?;
         writer.flush()
     };
     encode().map_err(|e| format!("write PNG {}: {e}", path.display()))

@@ -1,0 +1,79 @@
+{
+  "schema": "zuse.acceptance.native-window-capture.v1",
+  "date": "2026-11-22",
+  "status": "passed",
+  "source_state": {
+    "base_commit": "f13412e3c148ecf01c347423caba509d45df9ccc",
+    "candidate": "Uncommitted native window-capture candidate based on the stated commit.",
+    "official_release_validation": false
+  },
+  "environment": {
+    "platform": "Linux / Wayland",
+    "isolation": "Private headless Cage parent, nested Hyprland, private D-Bus, and two synthetic GTK windows.",
+    "host_ui_controlled": false,
+    "python_used_for_this_build_and_runner": false,
+    "requested_scale": 1.25,
+    "effective_ratio_required_to_equal_requested_scale": false,
+    "actual_numeric_ratio_retained_in_summary": false
+  },
+  "artifacts": {
+    "cage_source_archive": {
+      "upstream_version": "0.3.1",
+      "url": "https://codeload.github.com/cage-kiosk/cage/tar.gz/refs/tags/v0.3.1",
+      "bytes": 25363,
+      "sha256": "6dc1619665acd367e0174c93b234002549a66f55f1de9197d67f0305415babc8",
+      "upstream_commit": "b7b774ac957b6d8c7b39f0dcb9ebe19de3e8a45d",
+      "patch": "Only cage.c's wlr_xdg_shell_create request changes from version 5 to version 6."
+    },
+    "private_cage_binary": {
+      "sha256": "8906cd738960a4ebf427cf1c3e69bc66e62f7ec22b4893f5f78f2f8e783b0cb9",
+      "system_install": false,
+      "committed_to_git": false
+    },
+    "rust_capture_test_binary": {
+      "sha256": "18933c3431789edf79b1e3755acb24bbbc9389fad47fe7a300b60784cfff699e",
+      "committed_to_git": false
+    }
+  },
+  "result": {
+    "test_name": "native_wayland_capture_preserves_window_identity_across_focus_and_close",
+    "test_stdout_excerpt": "test native_wayland_capture_preserves_window_identity_across_focus_and_close ... ok",
+    "passed": 1,
+    "failed": 0,
+    "filtered_out": 1,
+    "elapsed_seconds": 1.63,
+    "runner_status": "passed",
+    "runner_exit_code": 0,
+    "isolation_text": "private compositor sockets verified; physical input/KMS fds: none",
+    "cleanup_log": {
+      "empty": true,
+      "text": "",
+      "interpretation": "No cleanup diagnostics were recorded. Emptiness alone does not establish additional cleanup assertions."
+    }
+  },
+  "required_checks_in_fixture": [
+    "Focused owned windows A and B must both capture successfully and match their distinct known surface colors.",
+    "Capture receipts identify the selected window and use hyprland-toplevel-export, window-local coordinates, and image dimensions matching the saved PNG.",
+    "Each pixel/logical ratio is checked against actual image dimensions and logicalRegion. Window scale must remain stable across the focus transition.",
+    "Capturing A while B is focused must not steal focus from B.",
+    "If A retains its observed placement and monitor, its background capture must succeed. An observed placement change permits only a bounded explicit failure that preserves the prior destination.",
+    "A closed window ID must fail as stale/unavailable while preserving an existing destination and leaving the other owned window mapped."
+  ],
+  "boundaries": [
+    "The requested scale was 1.25; the fixture did not require the effective ratio to equal 1.25.",
+    "The retained summary does not identify which allowed background-capture branch was exercised.",
+    "The physical-input/KMS descriptor checks inspect the owned compositor processes; an explicit renderD node is a separate supported runner input.",
+    "This is one private native capture gate, not a claim about every host desktop window, all application operations, or full game completion.",
+    "The builder and runner sources are delivered; archives, images, logs and compiled binaries remain outside Git."
+  ],
+  "reproduction": {
+    "builder": "tests/build_private_cage.sh",
+    "runner": "tests/run_native_wayland_capture.sh",
+    "fixture": "tests/native_wayland_capture.rs",
+    "instructions": "docs/native-testing.md#window-capture-without-python"
+  },
+  "provenance": {
+    "method": "Recorded from the completed private-run receipt recovered by the main execution session; no UI was rerun while preparing this source/evidence handoff.",
+    "private_host_paths_or_client_job_ids_included": false
+  }
+}

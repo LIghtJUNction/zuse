@@ -109,7 +109,7 @@ unsafe extern "C" fn event_callback(event: *mut EventPrefix, data: Obj) {
     let source = unsafe { (*event).source };
     let mut current = source;
     let mut owned = false;
-    for _ in 0..34 {
+    for _ in 0..MAX_DEPTH + 2 {
         if current.is_null() {
             break;
         }
@@ -296,7 +296,8 @@ impl EventWatch {
         // Application roots can legitimately report index=-1. Verify that
         // original application once above; ask indices only inside its tree.
         while current.ptr != self.application.ptr {
-            if indices.len() == 32 {
+            // The application already occupies one edge below desktop 0.
+            if indices.len() >= MAX_DEPTH - 1 {
                 return Err("observed accessibility scope exceeds maximum depth".into());
             }
             let mut error = ptr::null_mut();

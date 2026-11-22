@@ -256,7 +256,7 @@ pub fn validate_query(query: &TargetQuery<'_>) -> Result<()> {
 /// Observe the desktop and locate a target without producing input events.
 pub fn locate(query: &TargetQuery<'_>) -> Result<LocatedTarget> {
     validate_query(query)?;
-    let snapshot = crate::accessibility::snapshot(4096, 32)?;
+    let snapshot = crate::accessibility::snapshot(4096, crate::accessibility::MAX_DEPTH)?;
     locate_in(&snapshot, query)
 }
 
@@ -445,7 +445,7 @@ fn parse_bounds(value: Option<Value<'_>>) -> Result<Bounds> {
 
 fn validate_path(path: &str) -> Result<()> {
     if path.len() > 1024
-        || path.split('/').count() > 33
+        || path.split('/').count() > crate::accessibility::MAX_DEPTH + 1
         || path.split('/').next() != Some("0")
         || path.split('/').any(|part| {
             part.is_empty()

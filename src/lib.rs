@@ -14,6 +14,8 @@ pub mod android;
 #[cfg(feature = "std")]
 pub mod browser;
 #[cfg(feature = "std")]
+pub mod clipboard;
+#[cfg(feature = "std")]
 pub mod human;
 #[cfg(feature = "std")]
 pub mod integrations;

@@ -1,0 +1,627 @@
+{
+  "schema": "zuse.acceptance.desktop.native.v1",
+  "status": "partial",
+  "scope": "ChatGPT native accessibility controls; no coordinate or pixel input",
+  "archive_count": 0,
+  "cases": [
+    {
+      "name": "Direct Chinese typing with exact native readback",
+      "source": "gpt_search_typing2",
+      "receipt": {
+        "status": "completed",
+        "completed": 6,
+        "results": [
+          {
+            "step": 0,
+            "operation": "accessibility.windows",
+            "elapsed_us": 42954,
+            "value": {
+              "backend": "atspi",
+              "expected_pid": 2830976,
+              "windows": [
+                {
+                  "scope": "0/10/0",
+                  "path": "0/10/0",
+                  "pid": 2830976,
+                  "role": "frame",
+                  "name": "ChatGPT",
+                  "showing": true
+                },
+                {
+                  "scope": "0/10/1",
+                  "path": "0/10/1",
+                  "pid": 2830976,
+                  "role": "frame",
+                  "name": "",
+                  "showing": true
+                },
+                {
+                  "scope": "0/10/2",
+                  "path": "0/10/2",
+                  "pid": 2830976,
+                  "role": "frame",
+                  "name": "ChatGPT",
+                  "showing": true
+                }
+              ],
+              "count": 3,
+              "applications": 1,
+              "visited_applications": 12,
+              "truncated": false,
+              "errors": 0,
+              "diagnostics": [],
+              "elapsed_ms": 42
+            }
+          },
+          {
+            "step": 1,
+            "operation": "window.focus",
+            "elapsed_us": 34768,
+            "value": {
+              "ok": true
+            }
+          },
+          {
+            "step": 2,
+            "operation": "accessibility.invoke",
+            "elapsed_us": 978281,
+            "value": {
+              "status": "completed",
+              "elapsed_ms": 978,
+              "operation": "focus",
+              "target": {
+                "path": "0/10/0/0/0/1/0/0/0/0/5/0/2/1",
+                "pid": 2830976,
+                "role": "combo box",
+                "name": "命令菜单",
+                "text": "",
+                "enabled": true,
+                "focusable": true,
+                "focused": true,
+                "visible": true,
+                "showing": true,
+                "actions": [
+                  {
+                    "index": 0,
+                    "name": "activate"
+                  },
+                  {
+                    "index": 1,
+                    "name": "showContextMenu"
+                  }
+                ]
+              },
+              "action": null,
+              "action_index": null,
+              "completed": true
+            }
+          },
+          {
+            "step": 3,
+            "operation": "keyboard.type",
+            "elapsed_us": 408130,
+            "value": {
+              "typed_bytes": 18,
+              "submitted_bytes": 18,
+              "delivery": "submitted",
+              "application_confirmation_required": true
+            }
+          },
+          {
+            "step": 4,
+            "operation": "accessibility.wait",
+            "elapsed_us": 3693775,
+            "value": {
+              "status": "satisfied",
+              "elapsed_ms": 3693,
+              "backend": "atspi",
+              "scope": "0/10/0",
+              "expected_pid": 2830976,
+              "matches": [
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/5/0/2/1",
+                  "pid": 2830976,
+                  "role": "combo box",
+                  "name": "命令菜单",
+                  "text": "桌面验收测试",
+                  "enabled": true,
+                  "focusable": true,
+                  "focused": true,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "activate"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                }
+              ],
+              "count": 1,
+              "visited": 48,
+              "truncated": false,
+              "errors": 0
+            }
+          },
+          {
+            "step": 5,
+            "operation": "accessibility.find",
+            "elapsed_us": 10008,
+            "value": {
+              "backend": "atspi",
+              "scope": "0/10/0",
+              "expected_pid": 2830976,
+              "matches": [],
+              "count": 0,
+              "visited": 48,
+              "truncated": false,
+              "errors": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Select observed completed test conversation",
+      "source": "gpt_open_acceptance",
+      "receipt": {
+        "status": "completed",
+        "completed": 4,
+        "results": [
+          {
+            "step": 0,
+            "operation": "accessibility.windows",
+            "elapsed_us": 10341,
+            "value": {
+              "backend": "atspi",
+              "expected_pid": 2830976,
+              "windows": [
+                {
+                  "scope": "0/10/0",
+                  "path": "0/10/0",
+                  "pid": 2830976,
+                  "role": "frame",
+                  "name": "ChatGPT",
+                  "showing": true
+                },
+                {
+                  "scope": "0/10/1",
+                  "path": "0/10/1",
+                  "pid": 2830976,
+                  "role": "frame",
+                  "name": "",
+                  "showing": true
+                },
+                {
+                  "scope": "0/10/2",
+                  "path": "0/10/2",
+                  "pid": 2830976,
+                  "role": "frame",
+                  "name": "ChatGPT",
+                  "showing": true
+                }
+              ],
+              "count": 3,
+              "applications": 1,
+              "visited_applications": 12,
+              "truncated": false,
+              "errors": 0,
+              "diagnostics": [],
+              "elapsed_ms": 10
+            }
+          },
+          {
+            "step": 1,
+            "operation": "accessibility.invoke",
+            "elapsed_us": 23389,
+            "value": {
+              "status": "completed",
+              "elapsed_ms": 23,
+              "operation": "action",
+              "target": {
+                "path": "0/10/0/0/0/1/0/0/0/0/5/0/2/2/0/0",
+                "pid": 2830976,
+                "role": "list item",
+                "name": "桌面验收测试 ChatGPT Alt+1",
+                "text": "￼￼Alt+1",
+                "enabled": true,
+                "focusable": true,
+                "focused": true,
+                "visible": true,
+                "showing": true,
+                "actions": [
+                  {
+                    "index": 0,
+                    "name": "select"
+                  },
+                  {
+                    "index": 1,
+                    "name": "showContextMenu"
+                  }
+                ]
+              },
+              "action": "select",
+              "action_index": 0,
+              "completed": true
+            }
+          },
+          {
+            "step": 2,
+            "operation": "accessibility.wait",
+            "elapsed_us": 3883621,
+            "value": {
+              "status": "satisfied",
+              "elapsed_ms": 3882,
+              "read_retries": 0,
+              "backend": "atspi",
+              "scope": "0/10/0",
+              "expected_pid": 2830976,
+              "matches": [
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/0/0/0/1/0/1/0/0/1/0/0/0/0/1/1",
+                  "pid": 2830976,
+                  "role": "button",
+                  "name": "聊天操作",
+                  "text": "￼",
+                  "enabled": true,
+                  "focusable": true,
+                  "focused": false,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "open"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                },
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/0/0/0/1/0/1/0/0/1/0/0/1/0/1/1",
+                  "pid": 2830976,
+                  "role": "button",
+                  "name": "聊天操作",
+                  "text": "￼",
+                  "enabled": true,
+                  "focusable": true,
+                  "focused": false,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "open"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                },
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/0/0/0/1/0/1/0/0/1/0/0/2/0/1/1",
+                  "pid": 2830976,
+                  "role": "button",
+                  "name": "聊天操作",
+                  "text": "￼",
+                  "enabled": true,
+                  "focusable": true,
+                  "focused": false,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "open"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                },
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/0/0/0/1/0/1/0/0/1/0/0/3/0/1/1",
+                  "pid": 2830976,
+                  "role": "button",
+                  "name": "聊天操作",
+                  "text": "￼",
+                  "enabled": true,
+                  "focusable": true,
+                  "focused": false,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "open"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                }
+              ],
+              "count": 4,
+              "visited": 886,
+              "truncated": false,
+              "errors": 0
+            }
+          },
+          {
+            "step": 3,
+            "operation": "accessibility.find",
+            "elapsed_us": 191513,
+            "value": {
+              "backend": "atspi",
+              "scope": "0/10/0",
+              "expected_pid": 2830976,
+              "matches": [
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/2/1/0/0/0/0/1/0/0/0/0",
+                  "pid": 2830976,
+                  "role": "heading",
+                  "name": "你说：",
+                  "text": "你说：",
+                  "enabled": true,
+                  "focusable": false,
+                  "focused": false,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "clickAncestor"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                }
+              ],
+              "count": 1,
+              "visited": 894,
+              "truncated": false,
+              "errors": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Verify selected test document and its test prompt",
+      "source": "gpt_current_conversation_controls",
+      "receipt": {
+        "status": "completed",
+        "completed": 3,
+        "results": [
+          {
+            "step": 0,
+            "operation": "accessibility.windows",
+            "elapsed_us": 11748,
+            "value": {
+              "backend": "atspi",
+              "expected_pid": 2830976,
+              "windows": [
+                {
+                  "scope": "0/10/0",
+                  "path": "0/10/0",
+                  "pid": 2830976,
+                  "role": "frame",
+                  "name": "ChatGPT",
+                  "showing": true
+                },
+                {
+                  "scope": "0/10/1",
+                  "path": "0/10/1",
+                  "pid": 2830976,
+                  "role": "frame",
+                  "name": "",
+                  "showing": true
+                },
+                {
+                  "scope": "0/10/2",
+                  "path": "0/10/2",
+                  "pid": 2830976,
+                  "role": "frame",
+                  "name": "ChatGPT",
+                  "showing": true
+                }
+              ],
+              "count": 3,
+              "applications": 1,
+              "visited_applications": 12,
+              "truncated": false,
+              "errors": 0,
+              "diagnostics": [],
+              "elapsed_ms": 11
+            }
+          },
+          {
+            "step": 1,
+            "operation": "accessibility.find",
+            "elapsed_us": 174549,
+            "value": {
+              "backend": "atspi",
+              "scope": "0/10/0",
+              "expected_pid": 2830976,
+              "matches": [
+                {
+                  "path": "0/10/0/0/0/1/0/0/0",
+                  "pid": 2830976,
+                  "role": "document web",
+                  "name": "桌面验收测试",
+                  "text": "￼",
+                  "enabled": true,
+                  "focusable": true,
+                  "focused": false,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "doDefault"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                },
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/0/0/0/1/0/1/0/2/2/0/0/5/0",
+                  "pid": 2830976,
+                  "role": "button",
+                  "name": "桌面验收测试",
+                  "text": "￼￼",
+                  "enabled": true,
+                  "focusable": true,
+                  "focused": false,
+                  "visible": true,
+                  "showing": false,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "press"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                },
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/0/0/0/1/0/1/0/2/2/0/0/5/0/0/0",
+                  "pid": 2830976,
+                  "role": "static",
+                  "name": "桌面验收测试",
+                  "text": "桌面验收测试",
+                  "enabled": true,
+                  "focusable": false,
+                  "focused": false,
+                  "visible": true,
+                  "showing": false,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "clickAncestor"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                },
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/1/1/0/0/0/0",
+                  "pid": 2830976,
+                  "role": "button",
+                  "name": "桌面验收测试",
+                  "text": "桌面验收测试",
+                  "enabled": true,
+                  "focusable": true,
+                  "focused": false,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "press"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                },
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/2/1/0/0/0/0/0/1/0/0/0/0/2/0/0/0",
+                  "pid": 2830976,
+                  "role": "static",
+                  "name": "这是 Zuse 的桌面验收测试。\n第二行包含中文、English 和 emoji 🙂。\n请只回复：ZUSE_DESKTOP_OK",
+                  "text": "这是 Zuse 的桌面验收测试。\n第二行包含中文、English 和 emoji 🙂。\n请只回复：ZUSE_DESKTOP_OK",
+                  "enabled": true,
+                  "focusable": false,
+                  "focused": false,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "clickAncestor"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                }
+              ],
+              "count": 5,
+              "visited": 956,
+              "truncated": false,
+              "errors": 0
+            }
+          },
+          {
+            "step": 2,
+            "operation": "accessibility.find",
+            "elapsed_us": 115779,
+            "value": {
+              "backend": "atspi",
+              "scope": "0/10/0",
+              "expected_pid": 2830976,
+              "matches": [
+                {
+                  "path": "0/10/0/0/0/1/0/0/0/0/0/1/5/0/2/1/0/0/0/0/0/1/0/0/0/0/13",
+                  "pid": 2830976,
+                  "role": "button",
+                  "name": "更多操作",
+                  "text": "",
+                  "enabled": true,
+                  "focusable": true,
+                  "focused": false,
+                  "visible": true,
+                  "showing": true,
+                  "actions": [
+                    {
+                      "index": 0,
+                      "name": "open"
+                    },
+                    {
+                      "index": 1,
+                      "name": "showContextMenu"
+                    }
+                  ]
+                }
+              ],
+              "count": 1,
+              "visited": 956,
+              "truncated": false,
+              "errors": 0
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "exclusions": [
+    "No claim of complete desktop coverage",
+    "Archive not yet performed",
+    "Do not infer all keyboard modes from this one direct typing case"
+  ],
+  "redaction": {
+    "policy": "Developer-home paths and ephemeral ssmcp client/job identifiers are replaced with stable aliases shared across the 2026-11-22 acceptance evidence set. No test result, duration, software version, source SHA, or substantive error was changed.",
+    "aliases": [],
+    "source_sha256_before_redaction": "6bb728451a6b36074a06a4f6b9b60a9cc31392f95ec4e1f8e8df3030f9f3fd18"
+  }
+}

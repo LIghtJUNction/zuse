@@ -103,6 +103,8 @@ Git 包通过 `pkg init/add/install/update/remove/list/publish` 管理，`zuse.l
 
 `keyboard.hold(key="Up",duration=400)` 与 `browser.hold(key="ArrowRight",duration=300)` 提供有时限的方向键按住与释放，绑定已观察目标并响应取消，见[按键保持](docs/key-holds.md)。[ChatGPT 桌面模块](docs/chatgpt-desktop.md)提供本地观察、带进程和空编辑器检查的草稿准备，以及需要明确授权的发送函数；目标需暴露原生无障碍接口。
 
+浏览器中需要同时前进与转向时，使用 `browser.hold_keys(keys="ArrowUp,ArrowRight",duration=500)`。它接受最多两个唯一、非相反方向，取消或失败时清理本次尝试按下的键；原生键盘 guard 与单键 `browser.hold` 契约保持不变。
+
 ## 独立鼠标、变量生命周期与并行轨迹
 
 `zuse script` 让每个鼠标变量拥有自己的位置、按键状态和可见光标，默认创建独立鼠标。Linux 原生 X11 的 XInput2/MPX 提供独立设备身份，因此移动这些鼠标不会移动用户的鼠标。颜色、形状、大小、发光强度和自定义图像都可以设置。
@@ -156,6 +158,10 @@ socket 路径请换成自己的运行目录。HTTP 入口为 `/mcp`，默认仅�
 
 ## 后台浏览器与无障碍
 
+`browser.click_at(x=100,y=120)` 与 `browser.stroke(points="100,100;180,100;180,180",duration=300)` 使用 CSS viewport 坐标和真实 CDP 鼠标输入。页面必须可见且有焦点；路径在首个输入前完整预检，文档、几何、滚动或焦点变化时停止并尝试松键。每条新连接先显式设置 `browser.viewport`，再依赖截图坐标。截图回执给出 `mimeType`、`bytes`、从 PNG 或 JPEG 编码字节读取的真实尺寸、`cssViewport` 及两轴分别计算的 `pixelsPerCssUnit`；映射可用时，从图像坐标除以对应比例即可转换。Pinch zoom/pan 或图像与 CSS 两轴比例不一致时，图片仍可保存，但映射为 `null` 并返回 `mappingError`；页面变化后应重新截图。
+
+长任务应保持调用 `browser.launch` 的 owner Runtime 存活。其空闲退出会关闭拥有的浏览器及临时配置，另一条 CDP 连接不能延长它的生命周期。可按任务期限显式使用 `zuse shell --idle-timeout-ms 14400000`（四小时）。本轮游戏与桌面验收仍有缺口，见[改动与阶段验收记录](docs/validation-e2e-20261122.zh-CN.md)。
+
 ~~~text
 browser.launch(headless=true)
 browser.viewport(width=1280, height=800)
@@ -166,9 +172,17 @@ browser.capture(path="browser.png")
 browser.close()
 ~~~
 
-浏览器使用原生 CDP 连接和独立临时配置，不依赖 Playwright。截图输出当前视口的 PNG；`browser.viewport` 按 CSS 像素设置视口大小。`browser.fill` 遇到密码输入会返回错误，可使用可见浏览器和 `human.request` 交给本机操作人完成。
+浏览器使用原生 CDP 连接和独立临时配置，不依赖 Playwright。截图默认输出当前视口的 PNG；`browser.viewport` 按 CSS 像素设置视口大小。`browser.fill` 遇到密码输入会返回错误，可使用可见浏览器和 `human.request` 交给本机操作人完成。
+
+`browser.connect(endpoint="http://127.0.0.1:9222")` 连接明确指定的本机浏览器调试端点，并创建后台空白页；直接连接页面的 WebSocket 端点则只附加该页。`browser.select(id="...")` 改变后续命令发往哪个页面，不发送激活命令。切走 Zuse 自有临时标签页时，仍按原有清理规则关闭该页；如果它当时在前台，浏览器会自行选择替代页。`browser.launch` 保留自有新浏览器配置的现有启动行为。
+
+需要切到所选页面时，显式调用 `browser.activate()`。它先核对当前 CDP 页面和主文档，只发送一次 `Page.bringToFront`，再在隔离的 JavaScript 上下文中检查同一文档的可见性与焦点，总期限为五秒。回执确认页面的可见性和焦点，不单独证明操作系统窗口焦点。若本连接启用了 `browser.background` 焦点模拟，应先将它关闭。失败保留原选中 target/session，并区分未发送、已尝试但回复不确定、已获确认但后续状态未确认；不会自动重发激活。见[激活实现](src/browser/activation.rs)和[隔离 fixture 检查](tests/support/browser_activation.rs)。
+
+需要 JPEG 时，使用 `browser.capture(path="browser.jpg",format="jpeg",quality=80)`。格式和质量直接传给 CDP，不缩小截图，也不运行转换程序。`quality` 是 0–100 的整数，Zuse 对 JPEG 默认使用 80；PNG 不接受该参数。编码由 `format` 决定，与文件扩展名无关。JPEG 使用有损压缩，实际字节数取决于页面内容和质量。截图仍在替换文件前复核页面和几何；图像结构无效或页面几何变化时保留已有目标文件。见[截图实现](src/browser/capture.rs)和[截图检查](tests/browser_capture.rs)。
 
 Linux 无障碍通过 AT-SPI 读取角色、文本、边界、动作，并支持聚焦、按钮动作和编辑文本。Windows 使用 UI Automation，macOS 使用 Quartz 与 System Events；它们的实机验证范围在平台表中单独列出。
+
+控件级定位可用 `accessibility.tree(scope="现场窗口路径",limit=4096,depth=64)` 枚举目标窗口子树，读取角色、名称、文本、动作及 `enabled`、`focusable`、`focused` 等状态。必须检查 `truncated` 与 `errors`，不能假定任意大窗口都已完整返回。Linux 的 `accessibility.action`、`accessibility.focus` 可带 `expected_pid`、`expected_role`、`expected_name`，在同一个 AT-SPI 对象上精确检查身份；不匹配则先返回 `stale_target`。这些操作直接针对控件，无需坐标，但检查与应用自身变更并非原子事务。
 
 ## Android 两种模式
 

@@ -81,7 +81,8 @@ struct FocusScan<'a> {
 
 impl<'a> FocusScan<'a> {
     fn visit(&mut self, object: Object<'a>, depth: usize, matched_frame: bool) -> Result<()> {
-        if self.visited >= 4096 || depth > 32 || Instant::now() >= self.deadline {
+        // This traversal starts at the application, one level below desktop 0.
+        if self.visited >= 4096 || depth >= MAX_DEPTH || Instant::now() >= self.deadline {
             return Err(unsupported("focus discovery exceeded its bounds"));
         }
         self.visited += 1;

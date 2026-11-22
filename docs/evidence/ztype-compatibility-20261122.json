@@ -1,0 +1,216 @@
+{
+  "schema": "zuse.acceptance.consumer-compatibility.v1",
+  "date": "2026-11-22",
+  "observed_at": "2026-11-22T13:31:19.220Z",
+  "status": "partial_desktop_compatibility_tested_environment_blocked",
+  "propagated": false,
+  "validation_complete": false,
+  "consumer": {
+    "repository": "https://github.com/LIghtJUNction/ztype",
+    "head": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80",
+    "version": "0.4.2",
+    "features": [
+      "desktop"
+    ],
+    "source_url": "https://github.com/LIghtJUNction/ztype/tree/5d245e5b0633b5ce0f9479fec9741fb23b7b5b80"
+  },
+  "candidate": {
+    "package": "zuse-computer",
+    "library_import": "zuse",
+    "version": "0.6.0",
+    "base_commit": "f13412e3c148ecf01c347423caba509d45df9ccc",
+    "source_kind": "uncommitted_local_path_candidate",
+    "final_source_commit": null,
+    "features": [
+      "default",
+      "std"
+    ],
+    "source_manifest_file": "zuse-source.sha256",
+    "source_manifest_sha256": "d5ce5903b3382c9472e44e36e2baba863f78d48b04073c7fd7008b4f5e97562e",
+    "source_verified_unchanged_after_tests": true,
+    "scope_note": "This manifest identifies the candidate snapshot used by this temporary path fixture. It is not proof of compatibility with a later final commit."
+  },
+  "original_dependency": {
+    "package": "zuse-computer",
+    "version": "0.6.0",
+    "source": "git+https://github.com/LIghtJUNction/zuse.git#f13412e3c148ecf01c347423caba509d45df9ccc",
+    "lock_sha256": "ce85b32f99c9066780c1298f775e9c14d6218f886e9e7744355053ad5b008995",
+    "lock_file": "Cargo.lock.original"
+  },
+  "fixture": {
+    "config_file": "local-candidate.toml",
+    "config_sha256": "d8ecf3a54f456be55d3aa2aa12c7ff7a6a1e4e7d0c89b19e90613ee0fe3d8f8c",
+    "lock_file": "Cargo.lock.fixture",
+    "lock_sha256": "27f0f9a0011891702a0b4dafef625fca299417151c170d3a04dd97e405b18bbc",
+    "lock_difference": "Only the zuse-computer Git source line is removed for the local path patch; all other original lock entries are unchanged.",
+    "temporary_local_path_patch": true
+  },
+  "toolchain": {
+    "rustc": "1.100.0",
+    "rustc_commit": "0ef1bc386059596dada8fb65b50425aab2ea637a",
+    "host": "x86_64-unknown-linux-gnu",
+    "llvm": "23.1.5",
+    "jobs": 2,
+    "cleared_environment": [
+      "DISPLAY",
+      "WAYLAND_DISPLAY",
+      "WAYLAND_SOCKET",
+      "AT_SPI_BUS_ADDRESS"
+    ]
+  },
+  "tests": [
+    {
+      "label": "desktop-only all-targets gate",
+      "command_with_local_path_redacted": [
+        "cargo",
+        "--config",
+        "local-candidate.toml",
+        "test",
+        "--locked",
+        "--offline",
+        "--no-default-features",
+        "--features",
+        "desktop",
+        "--all-targets"
+      ],
+      "exit_code": 101,
+      "log": "desktop-test.log",
+      "log_sha256": "f5a09d49f6ed853b880e1ccbc11d8ea7e713857a0f23f0847b70be96fc234686",
+      "summaries": [
+        {
+          "target": "library",
+          "status": "ok",
+          "passed": 22,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        {
+          "target": "cli",
+          "status": "FAILED",
+          "passed": 17,
+          "failed": 3,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        }
+      ]
+    },
+    {
+      "label": "additional integrations after the earlier gate stopped",
+      "command_with_local_path_redacted": [
+        "cargo",
+        "--config",
+        "local-candidate.toml",
+        "test",
+        "--locked",
+        "--offline",
+        "--no-default-features",
+        "--features",
+        "desktop",
+        "--test",
+        "composition",
+        "--test",
+        "dictionary",
+        "--test",
+        "plugin_contract"
+      ],
+      "exit_code": 0,
+      "log": "desktop-integration-test.log",
+      "log_sha256": "5a90a08d13aa6f7ed7ec9c81144f52f34a1e0292bacd03da102de94c39d54741",
+      "summaries": [
+        {
+          "target": "composition",
+          "status": "ok",
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        {
+          "target": "dictionary",
+          "status": "ok",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 1,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        {
+          "target": "plugin_contract",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "note": "No tests ran: the plugin feature is disabled by this configuration."
+        }
+      ]
+    }
+  ],
+  "aggregate": {
+    "passed": 65,
+    "failed": 3,
+    "ignored": 1,
+    "counting_rule": "These totals combine two separate invocations. The desktop-only all-targets gate still failed with exit 101; the additional integration invocation exited 0."
+  },
+  "failures": [
+    {
+      "test": "service::tests::readiness_reaches_a_real_filesystem_datagram_socket",
+      "evidence": "UnixDatagram::bind returns OS error 1 EPERM directly in the original test log.",
+      "classification": "sandbox_socket_permission"
+    },
+    {
+      "test": "service::tests::readiness_reaches_a_real_abstract_datagram_socket",
+      "evidence": "UnixDatagram::bind_addr returns OS error 1 EPERM directly in the original test log.",
+      "classification": "sandbox_socket_permission"
+    },
+    {
+      "test": "service::tests::foreground_readiness_is_optional_and_unreachable_notifications_fail",
+      "evidence": "The expected cannot-notify text assertion fails. notify_ready creates UnixDatagram::unbound before send_to_addr; its exact returned error was not printed.",
+      "classification": "related_socket_environment_failure_inferred_not_directly_printed"
+    }
+  ],
+  "scope": {
+    "validated": [
+      "Linux desktop feature configuration compiles the candidate zuse::platform::Desktop consumer API",
+      "22 library unit tests",
+      "17 CLI/config/service planning tests",
+      "19 composition integration tests",
+      "7 dictionary integration tests"
+    ],
+    "not_validated": [
+      "default GUI feature configuration",
+      "native Wayland/X11 servers or physical desktop input",
+      "plugin feature tests (disabled by this configuration)",
+      "external full vocabulary ignored test",
+      "formal immutable dependency propagation"
+    ],
+    "python_executed": false,
+    "real_ui_executed": false
+  },
+  "cleanup": {
+    "original_cargo_lock_restored": true,
+    "restored_lock_sha256": "ce85b32f99c9066780c1298f775e9c14d6218f886e9e7744355053ad5b008995",
+    "consumer_git_status_clean": true,
+    "source_edits": false,
+    "pushed": false
+  },
+  "provenance": {
+    "original_receipt": {
+      "file": "receipt.json",
+      "bytes": 9220,
+      "sha256": "59e08ebcf6408a30ff13d94d3b90a652e952401acdf259ad5eb84b3f7d94a87a"
+    },
+    "source": "Projection of the original local compatibility receipt, with both original log hashes independently checked during documentation."
+  },
+  "redaction": {
+    "private_absolute_paths_omitted": true,
+    "connection_and_job_ids_omitted": true,
+    "raw_logs_not_copied_into_repository": true,
+    "note": "Private checkout, Cargo home and resolved package paths are omitted. The config argument is represented by its filename; it is not the original absolute argv. Original receipt and log hashes remain unchanged."
+  }
+}

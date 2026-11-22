@@ -107,6 +107,9 @@ static SPECS: &[Spec] = &[
     spec!("mouse.down",false,["button":T:false]),
     spec!("mouse.up",false,["button":T:false]),
     spec!("mouse.scroll",false,["dx":I:false,"dy":I:false]),
+    spec!("clipboard.read", true, []),
+    spec!("clipboard.write",false,["text":T:true]),
+    spec!("clipboard.restore",false,["path":T:true]),
     spec!("keyboard.type",false,["text":T:true,"window":T:false]),
     spec!("keyboard.key",false,["key":T:true,"window":T:false]),
     spec!("keyboard.hold",false,["key":T:true,"duration":I:true,"window":T:false,"allow_other_keys":B:false]),
@@ -117,7 +120,10 @@ static SPECS: &[Spec] = &[
     spec!("window.focus",false,["id":T:true]),
     spec!("screen.capture",true,["path":T:true,"window":T:false]),
     spec!("window.capture",true,["id":T:true,"path":T:true]),
-    spec!("accessibility.tree",true,["limit":I:false,"depth":I:false]),
+    spec!("accessibility.tree",true,["limit":I:false,"depth":I:false,"scope":T:false]),
+    spec!("accessibility.windows",true,["expected_pid":I:true]),
+    spec!("accessibility.find",true,["scope":T:true,"expected_pid":I:true,"role":T:false,"name":T:false,"text":T:false,"exact":B:false]),
+    spec!("accessibility.wait",true,["scope":T:true,"expected_pid":I:true,"role":T:false,"name":T:false,"text":T:false,"exact":B:false,"timeout_ms":I:false]),
     spec!("screen.text",true,["ocr":B:false,"limit":I:false,"depth":I:false]),
     spec!("wait",true,["ms":I:false,"min":I:false,"max":I:false,"seed":I:false]),
     spec!("browser.launch",false,["headless":B:false]),
@@ -125,15 +131,25 @@ static SPECS: &[Spec] = &[
     spec!("browser.tabs", true, []),
     spec!("browser.viewport",false,["width":I:true,"height":I:true]),
     spec!("browser.select",false,["id":T:true]),
+    spec!("browser.activate", false, []),
+    spec!("browser.background",false,["enabled":B:true]),
     spec!("browser.navigate",false,["url":T:true]),
     spec!("browser.snapshot", true, []),
     spec!("browser.text", true, []),
     spec!("browser.evaluate",false,["expression":T:true]),
     spec!("browser.click",false,["selector":T:true]),
+    spec!("browser.click_at",false,["x":N:true,"y":N:true,"button":T:false]),
+    spec!("browser.stroke",false,["points":T:true,"duration":I:false,"button":T:false]),
     spec!("browser.fill",false,["selector":T:true,"text":T:true]),
     spec!("browser.key",false,["key":T:true]),
     spec!("browser.hold",false,["key":T:true,"duration":I:true]),
-    spec!("browser.capture",true,["path":T:true]),
+    spec!("browser.hold_keys",false,["keys":T:true,"duration":I:true]),
+    spec!("browser.hold_until",false,["keys":T:true,"condition":T:true,"timeout":I:true,"canvas":T:false]),
+    spec!("browser.control_keys",false,["allowed_keys":T:true,"policy":T:true,"timeout":I:true,"canvas":T:false]),
+    spec!("canvas.watch",false,["selector":T:true,"name":T:true,"ttl_ms":I:false,"history":B:false]),
+    spec!("canvas.read",true,["name":T:true]),
+    spec!("canvas.close",false,["name":T:true]),
+    spec!("browser.capture",true,["path":T:true,"format":T:false,"quality":I:false]),
     spec!("browser.close", false, []),
     spec!("human.request",false,["kind":T:true,"message":T:true,"url":T:false,"window":T:false,"timeout":I:false]),
     spec!("human.pending", true, []),
@@ -141,6 +157,7 @@ static SPECS: &[Spec] = &[
     spec!("harness.list", true, []),
     spec!("harness.start",false,["name":T:true,"args":T:false]),
     spec!("process.start",false,["program":T:true,"args":T:false]),
+    spec!("process.launch",false,["program":T:true,"args":T:false]),
     spec!("process.list", true, []),
     spec!("process.read",true,["id":I:true]),
     spec!("harness.read",true,["id":I:true]),
@@ -156,8 +173,9 @@ static SPECS: &[Spec] = &[
     spec!("omarchy.workspace",false,["id":T:true]),
     spec!("omarchy.themes", true, []),
     spec!("omarchy.theme",false,["name":T:true]),
-    spec!("accessibility.action",false,["path":T:true,"index":I:false]),
-    spec!("accessibility.focus",false,["path":T:true]),
+    spec!("accessibility.action",false,["path":T:true,"index":I:false,"expected_pid":I:false,"expected_role":T:false,"expected_name":T:false]),
+    spec!("accessibility.focus",false,["path":T:true,"expected_pid":I:false,"expected_role":T:false,"expected_name":T:false]),
+    spec!("accessibility.invoke",false,["scope":T:true,"expected_pid":I:true,"role":T:true,"name":T:true,"exact":B:false,"index":I:false,"action":T:false,"operation":T:false,"timeout_ms":I:false]),
     spec!("accessibility.set_text",false,["path":T:true,"text":T:true,"expected_text":T:false,"expected_pid":I:false]),
     spec!("android.devices", true, []),
     spec!("android.connect",true,["serial":T:false,"mode":T:false,"display":I:false]),
@@ -273,6 +291,51 @@ fn observation_condition(call: &Call<'_>) -> Result<Condition, String> {
             .map(|_| text(call, "role", ""))
             .transpose()?,
     })
+}
+
+struct AccessibilityControlArgs {
+    scope: String,
+    expected_pid: u32,
+    role: Option<String>,
+    name: Option<String>,
+    text: Option<String>,
+    exact: bool,
+}
+impl AccessibilityControlArgs {
+    fn query(&self) -> accessibility::controls::Query<'_> {
+        accessibility::controls::Query {
+            scope: &self.scope,
+            expected_pid: self.expected_pid,
+            role: self.role.as_deref(),
+            name: self.name.as_deref(),
+            text: self.text.as_deref(),
+            exact: self.exact,
+        }
+    }
+}
+fn accessibility_control_args(call: &Call<'_>) -> Result<AccessibilityControlArgs, String> {
+    let optional = |key| call.get(key).map(|_| text(call, key, "")).transpose();
+    Ok(AccessibilityControlArgs {
+        scope: text(call, "scope", "")?,
+        expected_pid: range(call, "expected_pid", 0, 1, u32::MAX as i64)? as u32,
+        role: optional("role")?,
+        name: optional("name")?,
+        text: optional("text")?,
+        exact: boolean(call, "exact", true),
+    })
+}
+fn accessibility_operation<'a>(
+    call: &Call<'_>,
+    action: &'a str,
+) -> Result<accessibility::controls::Operation<'a>, String> {
+    match text(call, "operation", "action")?.as_str() {
+        "action" => Ok(accessibility::controls::Operation::Action(action)),
+        "focus" if call.get("action").is_none() => Ok(accessibility::controls::Operation::Focus),
+        "focus" => Err("accessibility.invoke operation=focus cannot include action".into()),
+        "reveal" if call.get("action").is_none() => Ok(accessibility::controls::Operation::Reveal),
+        "reveal" => Err("accessibility.invoke operation=reveal cannot include action".into()),
+        _ => Err("accessibility.invoke operation must be action, focus or reveal".into()),
+    }
 }
 fn click_watch_options(call: &Call<'_>) -> Result<crate::observation::ClickWatchOptions, String> {
     if text(call, "source", "browser")? != "browser" {
@@ -732,6 +795,19 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             }
         }
         match call.name {
+            "window.capture" | "screen.capture" => {
+                let target = if call.name == "window.capture" {
+                    "id"
+                } else {
+                    "window"
+                };
+                if call.get(target).is_some() && text(&call, target, "")?.trim().is_empty() {
+                    return Err(format!(
+                        "{}: {target} must name a nonempty window; an empty target cannot request a screen capture",
+                        call.name,
+                    ));
+                }
+            }
             "observe" | "watch" => {
                 if call.name == "observe" && call.get("watch").is_some() {
                     if ["source", "selector", "scope"]
@@ -1078,8 +1154,54 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
                     wait_budget = wait_budget.saturating_add(duration as u64);
                 }
             }
-            "accessibility.action" => {
-                range(&call, "index", 0, 0, 128)?;
+            "accessibility.windows" => {
+                range(&call, "expected_pid", 0, 1, u32::MAX as i64)?;
+            }
+            "accessibility.find" | "accessibility.invoke" | "accessibility.wait" => {
+                let args = accessibility_control_args(&call)?;
+                let query = args.query();
+                query.validate()?;
+                if call.name != "accessibility.find" {
+                    let timeout = range(&call, "timeout_ms", 3000, 1, 10_000)? as u64;
+                    if call.name == "accessibility.invoke" {
+                        let action = text(&call, "action", "press")?;
+                        let operation = accessibility_operation(&call, &action)?;
+                        let index = call
+                            .get("index")
+                            .map(|_| range(&call, "index", 0, 0, 4095).map(|value| value as usize))
+                            .transpose()?;
+                        accessibility::controls::validate_invoke(
+                            &query, operation, index, timeout,
+                        )?;
+                    } else {
+                        accessibility::controls::validate_wait(&query, timeout)?;
+                    }
+                    wait_budget = wait_budget.saturating_add(timeout);
+                }
+            }
+            "accessibility.action" | "accessibility.focus" => {
+                if call.name == "accessibility.action" {
+                    range(&call, "index", 0, 0, 63)?;
+                }
+                let role = call
+                    .get("expected_role")
+                    .map(|_| text(&call, "expected_role", ""))
+                    .transpose()?;
+                let name = call
+                    .get("expected_name")
+                    .map(|_| text(&call, "expected_name", ""))
+                    .transpose()?;
+                let pid = call
+                    .get("expected_pid")
+                    .map(|_| range(&call, "expected_pid", 1, 1, u32::MAX as i64))
+                    .transpose()?
+                    .map(|value| value as u32);
+                accessibility::validate_identity_target(
+                    &text(&call, "path", "")?,
+                    pid,
+                    role.as_deref(),
+                    name.as_deref(),
+                )?;
             }
             "accessibility.set_text" => {
                 let expected = call
@@ -1122,15 +1244,51 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             }
             "accessibility.tree" | "screen.text" => {
                 range(&call, "limit", 256, 1, 4096)?;
-                range(&call, "depth", 8, 1, 32)?;
+                range(&call, "depth", 8, 1, crate::accessibility::MAX_DEPTH as i64)?;
+                if call.name == "accessibility.tree" && call.get("scope").is_some() {
+                    accessibility::validate_scope(&text(&call, "scope", "")?)?;
+                }
             }
             "browser.viewport" => {
                 range(&call, "width", 0, 1, 8192)?;
                 range(&call, "height", 0, 1, 8192)?;
             }
+            "browser.capture" => {
+                crate::screenshot::validate_output_path(Path::new(&text(&call, "path", "")?))?;
+                crate::browser::capture::Format::parse(
+                    &text(&call, "format", "png")?,
+                    call.get("quality").map(|_| integer(&call, "quality", 80)),
+                )?;
+            }
+            "browser.click_at" | "browser.stroke" => {
+                crate::browser::pointer::button(&text(&call, "button", "left")?)?;
+                let points = if call.name == "browser.click_at" {
+                    crate::browser::pointer::validate_point(Point {
+                        x: number(&call, "x", 0.0),
+                        y: number(&call, "y", 0.0),
+                    })?;
+                    1
+                } else {
+                    let points = drawing::parse_points(&text(&call, "points", "")?)?;
+                    let duration = range(&call, "duration", 300, 0, 60_000)? as u32;
+                    crate::browser::pointer::validate_stroke(&points, duration)?;
+                    wait_budget = wait_budget.saturating_add(u64::from(duration));
+                    points.len()
+                };
+                drawing_points = drawing_points.saturating_add(points);
+                if drawing_points > drawing::MAX_PROGRAM_POINTS {
+                    return Err("program drawing points exceed 65536".into());
+                }
+            }
             "ide.open" => {
                 range(&call, "line", 1, 1, i32::MAX as i64)?;
                 range(&call, "column", 1, 1, i32::MAX as i64)?;
+            }
+            "clipboard.write" => {
+                crate::clipboard::validate_text(&text(&call, "text", "")?)?;
+            }
+            "clipboard.restore" => {
+                crate::clipboard::validate_path(&text(&call, "path", "")?)?;
             }
             "keyboard.key" => {
                 crate::platform::split_chord(&text(&call, "key", "")?)?;
@@ -1144,10 +1302,55 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
                 let duration = range(&call, "duration", 0, 1, crate::key_hold::MAX_HOLD_MS as i64)?;
                 wait_budget = wait_budget.saturating_add(duration as u64);
             }
-            "process.start" | "harness.start" => {
+            "browser.hold_keys" => {
+                Browser::validate_hold_keys(&text(&call, "keys", "")?)?;
+                let duration = range(&call, "duration", 0, 1, crate::key_hold::MAX_HOLD_MS as i64)?;
+                wait_budget = wait_budget.saturating_add(duration as u64);
+            }
+            "browser.control_keys" => {
+                Browser::validate_control_keys(
+                    &text(&call, "allowed_keys", "")?,
+                    &text(&call, "policy", "")?,
+                )?;
+                let timeout = range(&call, "timeout", 0, 1, crate::key_hold::MAX_HOLD_MS as i64)?;
+                wait_budget = wait_budget.saturating_add(timeout as u64);
+                if call.get("canvas").is_some() {
+                    crate::browser::canvas::validate_name(&text(&call, "canvas", "")?)?;
+                }
+            }
+            "browser.hold_until" => {
+                let condition = text(&call, "condition", "")?;
+                Browser::validate_hold_until(&text(&call, "keys", "")?, &condition)?;
+                let timeout = range(&call, "timeout", 0, 1, crate::key_hold::MAX_HOLD_MS as i64)?;
+                wait_budget = wait_budget.saturating_add(timeout as u64);
+                if call.get("canvas").is_some() {
+                    crate::browser::canvas::validate_condition(
+                        &text(&call, "canvas", "")?,
+                        &condition,
+                    )?;
+                }
+            }
+            "canvas.watch" => {
+                let ttl_ms = range(
+                    &call,
+                    "ttl_ms",
+                    5000,
+                    1,
+                    crate::browser::canvas::MAX_TTL_MS as i64,
+                )?;
+                crate::browser::canvas::validate_watch(
+                    &text(&call, "selector", "")?,
+                    &text(&call, "name", "")?,
+                    ttl_ms as u64,
+                )?;
+            }
+            "canvas.read" | "canvas.close" => {
+                crate::browser::canvas::validate_name(&text(&call, "name", "")?)?;
+            }
+            "process.start" | "process.launch" | "harness.start" => {
                 let program = text(
                     &call,
-                    if call.name == "process.start" {
+                    if call.name != "harness.start" {
                         "program"
                     } else {
                         "name"
@@ -1271,6 +1474,7 @@ pub struct Runtime {
     mouse: Option<Mouse>,
     desktop: Option<Desktop>,
     browser: Option<Browser>,
+    clipboard: crate::clipboard::Clipboard,
     android: Option<Android>,
     ios: Option<Ios>,
     serial: Option<SerialPort>,
@@ -1702,6 +1906,28 @@ impl Runtime {
     }
 
     fn step(&mut self, c: &Call<'_>, dynamic_wait_ms: &mut u64) -> Result<String, String> {
+        // Check at command boundaries, after any hold has released its input.
+        // The default-off path sends no additional CDP requests. Lifecycle and
+        // explicit background commands own their cleanup, including cancellation.
+        let boundary = !matches!(
+            c.name,
+            "browser.background" | "browser.close" | "browser.navigate" | "browser.select"
+        );
+        if boundary && let Some(browser) = self.browser.as_mut() {
+            browser.validate_background_document()?;
+        }
+        let outcome = self.step_inner(c, dynamic_wait_ms);
+        if boundary && let Some(browser) = self.browser.as_mut() {
+            return match (outcome, browser.validate_background_document()) {
+                (Ok(value), Ok(())) => Ok(value),
+                (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+                (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
+            };
+        }
+        outcome
+    }
+
+    fn step_inner(&mut self, c: &Call<'_>, dynamic_wait_ms: &mut u64) -> Result<String, String> {
         let done = || Ok("{\"ok\":true}".into());
         let cancellation = self.cancellation.clone();
         match c.name {
@@ -2033,6 +2259,9 @@ impl Runtime {
                 })?;
                 Ok("{\"ok\":true,\"delivery\":\"submitted\",\"application_confirmation_required\":true}".into())
             }
+            "clipboard.read" => self.clipboard.read(&cancellation),
+            "clipboard.write" => self.clipboard.write(&text(c, "text", "")?, &cancellation),
+            "clipboard.restore" => self.clipboard.restore(&text(c, "path", "")?, &cancellation),
             "keyboard.state" => self.desktop()?.keyboard_status(),
             "keyboard.num_lock" => {
                 cancellation.dispatch(|| self.desktop()?.num_lock(&text(c, "state", "")?))
@@ -2098,19 +2327,59 @@ impl Runtime {
                     },
                     "",
                 )?;
-                self.desktop()?.screenshot(
-                    Path::new(&text(c, "path", "")?),
-                    if window.is_empty() {
-                        None
-                    } else {
-                        Some(&window)
-                    },
-                )
+                let path = text(c, "path", "")?;
+                let target = if window.is_empty() {
+                    None
+                } else {
+                    Some(window.as_str())
+                };
+                #[cfg(target_os = "linux")]
+                {
+                    self.desktop()?.screenshot_with_cancellation(
+                        Path::new(&path),
+                        target,
+                        &cancellation,
+                    )
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    self.desktop()?.screenshot(Path::new(&path), target)
+                }
             }
-            "accessibility.tree" => accessibility::snapshot(
-                integer(c, "limit", 256) as usize,
-                integer(c, "depth", 8) as usize,
-            ),
+            "accessibility.windows" => {
+                accessibility::windows(integer(c, "expected_pid", 0) as u32, &cancellation)
+            }
+            "accessibility.find" | "accessibility.invoke" | "accessibility.wait" => {
+                let args = accessibility_control_args(c)?;
+                let query = args.query();
+                match c.name {
+                    "accessibility.find" => accessibility::controls::find(&query, &cancellation),
+                    "accessibility.wait" => accessibility::controls::wait(
+                        &query,
+                        integer(c, "timeout_ms", 3000) as u64,
+                        &cancellation,
+                    ),
+                    _ => {
+                        let action = text(c, "action", "press")?;
+                        accessibility::controls::invoke(
+                            &query,
+                            accessibility_operation(c, &action)?,
+                            c.get("index").map(|_| integer(c, "index", 0) as usize),
+                            integer(c, "timeout_ms", 3000) as u64,
+                            &cancellation,
+                        )
+                    }
+                }
+            }
+            "accessibility.tree" => {
+                let limit = integer(c, "limit", 256) as usize;
+                let depth = integer(c, "depth", 8) as usize;
+                if c.get("scope").is_some() {
+                    accessibility::snapshot_scope(&text(c, "scope", "")?, limit, depth)
+                } else {
+                    accessibility::snapshot(limit, depth)
+                }
+            }
             "screen.text" => {
                 if !boolean(c, "ocr", false) {
                     let value = accessibility::text(
@@ -2153,6 +2422,7 @@ impl Runtime {
                 self.browser()?.tabs()
             }
             "browser.select" => self.browser()?.select(&text(c, "id", "")?),
+            "browser.activate" => self.browser()?.activate(&cancellation),
             "browser.tabs" => self.browser()?.tabs(),
             "browser.viewport" => self.browser()?.viewport(
                 integer(c, "width", 0) as u32,
@@ -2163,6 +2433,18 @@ impl Runtime {
             "browser.text" => self.browser()?.text(),
             "browser.evaluate" => self.browser()?.evaluate(&text(c, "expression", "")?),
             "browser.click" => self.browser()?.click(&text(c, "selector", "")?),
+            "browser.click_at" => self.browser()?.click_at(
+                number(c, "x", 0.0),
+                number(c, "y", 0.0),
+                &text(c, "button", "left")?,
+                &cancellation,
+            ),
+            "browser.stroke" => self.browser()?.stroke(
+                &drawing::parse_points(&text(c, "points", "")?)?,
+                integer(c, "duration", 300) as u32,
+                &text(c, "button", "left")?,
+                &cancellation,
+            ),
             "browser.fill" => self
                 .browser()?
                 .fill(&text(c, "selector", "")?, &text(c, "text", "")?),
@@ -2172,7 +2454,62 @@ impl Runtime {
                 integer(c, "duration", 0) as u64,
                 &cancellation,
             ),
-            "browser.capture" => self.browser()?.screenshot(&text(c, "path", "")?),
+            "browser.hold_keys" => self.browser()?.hold_keys(
+                &text(c, "keys", "")?,
+                integer(c, "duration", 0) as u64,
+                &cancellation,
+            ),
+            "browser.background" => self
+                .browser()?
+                .background(boolean(c, "enabled", false), &cancellation),
+            "browser.control_keys" => {
+                let canvas = if c.get("canvas").is_some() {
+                    Some(text(c, "canvas", "")?)
+                } else {
+                    None
+                };
+                self.browser()?.control_keys(
+                    &text(c, "allowed_keys", "")?,
+                    &text(c, "policy", "")?,
+                    integer(c, "timeout", 0) as u64,
+                    canvas.as_deref(),
+                    &cancellation,
+                )
+            }
+            "browser.hold_until" => {
+                let keys = text(c, "keys", "")?;
+                let condition = text(c, "condition", "")?;
+                let condition = if c.get("canvas").is_some() {
+                    self.browser()?
+                        .canvas_condition(&text(c, "canvas", "")?, &condition)?
+                } else {
+                    condition
+                };
+                self.browser()?.hold_until(
+                    &keys,
+                    &condition,
+                    integer(c, "timeout", 0) as u64,
+                    &cancellation,
+                )
+            }
+            "canvas.watch" => self.browser()?.canvas_watch_with_history(
+                &text(c, "selector", "")?,
+                &text(c, "name", "")?,
+                integer(c, "ttl_ms", 5000) as u64,
+                boolean(c, "history", true),
+                &cancellation,
+            ),
+            "canvas.read" => self
+                .browser()?
+                .canvas_read(&text(c, "name", "")?, &cancellation),
+            "canvas.close" => self
+                .browser()?
+                .canvas_close(&text(c, "name", "")?, &cancellation),
+            "browser.capture" => self.browser()?.screenshot_with_format(
+                &text(c, "path", "")?,
+                &text(c, "format", "png")?,
+                c.get("quality").map(|_| integer(c, "quality", 80)),
+            ),
             "browser.close" => {
                 if let Some(mut browser) = self.browser.take() {
                     browser.close()?;
@@ -2185,6 +2522,11 @@ impl Runtime {
                 done()
             }
             "harness.list" => Ok(integrations::installed_harnesses()),
+            "process.launch" => integrations::launch(
+                &text(c, "program", "")?,
+                &text(c, "args", "")?,
+                &cancellation,
+            ),
             "process.start" => self
                 .processes
                 .start(&text(c, "program", "")?, &text(c, "args", "")?),
@@ -2215,10 +2557,38 @@ impl Runtime {
             "omarchy.themes" => integrations::omarchy_themes(),
             "omarchy.theme" => integrations::omarchy_theme(&text(c, "name", "")?),
 
-            "accessibility.action" => {
-                accessibility::action(&text(c, "path", "")?, integer(c, "index", 0) as usize)
+            "accessibility.action" | "accessibility.focus" => {
+                let role = c
+                    .get("expected_role")
+                    .map(|_| text(c, "expected_role", ""))
+                    .transpose()?;
+                let name = c
+                    .get("expected_name")
+                    .map(|_| text(c, "expected_name", ""))
+                    .transpose()?;
+                let pid = c
+                    .get("expected_pid")
+                    .map(|_| integer(c, "expected_pid", 0) as u32);
+                let path = text(c, "path", "")?;
+                if c.name == "accessibility.action" {
+                    accessibility::action_checked_with_cancel(
+                        &path,
+                        integer(c, "index", 0) as usize,
+                        pid,
+                        role.as_deref(),
+                        name.as_deref(),
+                        &cancellation,
+                    )
+                } else {
+                    accessibility::focus_checked_with_cancel(
+                        &path,
+                        pid,
+                        role.as_deref(),
+                        name.as_deref(),
+                        &cancellation,
+                    )
+                }
             }
-            "accessibility.focus" => accessibility::focus(&text(c, "path", "")?),
             "accessibility.set_text" => {
                 let expected = c
                     .get("expected_text")

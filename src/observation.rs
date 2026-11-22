@@ -33,8 +33,9 @@ struct CancelState {
 
 impl Cancellation {
     /// Bind an embedding host's permit to every input dispatch for the lifetime
-    /// of this token. A permit is held only while sending input, never while
-    /// waiting for a browser acknowledgement or an observation event.
+    /// of this token. Ordinary dispatch holds it only while sending input.
+    /// Native dispatch may also hold it across bounded, read-only preparation
+    /// after acquisition; it never spans an observation wait or browser reply.
     pub fn with_dispatch_guard(
         acquire: impl Fn() -> Result<Box<dyn Send>> + Send + Sync + 'static,
     ) -> Self {
@@ -93,6 +94,29 @@ impl Cancellation {
         };
         self.check()?;
         action()
+    }
+    /// Acquire a host permit before bounded, read-only native revalidation.
+    /// Preparation runs outside the dispatch lock, so cancellation can finish
+    /// while a read is pending. The final lock/check forbids subsequent input.
+    /// The caller supplies the same deadline/cancellation budget to preparation.
+    /// `action` must only send input. Existing synchronous native input APIs
+    /// still hold the lock until that one native call returns; this helper does
+    /// not make their replies asynchronous or add read RPCs to that lock.
+    pub(crate) fn dispatch_prepared<P, T>(
+        &self,
+        prepare: impl FnOnce() -> Result<P>,
+        action: impl FnOnce(P) -> Result<T>,
+    ) -> Result<T> {
+        self.check()?;
+        let _permit = match &self.0.acquire {
+            Some(acquire) => Some(acquire()?),
+            None => None,
+        };
+        self.check()?;
+        let prepared = prepare()?;
+        let _guard = self.0.dispatch.lock().unwrap_or_else(|e| e.into_inner());
+        self.check()?;
+        action(prepared)
     }
     /// Wait locally until the duration expires or cancellation wakes the wait.
     pub fn sleep(&self, duration: Duration) -> Result<()> {
@@ -781,5 +805,112 @@ mod tests {
             "host disabled input"
         );
         assert!(!sent);
+    }
+
+    #[test]
+    fn prepared_dispatch_does_not_hold_the_input_lock_during_reads() {
+        use std::sync::{atomic::AtomicUsize, mpsc};
+        struct Permit(Arc<AtomicBool>);
+        impl Drop for Permit {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let held = Arc::new(AtomicBool::new(false));
+        let acquired = held.clone();
+        let token = Cancellation::with_dispatch_guard(move || {
+            acquired.store(true, Ordering::Release);
+            Ok(Box::new(Permit(acquired.clone())))
+        });
+        let worker_token = token.clone();
+        let sent = Arc::new(AtomicUsize::new(0));
+        let worker_sent = sent.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker_token.dispatch_prepared(
+                || {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                },
+                |()| {
+                    worker_sent.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(held.load(Ordering::Acquire));
+        let (cancelled_tx, cancelled_rx) = mpsc::channel();
+        let canceller = std::thread::spawn(move || {
+            token.cancel();
+            cancelled_tx.send(()).unwrap();
+        });
+        let cancelled_during_read = cancelled_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+        // Release before assertions, including when a regression holds the lock.
+        release_tx.send(()).unwrap();
+        let error = worker.join().unwrap().unwrap_err();
+        canceller.join().unwrap();
+        assert!(
+            cancelled_during_read,
+            "cancellation waited for read-only preparation"
+        );
+        assert!(error.starts_with("cancelled:"), "{error}");
+        assert_eq!(sent.load(Ordering::SeqCst), 0);
+        assert!(!held.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn prepared_dispatch_holds_and_releases_the_permit_in_order() {
+        struct Permit(Arc<Mutex<Vec<&'static str>>>);
+        impl Drop for Permit {
+            fn drop(&mut self) {
+                self.0.lock().unwrap().push("release");
+            }
+        }
+        for fail_prepare in [false, true] {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let acquired = events.clone();
+            let token = Cancellation::with_dispatch_guard(move || {
+                acquired.lock().unwrap().push("permit");
+                Ok(Box::new(Permit(acquired.clone())))
+            });
+            let result = token.dispatch_prepared(
+                || {
+                    events.lock().unwrap().push("prepare");
+                    if fail_prepare {
+                        Err("preparation failed".into())
+                    } else {
+                        Ok(7)
+                    }
+                },
+                |prepared| {
+                    assert_eq!(prepared, 7);
+                    events.lock().unwrap().push("input");
+                    Ok(9)
+                },
+            );
+            if fail_prepare {
+                assert_eq!(result.unwrap_err(), "preparation failed");
+                assert_eq!(&*events.lock().unwrap(), &["permit", "prepare", "release"]);
+            } else {
+                assert_eq!(result.unwrap(), 9);
+                assert_eq!(
+                    &*events.lock().unwrap(),
+                    &["permit", "prepare", "input", "release"]
+                );
+            }
+        }
+        let denied = Cancellation::with_dispatch_guard(|| Err("permission denied".into()));
+        let result = denied.dispatch_prepared(
+            || -> Result<()> {
+                panic!("denied permission must not prepare");
+            },
+            |()| -> Result<()> {
+                panic!("denied permission must not submit");
+            },
+        );
+        assert_eq!(result.unwrap_err(), "permission denied");
     }
 }

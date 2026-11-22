@@ -1,6 +1,8 @@
 //! IDE, managed-process and Omarchy adapters using literal argument vectors.
 //! Programs are never wrapped in a shell. The application owns its allowlist.
+mod app_launch;
 use crate::json::{quote, with_value};
+pub use app_launch::launch;
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};

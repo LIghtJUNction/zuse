@@ -65,6 +65,258 @@ fn focused_windows(desktop: &Desktop) -> Vec<String> {
     .unwrap()
 }
 
+fn role_at(path: &str) -> String {
+    json::with_value(&accessibility::node(path).unwrap(), |node| {
+        json::text(node.get("role").unwrap())
+    })
+    .unwrap()
+}
+
+fn focused_at(path: &str) -> bool {
+    json::with_value(&accessibility::node(path).unwrap(), |node| {
+        Ok(node.get("focused").unwrap().boolean() == Some(true))
+    })
+    .unwrap()
+}
+
+fn assert_scoped_controls(editor: &str, button: &str, pid: u32) {
+    let window = editor.split('/').take(3).collect::<Vec<_>>().join("/");
+    for scope in [window.as_str(), editor] {
+        let source = format!(
+            "accessibility.tree(scope={},limit=4096,depth=64)",
+            json::quote(scope),
+        );
+        let result = Runtime::new()
+            .execute(
+                &source,
+                Options {
+                    read_only: true,
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+        assert!(!runtime::failed(&result), "{result}");
+        json::with_value(&result, |root| {
+            let snapshot = root
+                .get("results")
+                .unwrap()
+                .elements()
+                .next()
+                .unwrap()
+                .get("value")
+                .unwrap();
+            assert_eq!(snapshot.get("truncated").unwrap().boolean(), Some(false));
+            assert_eq!(snapshot.get("errors").unwrap().integer().unwrap(), 0);
+            let mut paths = Vec::new();
+            for node in snapshot.get("nodes").unwrap().elements() {
+                let path = json::text(node.get("path").unwrap())?;
+                assert!(path == scope || path.starts_with(&format!("{scope}/")));
+                assert_eq!(node.get("pid").unwrap().integer().unwrap(), i64::from(pid));
+                paths.push(path);
+            }
+            assert!(paths.iter().any(|path| path == editor));
+            assert_eq!(paths.iter().any(|path| path == button), scope == window);
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+fn reject_control_identity_mismatches(editor: &str, button: &str, label: &str, pid: u32) {
+    let button_role = role_at(button);
+    let editor_role = role_at(editor);
+    let wrong_pid = if pid == u32::MAX { 1 } else { pid + 1 };
+    let before = text_at(editor);
+    accessibility::focus_checked(
+        editor,
+        Some(pid),
+        Some(&editor_role),
+        Some("Zuse editable fixture"),
+    )
+    .unwrap();
+    assert!(focused_at(editor));
+    for (expected_pid, expected_role, expected_name, field) in [
+        (
+            wrong_pid,
+            button_role.as_str(),
+            "Zuse action fixture",
+            "expected_pid",
+        ),
+        (
+            pid,
+            "incorrect role",
+            "Zuse action fixture",
+            "expected_role",
+        ),
+        (
+            pid,
+            button_role.as_str(),
+            "Zuse action Fixture",
+            "expected_name",
+        ),
+        (pid, button_role.as_str(), "", "expected_name"),
+    ] {
+        let error = accessibility::action_checked(
+            button,
+            0,
+            Some(expected_pid),
+            Some(expected_role),
+            Some(expected_name),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("stale_target:") && error.contains(field),
+            "{error}"
+        );
+        assert_eq!(text_at(label), "Zuse action waiting");
+    }
+    for (expected_pid, expected_role, expected_name, field) in [
+        (
+            wrong_pid,
+            button_role.as_str(),
+            "Zuse action fixture",
+            "expected_pid",
+        ),
+        (
+            pid,
+            "incorrect role",
+            "Zuse action fixture",
+            "expected_role",
+        ),
+        (
+            pid,
+            button_role.as_str(),
+            "Zuse action Fixture",
+            "expected_name",
+        ),
+    ] {
+        let error = accessibility::focus_checked(
+            button,
+            Some(expected_pid),
+            Some(expected_role),
+            Some(expected_name),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("stale_target:") && error.contains(field),
+            "{error}"
+        );
+        assert!(focused_at(editor));
+        assert!(!focused_at(button));
+        assert_eq!(text_at(editor), before);
+        assert_eq!(text_at(label), "Zuse action waiting");
+    }
+
+    // Exercise the DSL dispatch too: dropping an expected field between
+    // preflight and the native call would trigger the real button below.
+    for operation in ["accessibility.action", "accessibility.focus"] {
+        let source = format!(
+            "{operation}(path={},expected_pid={pid},expected_role={},expected_name=\"different control\");accessibility.action(path={})",
+            json::quote(button),
+            json::quote(&button_role),
+            json::quote(button),
+        );
+        let result = Runtime::new().execute(&source, Options::default()).unwrap();
+        assert!(
+            runtime::failed(&result) && result.contains("stale_target"),
+            "{result}"
+        );
+        assert!(focused_at(editor));
+        assert!(!focused_at(button));
+        assert_eq!(text_at(label), "Zuse action waiting");
+    }
+
+    for source in [
+        format!(
+            "accessibility.action(path={},index=0,expected_pid={pid},expected_role={},expected_name=\"Zuse action fixture\")",
+            json::quote(button),
+            json::quote(&button_role),
+        ),
+        format!(
+            "accessibility.focus(path={},expected_pid={pid},expected_role={},expected_name=\"Zuse action fixture\")",
+            json::quote(button),
+            json::quote(&button_role),
+        ),
+    ] {
+        let mut denied = Runtime::new();
+        denied.set_cancellation(Cancellation::with_dispatch_guard(|| {
+            Err("fixture input permission revoked".into())
+        }));
+        let result = denied.execute(&source, Options::default()).unwrap();
+        assert!(
+            runtime::failed(&result) && result.contains("permission revoked"),
+            "{result}"
+        );
+        let mut cancelled = Runtime::new();
+        cancelled.cancellation().cancel();
+        let result = cancelled.execute(&source, Options::default()).unwrap();
+        assert!(
+            runtime::failed(&result) && result.contains("cancelled"),
+            "{result}"
+        );
+        assert!(focused_at(editor));
+        assert!(!focused_at(button));
+        assert_eq!(text_at(editor), before);
+        assert_eq!(text_at(label), "Zuse action waiting");
+    }
+}
+
+fn accept_guarded_controls(editor: &str, pid: u32) {
+    // These existing duplicate buttons have no clicked callback. Do not change
+    // the shared waiting label: the other native test also uses it to detect
+    // accidental input, and independent tests must not depend on run order.
+    let duplicate = json::with_value(&accessibility::snapshot(256, 12).unwrap(), |root| {
+        let node = root
+            .get("nodes")
+            .unwrap()
+            .elements()
+            .find(|node| {
+                node.get("name")
+                    .and_then(|name| name.string())
+                    .is_some_and(|name| name.matches("Zuse duplicate target"))
+            })
+            .unwrap();
+        json::text(node.get("path").unwrap())
+    })
+    .unwrap();
+    let result = accessibility::action_checked(
+        &duplicate,
+        0,
+        Some(pid),
+        Some(&role_at(&duplicate)),
+        Some("Zuse duplicate target"),
+    )
+    .unwrap();
+    json::with_value(&result, |root| {
+        assert_eq!(root.get("completed").unwrap().boolean(), Some(true));
+        Ok(())
+    })
+    .unwrap();
+    accessibility::focus_checked(
+        &duplicate,
+        Some(pid),
+        Some(&role_at(&duplicate)),
+        Some("Zuse duplicate target"),
+    )
+    .unwrap();
+    assert!(focused_at(&duplicate));
+    assert!(!focused_at(editor));
+    let result = accessibility::focus_checked(
+        editor,
+        Some(pid),
+        Some(&role_at(editor)),
+        Some("Zuse editable fixture"),
+    )
+    .unwrap();
+    json::with_value(&result, |root| {
+        assert_eq!(root.get("focused").unwrap().boolean(), Some(true));
+        Ok(())
+    })
+    .unwrap();
+    assert!(focused_at(editor));
+    assert!(!focused_at(&duplicate));
+}
+
 #[test]
 #[ignore = "run tests/run_accessibility_native.py --test-target accessibility_guard_native"]
 fn conditional_draft_edits_use_the_native_object_and_preserve_other_actions() {
@@ -77,6 +329,9 @@ fn conditional_draft_edits_use_the_native_object_and_preserve_other_actions() {
     let (label, _) = named_node("Zuse action waiting");
     let (password, _) = named_node("Zuse secret fixture");
     let desktop = Desktop::connect().unwrap();
+
+    assert_scoped_controls(&editor, &button, pid);
+    reject_control_identity_mismatches(&editor, &button, &label, pid);
     let focus = focused_windows(&desktop);
 
     for existing in ["existing draft", " "] {
@@ -180,6 +435,7 @@ fn conditional_draft_edits_use_the_native_object_and_preserve_other_actions() {
         focus,
         "editing must not change native focus"
     );
+    accept_guarded_controls(&editor, pid);
 }
 
 #[test]

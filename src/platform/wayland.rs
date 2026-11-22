@@ -1,9 +1,13 @@
+#[path = "wayland_capture.rs"]
+mod capture;
 #[path = "wayland_evdev.rs"]
 mod evdev;
 #[path = "wayland_keyboard.rs"]
 mod keyboard;
 #[path = "wayland_keymap.rs"]
 mod keymap;
+#[path = "wayland_pointer.rs"]
+mod pointer;
 #[path = "wayland_xkb.rs"]
 mod xkb;
 use super::super::{Result, image_metadata, quote, split_chord, validate_text};
@@ -20,6 +24,7 @@ use zmcpio::json::{Document, Kind, Limits, Token};
 pub(super) struct Wayland {
     socket: Option<PathBuf>,
     modern: bool,
+    pointer: Option<pointer::Connection>,
 }
 fn installed(name: &str) -> bool {
     std::env::var_os("PATH")
@@ -80,6 +85,7 @@ impl Wayland {
         let mut this = Self {
             socket,
             modern: false,
+            pointer: None,
         };
         if let Ok(version) = this.request("j/version") {
             let mut tokens = [Token::EMPTY; 128];
@@ -106,7 +112,7 @@ impl Wayland {
     }
     pub fn capabilities(&self) -> String {
         format!(
-            "{{\"backend\":\"wayland\",\"compositor\":{},\"pointer\":{},\"windows\":{},\"keyboard\":{},\"capture\":{},\"nativeIpc\":{},\"keyboard_state\":{},\"num_lock\":{},\"operationMarker\":{{\"availability\":\"protocol-dependent\",\"mode\":\"last-operation-point\",\"input\":\"shared-user-pointer\",\"clickThrough\":true,\"independentPointer\":false,\"requires\":[\"wlr-layer-shell\",\"xdg-output\",\"ARGB8888\"]}},\"inputHelper\":\"native Wayland virtual keyboard; pointer buttons/wheel use authorized ydotool daemon\",\"windowCapture\":\"composited visible region\",\"backgroundInput\":\"Hyprland targeted shortcuts\",\"backgroundText\":\"current keymap plain/Shift levels; unavailable characters rejected before input\",\"keyboardState\":\"Hyprland 0.55+: current keyboard checked separately from other devices; no held keys, Caps off, group 0; focused chords preserve verified Num Lock; text and background chords require Num off; sticky/custom modifier state unsupported\"}}",
+            "{{\"backend\":\"wayland\",\"compositor\":{},\"pointer\":{},\"windows\":{},\"keyboard\":{},\"capture\":{},\"nativeIpc\":{},\"keyboard_state\":{},\"num_lock\":{},\"operationMarker\":{{\"availability\":\"protocol-dependent\",\"mode\":\"last-operation-point\",\"input\":\"shared-user-pointer\",\"clickThrough\":true,\"independentPointer\":false,\"requires\":[\"wlr-layer-shell\",\"xdg-output\",\"ARGB8888\"]}},\"inputHelper\":\"native Wayland virtual keyboard; pointer buttons/wheel use authorized ydotool daemon\",\"windowCapture\":\"protocol-dependent: native toplevel export v2 with full-address mapping; no desktop-region fallback\",\"backgroundInput\":\"Hyprland targeted shortcuts\",\"backgroundText\":\"current keymap plain/Shift levels; unavailable characters rejected before input\",\"keyboardState\":\"Hyprland 0.55+: current keyboard checked separately from other devices; no held keys, Caps off, group 0; focused chords preserve verified Num Lock; text and background chords require Num off; sticky/custom modifier state unsupported\"}}",
             if self.socket.is_some() {
                 "\"hyprland\""
             } else {
@@ -314,10 +320,24 @@ impl Wayland {
     }
     pub fn move_to(&mut self, x: i32, y: i32) -> Result<()> {
         if self.socket.is_some() {
+            // Discover and create the frame source before moving. Hyprland's
+            // precise warp sends motion without a wl_pointer.frame; clients
+            // may otherwise defer it until the following button event.
+            if self.pointer.is_none() {
+                self.pointer = Some(pointer::Connection::open()?);
+            }
             self.dispatch(
                 &format!("movecursor {x} {y}"),
                 &format!("hl.dsp.cursor.move({{x={x},y={y}}})"),
-            )
+            )?;
+            let result = self.pointer.as_mut().unwrap().finish_motion();
+            if let Err(error) = result {
+                self.pointer = None;
+                return Err(format!(
+                    "pointer position was changed, but its motion frame was not confirmed: {error}; subsequent input was not sent"
+                ));
+            }
+            Ok(())
         } else {
             let mut c = Command::new("ydotool");
             c.args([
@@ -619,29 +639,51 @@ impl Wayland {
                 return Err("unsupported_state: keyboard changed while preparing text".into());
             }
             Ok(())
-        })
+        })?;
+        if self.keyboard_state(false)? != before {
+            return Err(
+                "input completed but the original active keyboard state was not restored".into(),
+            );
+        }
+        Ok(())
     }
     pub fn type_into(&mut self, id: &str, text: &str) -> Result<()> {
         validate_text(text)?;
         keymap::validate(text)?;
         Self::selector(id)?;
+        if text.is_empty() {
+            return Ok(());
+        }
         if self.socket.is_none() {
             return Err("background text requires Hyprland targeted input".into());
         }
-        if id != "active" {
-            let windows = self.windows()?;
-            let mut tokens = vec![Token::EMPTY; 32_768];
-            let document = Document::parse(windows.as_bytes(), &mut tokens, Limits::default())
-                .map_err(|e| e.to_string())?;
-            if !document.root().elements().any(|w| {
-                w.get("id")
-                    .and_then(|v| v.string())
-                    .is_some_and(|s| s.matches(id))
-            }) {
-                return Err("Hyprland target window is unavailable".into());
+        let target = focused_text_target(&self.windows()?, id)?;
+        if let Some(target) = &target {
+            let before = self.keyboard_state(false)?;
+            if before.main_is_last {
+                before.require_restorable_keyboard()?;
+                // Keep the explicit window identity while using the Unicode
+                // keymap available to its already focused surface.
+                keyboard::type_text(text, || {
+                    let current = self.keyboard_state(false)?;
+                    current.require_restorable_keyboard()?;
+                    if current != before {
+                        return Err(
+                            "unsupported_state: keyboard changed while preparing text".into()
+                        );
+                    }
+                    verify_focused_text_target(target, &self.windows()?)
+                })?;
+                if self.keyboard_state(false)? != before {
+                    return Err(
+                        "input completed but the original active keyboard state was not restored"
+                            .into(),
+                    );
+                }
+                return Ok(());
             }
         }
-        let selector = Self::selector(id)?;
+        let selector = Self::selector(target.as_ref().map_or(id, |target| &target.id))?;
         // Resolve the whole string without changing the live keymap. This
         // remains valid when an input method restores the original map while
         // Hyprland temporarily routes a shortcut to an unfocused surface.
@@ -681,53 +723,30 @@ impl Wayland {
         )
     }
     pub fn screenshot(&self, path: &Path, window: Option<&str>) -> Result<String> {
-        let mut command = Command::new("grim");
+        self.screenshot_with_cancellation(
+            path,
+            window,
+            &crate::observation::Cancellation::default(),
+        )
+    }
+
+    pub fn screenshot_with_cancellation(
+        &self,
+        path: &Path,
+        window: Option<&str>,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        cancellation.check()?;
         if let Some(id) = window {
-            Self::selector(id)?;
-            let response = if id == "active" {
-                self.request("j/activewindow")?
-            } else {
-                self.request("j/clients")?
+            let Some(socket) = self.socket.as_deref() else {
+                return Err("unsupported_state: surface-bound Wayland window capture requires Hyprland IPC and the toplevel mapping/export protocols".into());
             };
-            let mut tokens = vec![Token::EMPTY; 32_768];
-            let doc = Document::parse(response.as_bytes(), &mut tokens, Limits::default())
-                .map_err(|e| e.to_string())?;
-            let node = if id == "active" {
-                doc.root()
-            } else {
-                doc.root()
-                    .elements()
-                    .find(|n| {
-                        n.get("address")
-                            .and_then(|v| v.string())
-                            .is_some_and(|s| s.matches(id))
-                    })
-                    .ok_or("Hyprland window not found")?
-            };
-            let at = node
-                .get("at")
-                .ok_or("missing window coordinates")?
-                .elements()
-                .collect::<Vec<_>>();
-            let size = node
-                .get("size")
-                .ok_or("missing window dimensions")?
-                .elements()
-                .collect::<Vec<_>>();
-            if at.len() != 2 || size.len() != 2 {
-                return Err("invalid Hyprland window geometry".into());
-            }
-            let x = at[0].integer().map_err(|e| e.to_string())?;
-            let y = at[1].integer().map_err(|e| e.to_string())?;
-            let w = size[0].integer().map_err(|e| e.to_string())?;
-            let h = size[1].integer().map_err(|e| e.to_string())?;
-            if w <= 0 || h <= 0 || w > 16_384 || h > 16_384 {
-                return Err("invalid capture geometry".into());
-            }
-            command.args(["-g", &format!("{x},{y} {w}x{h}")]);
+            return capture::capture(path, id, socket, cancellation);
         }
+        let mut command = Command::new("grim");
         command.arg("--").arg(path);
         run(command)?;
+        cancellation.check()?;
         let mut file = File::open(path).map_err(|e| e.to_string())?;
         let mut header = [0; 24];
         file.read_exact(&mut header).map_err(|e| e.to_string())?;
@@ -736,11 +755,150 @@ impl Wayland {
         }
         let width = u32::from_be_bytes(header[16..20].try_into().map_err(|_| "PNG width")?);
         let height = u32::from_be_bytes(header[20..24].try_into().map_err(|_| "PNG height")?);
-        let mut metadata = image_metadata(path, width, height, "wayland");
-        metadata.pop();
-        metadata.push_str(",\"captureMode\":\"composited-region\"}");
-        Ok(metadata)
+        capture_metadata(path, width, height, None)
     }
+}
+
+fn focused_text_target(windows: &str, id: &str) -> Result<Option<crate::target::TargetWindow>> {
+    let focused = crate::json::with_value(windows, |root| {
+        let mut matches = root.elements().filter(|window| {
+            if id == "active" {
+                window.get("focused").and_then(|v| v.boolean()) == Some(true)
+            } else {
+                window
+                    .get("id")
+                    .and_then(|v| v.string())
+                    .is_some_and(|v| v.matches(id))
+            }
+        });
+        let selected = matches
+            .next()
+            .ok_or("Hyprland target window is unavailable")?;
+        if matches.next().is_some() {
+            return Err("ambiguous_target: a unique text window is required".into());
+        }
+        Ok(selected.get("focused").and_then(|v| v.boolean()) == Some(true))
+    })?;
+    if focused {
+        crate::target::TargetWindow::from_windows(windows, id).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn verify_focused_text_target(target: &crate::target::TargetWindow, windows: &str) -> Result<()> {
+    let current = crate::target::TargetWindow::from_windows(windows, &target.id)?;
+    if current != *target || !current.focused {
+        return Err("stale_target: text window identity, geometry, scale or focus changed before input; no text was sent".into());
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+struct CaptureRegion {
+    window: String,
+    pid: Option<i64>,
+    monitor: Option<i64>,
+    mapped: Option<bool>,
+    x: i64,
+    y: i64,
+    width: i64,
+    height: i64,
+}
+
+impl CaptureRegion {
+    fn from_snapshot(snapshot: &str, id: &str) -> Result<Self> {
+        let mut tokens = vec![Token::EMPTY; 32_768];
+        let doc = Document::parse(snapshot.as_bytes(), &mut tokens, Limits::default())
+            .map_err(|e| e.to_string())?;
+        let node = if id == "active" {
+            doc.root()
+        } else {
+            doc.root()
+                .elements()
+                .find(|n| {
+                    n.get("address")
+                        .and_then(|v| v.string())
+                        .is_some_and(|s| s.matches(id))
+                })
+                .ok_or("Hyprland window not found")?
+        };
+        let window = node
+            .get("address")
+            .and_then(|v| v.string())
+            .map(|v| v.chars().collect::<String>())
+            .filter(|v| !v.is_empty())
+            .ok_or("missing capture window identity")?;
+        let at = node
+            .get("at")
+            .ok_or("missing window coordinates")?
+            .elements()
+            .collect::<Vec<_>>();
+        let size = node
+            .get("size")
+            .ok_or("missing window dimensions")?
+            .elements()
+            .collect::<Vec<_>>();
+        if at.len() != 2 || size.len() != 2 {
+            return Err("invalid Hyprland window geometry".into());
+        }
+        let x = at[0].integer().map_err(|e| e.to_string())?;
+        let y = at[1].integer().map_err(|e| e.to_string())?;
+        let width = size[0].integer().map_err(|e| e.to_string())?;
+        let height = size[1].integer().map_err(|e| e.to_string())?;
+        if !(1..=16_384).contains(&width) || !(1..=16_384).contains(&height) {
+            return Err("invalid capture geometry".into());
+        }
+        Ok(Self {
+            window,
+            pid: node.get("pid").and_then(|v| v.integer().ok()),
+            monitor: node.get("monitor").and_then(|v| v.integer().ok()),
+            mapped: node.get("mapped").and_then(|v| v.boolean()),
+            x,
+            y,
+            width,
+            height,
+        })
+    }
+
+    fn verify(&self, after: &Self) -> Result<()> {
+        if self != after {
+            return Err("stale_target: window identity or geometry changed during capture; the output file was not replaced".into());
+        }
+        Ok(())
+    }
+}
+
+fn capture_metadata(
+    path: &Path,
+    width: u32,
+    height: u32,
+    region: Option<&CaptureRegion>,
+) -> Result<String> {
+    if width == 0 || height == 0 {
+        return Err("capture utility returned an empty PNG".into());
+    }
+    let mut metadata = image_metadata(path, width, height, "wayland");
+    metadata.pop();
+    if let Some(region) = region {
+        // This buffer contains the selected toplevel, not a desktop rectangle.
+        // Fractional scaling can round each axis differently.
+        metadata.push_str(
+            ",\"captureMode\":\"hyprland-toplevel-export\",\"coordinateSpace\":\"window-local\"",
+        );
+        metadata.push_str(&format!(
+            ",\"window\":{},\"logicalRegion\":{{\"x\":0,\"y\":0,\"width\":{},\"height\":{}}},\"pixelsPerLogicalUnit\":{{\"x\":{},\"y\":{}}}",
+            quote(&region.window),
+            region.width,
+            region.height,
+            f64::from(width) / region.width as f64,
+            f64::from(height) / region.height as f64,
+        ));
+    } else {
+        metadata.push_str(",\"captureMode\":\"composited-screen\"");
+    }
+    metadata.push('}');
+    Ok(metadata)
 }
 
 fn window_rows(clients: &str, monitors: &str, active: &str) -> Result<String> {
@@ -1011,9 +1169,184 @@ fn keyboard_status_json(json: &str, held: bool) -> Result<String> {
 #[cfg(test)]
 mod state_tests {
     use super::{
-        canonical_keyboard_address, check_keyboard_state, keyboard_status_json,
-        native_hold_identity, parse_held_keys, window_rows,
+        CaptureRegion, canonical_keyboard_address, capture_metadata, check_keyboard_state,
+        focused_text_target, keyboard_status_json, native_hold_identity, parse_held_keys,
+        verify_focused_text_target, window_rows,
     };
+
+    const TEXT_WINDOWS: &str = r#"[{"id":"0x1","pid":42,"x":10,"y":20,"width":980,"height":1221,"scale":1.25,"focused":true,"mapped":true}]"#;
+
+    #[test]
+    fn focused_text_keeps_the_explicit_window_and_preserves_background_selection() {
+        let explicit = focused_text_target(TEXT_WINDOWS, "0x1").unwrap().unwrap();
+        assert_eq!(explicit.id, "0x1");
+        assert_eq!(explicit.pid, 42);
+        assert_eq!(
+            focused_text_target(TEXT_WINDOWS, "active")
+                .unwrap()
+                .unwrap(),
+            explicit
+        );
+        let background = TEXT_WINDOWS.replace("\"focused\":true", "\"focused\":false");
+        assert!(focused_text_target(&background, "0x1").unwrap().is_none());
+        assert!(focused_text_target(&background, "active").is_err());
+        assert!(focused_text_target(TEXT_WINDOWS, "0x2").is_err());
+    }
+
+    #[test]
+    fn focused_text_rechecks_identity_geometry_and_focus_before_unicode_input() {
+        let selected = focused_text_target(TEXT_WINDOWS, "0x1").unwrap().unwrap();
+        verify_focused_text_target(&selected, TEXT_WINDOWS).unwrap();
+        for changed in [
+            TEXT_WINDOWS.replace("\"focused\":true", "\"focused\":false"),
+            TEXT_WINDOWS.replace("\"pid\":42", "\"pid\":43"),
+            TEXT_WINDOWS.replace("\"x\":10", "\"x\":11"),
+            TEXT_WINDOWS.replace("\"height\":1221", "\"height\":1222"),
+            TEXT_WINDOWS.replace("\"scale\":1.25", "\"scale\":1.5"),
+            TEXT_WINDOWS.replace("\"mapped\":true", "\"mapped\":false"),
+            TEXT_WINDOWS.replace("0x1", "0x2"),
+        ] {
+            assert!(
+                verify_focused_text_target(&selected, &changed)
+                    .unwrap_err()
+                    .starts_with("stale_target:")
+            );
+        }
+    }
+
+    #[test]
+    fn capture_receipt_maps_fractional_png_pixels_to_window_local_coordinates() {
+        let snapshot = r#"[{"address":"0x1","at":[40,50],"size":[800,600]},{"address":"0x2","pid":42,"monitor":1,"at":[-980,48],"size":[980,1221]}]"#;
+        let region = CaptureRegion::from_snapshot(snapshot, "0x2").unwrap();
+        let metadata = capture_metadata(
+            std::path::Path::new("window.png"),
+            1225,
+            1526,
+            Some(&region),
+        )
+        .unwrap();
+        crate::json::with_value(&metadata, |root| {
+            assert!(root.get("window").unwrap().string().unwrap().matches("0x2"));
+            assert_eq!(root.get("width").unwrap().integer().unwrap(), 1225);
+            assert_eq!(root.get("height").unwrap().integer().unwrap(), 1526);
+            let logical = root.get("logicalRegion").unwrap();
+            assert_eq!(logical.get("x").unwrap().integer().unwrap(), 0);
+            assert_eq!(logical.get("y").unwrap().integer().unwrap(), 0);
+            assert!(
+                root.get("captureMode")
+                    .unwrap()
+                    .string()
+                    .unwrap()
+                    .matches("hyprland-toplevel-export")
+            );
+            assert!(
+                root.get("coordinateSpace")
+                    .unwrap()
+                    .string()
+                    .unwrap()
+                    .matches("window-local")
+            );
+            assert_eq!(logical.get("width").unwrap().integer().unwrap(), 980);
+            assert_eq!(logical.get("height").unwrap().integer().unwrap(), 1221);
+            let ratio = root.get("pixelsPerLogicalUnit").unwrap();
+            let x: f64 = ratio.get("x").unwrap().raw().parse().unwrap();
+            let y: f64 = ratio.get("y").unwrap().raw().parse().unwrap();
+            assert_eq!(x, 1.25);
+            assert!(y < x);
+            assert!((1225.0 / x - 980.0).abs() < 1e-9);
+            assert!((1526.0 / y - 1221.0).abs() < 1e-9);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn capture_rejects_a_moved_resized_or_replaced_window() {
+        let snapshot = r#"{"address":"0x1","pid":42,"monitor":1,"mapped":true,"at":[40,50],"size":[980,1221]}"#;
+        let before = CaptureRegion::from_snapshot(snapshot, "active").unwrap();
+        before
+            .verify(&CaptureRegion::from_snapshot(snapshot, "active").unwrap())
+            .unwrap();
+        for changed in [
+            snapshot.replace("0x1", "0x2"),
+            snapshot.replace("\"pid\":42", "\"pid\":43"),
+            snapshot.replace("\"monitor\":1", "\"monitor\":2"),
+            snapshot.replace("\"mapped\":true", "\"mapped\":false"),
+            snapshot.replace("[40,50]", "[41,50]"),
+            snapshot.replace("[40,50]", "[40,51]"),
+            snapshot.replace("[980,1221]", "[981,1221]"),
+            snapshot.replace("[980,1221]", "[980,1222]"),
+        ] {
+            let after = CaptureRegion::from_snapshot(&changed, "active").unwrap();
+            let error = before.verify(&after).unwrap_err();
+            assert!(error.starts_with("stale_target:"));
+            assert!(error.contains("output file was not replaced"));
+        }
+        assert!(CaptureRegion::from_snapshot("[]", "0x1").is_err());
+        for size in ["[0,1221]", "[980,-1]", "[980,16385]", "[980]"] {
+            assert!(
+                CaptureRegion::from_snapshot(&snapshot.replace("[980,1221]", size), "active")
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn window_capture_refuses_before_ipc_helper_or_output_changes() {
+        let desktop = super::Wayland {
+            socket: None,
+            modern: false,
+            pointer: None,
+        };
+        let path = std::env::temp_dir().join(format!(
+            "zuse-window-capture-refusal-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        for target in ["0x123400001234", "active", ""] {
+            let error = desktop.screenshot(&path, Some(target)).unwrap_err();
+            assert!(error.starts_with("unsupported_state:"), "{error}");
+            assert!(error.contains("surface-bound"), "{error}");
+            assert!(!path.exists());
+        }
+        std::fs::write(&path, b"existing caller file").unwrap();
+        let result = desktop.screenshot(&path, Some("0x1"));
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing caller file");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn full_screen_capture_does_not_invent_a_window_coordinate_mapping() {
+        let metadata =
+            capture_metadata(std::path::Path::new("screen.png"), 2560, 1600, None).unwrap();
+        crate::json::with_value(&metadata, |root| {
+            assert!(root.get("window").is_none());
+            assert!(root.get("logicalRegion").is_none());
+            assert!(root.get("pixelsPerLogicalUnit").is_none());
+            assert!(root.get("coordinateSpace").is_none());
+            assert!(
+                root.get("captureMode")
+                    .unwrap()
+                    .string()
+                    .unwrap()
+                    .matches("composited-screen")
+            );
+            assert_eq!(root.get("width").unwrap().integer().unwrap(), 2560);
+            assert_eq!(root.get("height").unwrap().integer().unwrap(), 1600);
+            Ok(())
+        })
+        .unwrap();
+        for (width, height) in [(0, 1), (1, 0)] {
+            assert!(
+                capture_metadata(std::path::Path::new("empty.png"), width, height, None).is_err()
+            );
+        }
+    }
+
     #[test]
     fn native_identity_requires_complete_globally_unique_device_inventory() {
         let devices = r#"{"mice":[{"name":"pointer"}],"keyboards":[{"name":"at-translated-set-2-keyboard","address":"0x1","main":true},{"name":"hl-virtual-keyboard-fcitx5","address":"0x2","main":false}],"tablets":[],"touch":[]}"#;
@@ -1258,6 +1591,7 @@ mod state_tests {
             let backend = super::Wayland {
                 socket: Some(path.clone()),
                 modern: true,
+                pointer: None,
             };
             let result = backend.keyboard_state(false);
             server.join().unwrap();

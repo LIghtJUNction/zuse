@@ -1,0 +1,45 @@
+# Native control helpers with caller-supplied identities. Declarations alone
+# perform no desktop operation. No window ID, PID, application name or user text
+# is embedded. Inspect fresh controls before invoking an action.
+# These compose primitives exercised in the 2026-11-22 acceptance; this example
+# itself has not been run against a live application.
+
+/// Enumerate controls in one observed application window, including action names.
+/// Check truncated/errors and readiness fields before selecting a target.
+fn inspect_controls(scope, pid) {
+    accessibility.find(scope=scope, expected_pid=pid)
+}
+
+/// Replace an explicitly selected editor only after reading its expected contents.
+/// The caller authorizes replacing that text. Separate UI operations are not atomic.
+/// This path focuses the native window and uses direct window-scoped keyboard input.
+fn replace_text_and_confirm(window, scope, pid, role, name, expected_text, new_text) {
+    window.focus(id=window)
+    accessibility.invoke(
+        scope=scope, expected_pid=pid, role=role, name=name,
+        operation="focus", timeout_ms=3000,
+    )
+    accessibility.wait(
+        scope=scope, expected_pid=pid, role=role, name=name,
+        text=expected_text, exact=true, timeout_ms=3000,
+    )
+    keyboard.key(key="CTRL+A", window=window)
+    keyboard.type(text=new_text, window=window)
+    accessibility.wait(
+        scope=scope, expected_pid=pid, role=role, name=name,
+        text=new_text, exact=true, timeout_ms=5000,
+    )
+}
+
+/// Invoke an authorized, uniquely named native action, then wait for exact result text.
+/// Use the action name returned by enumeration. The caller checks the returned matches.
+fn invoke_and_wait_text(scope, pid, role, name, action, result_role, result_text, timeout_ms) {
+    accessibility.invoke(
+        scope=scope, expected_pid=pid, role=role, name=name,
+        action=action, operation="action", timeout_ms=3000,
+    )
+    accessibility.wait(
+        scope=scope, expected_pid=pid, role=result_role,
+        text=result_text, exact=true, timeout_ms=timeout_ms,
+    )
+}

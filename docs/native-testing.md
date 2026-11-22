@@ -48,6 +48,52 @@ CARGO_TARGET_DIR=target/native-validation cargo build --locked
 
 The acceptance reports must distinguish shared-desktop tests, isolated graphical fixtures, and cross-target compilation. Passing a compiler check does not establish live desktop compatibility.
 
+### Window capture without Python
+
+The [private Cage builder](../tests/build_private_cage.sh) and [capture runner](../tests/run_native_wayland_capture.sh) reproduce the Rust [window-identity fixture](../tests/native_wayland_capture.rs) without Python or a connection to the host desktop. Use installed Bash/GNU tools, `cc`, `pkg-config`, Git, `jq`, Rust/Cargo, wlroots **0.20.x** development files, Wayland server and xkbcommon development files, Hyprland, D-Bus, and the GTK 3/Cairo runtime libraries. The headless parent also needs working GL/render-node support. Missing support fails explicitly; the runner does not fall back to the host display.
+
+Download the pinned source archive in the sandbox first, then transfer only that small archive to the development machine. The reviewed Cage v0.3.1 archive is **25,363 bytes**. For example, run this download and hash check in the sandbox:
+
+```sh
+curl --fail --location --proto '=https' --tlsv1.2 \
+  https://codeload.github.com/cage-kiosk/cage/tar.gz/refs/tags/v0.3.1 \
+  --output cage-v0.3.1.tar.gz
+printf '%s  %s\n' \
+  6dc1619665acd367e0174c93b234002549a66f55f1de9197d67f0305415babc8 \
+  cage-v0.3.1.tar.gz | sha256sum --check -
+```
+
+Place the transferred archive at `target/native-validation/sources/cage-v0.3.1.tar.gz`. From the repository root on the development machine:
+
+```sh
+mkdir -p target/native-validation
+zuse_capture_work=$(mktemp -d "$PWD/target/native-validation/capture-XXXXXX")
+bash tests/build_private_cage.sh \
+  --source target/native-validation/sources/cage-v0.3.1.tar.gz \
+  --output "$zuse_capture_work/cage"
+
+CARGO_TARGET_DIR=target/native-validation cargo test --locked --features vision \
+  --test native_wayland_capture --no-run --message-format=json \
+  > "$zuse_capture_work/cargo.jsonl"
+zuse_capture_test=$(jq -ers '
+  [.[] | select(.reason == "compiler-artifact"
+    and .target.name == "native_wayland_capture" and .profile.test == true)
+    | .executable // empty] | unique
+  | if length == 1 then .[0] else error("expected one capture test executable") end
+' "$zuse_capture_work/cargo.jsonl")
+bash tests/run_native_wayland_capture.sh \
+  "$zuse_capture_test" "$zuse_capture_work/cage/build/cage" \
+  "$(command -v Hyprland)" 1.25 "$zuse_capture_work/logs"
+```
+
+The builder accepts an existing local archive and a new output directory. It verifies the archive hash and upstream commit, then changes only Cage's requested XDG-shell protocol version from 5 to 6. It compiles with installed native tools; it performs no download, system installation, Meson invocation, or compositor launch. The runner subsequently creates its own headless Cage parent, nested Hyprland, D-Bus, and two synthetic GTK windows. An optional sixth runner argument selects an explicitly chosen `/dev/dri/renderDNUMBER` render node; physical input devices and KMS card descriptors remain forbidden in the inspected compositor processes.
+
+`1.25` is the **requested** output scale. The fixture checks actual image dimensions against `logicalRegion`, checks both returned pixel/logical ratios, and requires window scale to remain stable across the focus transition. It does **not** assert that the effective ratio must equal 1.25. A passing result must not be reported as a separate proof of that exact fractional scale.
+
+The fixture requires successful captures of two differently colored owned windows, checks identity across focus changes without coordinate-based selection, and rejects a closed window ID while preserving an existing destination file. A background capture must succeed when the observed placement and monitor are unchanged; an observed placement change permits a bounded explicit failure that preserves the file. Keep this branch distinction when interpreting a passing run.
+
+Build products, source archives, images, and raw logs stay under ignored `target/` directories. Do not add them to Git. The [2026-11-22 evidence](evidence/native-window-capture-20261122.json) records binary/source hashes and the passing test summary for an **uncommitted candidate**, not a release. It also retains the exact isolation message, runner exit code, and the fact that `cleanup.log` was empty; an empty cleanup log alone is not evidence of additional cleanup assertions.
+
 ## Evidence and references
 
 Record the tested binary hash, version, platform/API version, delivered values, screenshot dimensions, failure behavior, and cleanup result. Keep measurement claims separate from inferred causes. A failed fixture observation can indicate a stale test-state record rather than a failed product input operation.

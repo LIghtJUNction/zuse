@@ -315,3 +315,55 @@ fn query_validation_rejects_blank_text_and_invalid_scopes() {
     query.scope = Some("0/1000000");
     assert!(validate_query(&query).is_ok());
 }
+
+#[test]
+fn chatgpt_desktop_editor_and_model_paths_are_locatable() {
+    // Native ChatGPT (AT-SPI application name Codex) exposes its editor at
+    // desktop depth 33 and model selector at depth 35.
+    let editor = "0/11/0/0/0/1/0/0/0/0/0/1/5/0/3/1/0/0/0/0/0/0/0/0/1/0/1/0/0/0/0/0/0/1";
+    let model = "0/11/0/0/0/1/0/0/0/0/0/1/5/0/3/1/0/0/0/0/0/0/0/0/1/0/1/0/0/0/0/0/0/3/0/0";
+    assert_eq!(editor.split('/').count() - 1, 33);
+    assert_eq!(model.split('/').count() - 1, 35);
+    let input = snapshot(
+        &[
+            node(editor, "entry", "询问 ChatGPT", "", RECT),
+            node(model, "button", "选择 ChatGPT 模型", "", RECT),
+        ],
+        false,
+        0,
+    );
+    for (path, query) in [
+        (editor, TargetQuery::text("询问 ChatGPT")),
+        (model, TargetQuery::button("选择 ChatGPT 模型")),
+    ] {
+        assert!(zuse::accessibility::validate_scope(path).is_ok());
+        let query = TargetQuery {
+            scope: Some("0/11/0"),
+            ..query
+        };
+        assert_eq!(locate_in(&input, &query).unwrap().path, path);
+    }
+}
+
+#[test]
+fn target_paths_accept_depth_64_and_reject_65() {
+    for (depth, accepted) in [(64, true), (65, false)] {
+        let path = format!("0{}", "/0".repeat(depth));
+        let query = TargetQuery {
+            scope: Some(&path),
+            ..TargetQuery::button("Save")
+        };
+        assert_eq!(validate_query(&query).is_ok(), accepted);
+        let input = snapshot(&[node(&path, "button", "Save", "", RECT)], false, 0);
+        assert_eq!(
+            locate_in(&input, &TargetQuery::button("Save")).is_ok(),
+            accepted
+        );
+    }
+    let too_long = format!("0/{}", "0".repeat(1023));
+    let query = TargetQuery {
+        scope: Some(&too_long),
+        ..TargetQuery::button("Save")
+    };
+    assert!(validate_query(&query).is_err());
+}

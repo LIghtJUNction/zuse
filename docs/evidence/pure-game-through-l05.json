@@ -1,0 +1,1534 @@
+{
+  "schema": "zuse-e2e-observation-checkpoint-v1",
+  "date": "2026-11-22",
+  "scope": "Pure Zuse game rerun, levels 1–5 confirmed; level 6 observed, no move submitted",
+  "client_id": "<SSMCP_CLIENT_01>",
+  "attach_job_id": "<SSMCP_JOB_01>",
+  "next_cursors": {
+    "stdout": 28200,
+    "stderr": 0
+  },
+  "owner_job_id": "<SSMCP_JOB_05>",
+  "page_id": "941F2349B69ED71B7731A92ED7580525",
+  "url": "https://neal.fun/not-a-robot/",
+  "viewport": {
+    "width": 420,
+    "height": 800
+  },
+  "limitations": [
+    "Transport failures interrupted wall-clock measurement; no quick-clear claim.",
+    "Receipts below begin at level 2; level 1 bootstrap/click and attachment receipts remain in the recorded tool history.",
+    "The first rotation batch failed at completed=0 and explicitly cleared focus emulation; a read-only recheck confirmed all rotations unchanged before input was resubmitted.",
+    "No level 6 move, reset, or later-level action has been submitted by this rerun."
+  ],
+  "submitted_programs": [
+    {
+      "stage": "L2 verified stop-sign squares 3,4,7,8",
+      "program": "browser.background(enabled=true); browser.click(selector=\".grid-item:nth-child(3)\"); browser.click(selector=\".grid-item:nth-child(4)\"); browser.click(selector=\".grid-item:nth-child(7)\"); browser.click(selector=\".grid-item:nth-child(8)\"); browser.click(selector=\".verify-button\"); wait(ms=1800); browser.evaluate(expression=\"(()=>({text:(document.body.innerText||'').slice(0,3500),classes:[...new Set([...document.querySelectorAll('[class]')].filter(e=>e.getClientRects().length).map(e=>typeof e.className==='string'?e.className:'').filter(Boolean))].slice(0,80),inputs:[...document.querySelectorAll('input')].filter(e=>e.getClientRects().length).map(e=>({type:e.type,placeholder:e.placeholder,cls:e.className,value:e.value})),imgs:[...document.images].filter(e=>e.getClientRects().length).slice(0,35).map(e=>({src:e.currentSrc.slice(0,200),alt:e.alt,cls:e.className,parent:e.parentElement.className,w:e.width,h:e.height}))}))()\"); browser.capture(path=\"target/e2e-20261122/pure-l03.png\"); browser.background(enabled=false)\n"
+    },
+    {
+      "stage": "L3 visible text FNZZSD",
+      "program": "browser.background(enabled=true); browser.fill(selector=\".captcha-input-text\",text=\"FNZZSD\"); browser.click(selector=\".captcha-button\"); wait(ms=1400); browser.evaluate(expression=\"(()=>({text:(document.body.innerText||'').slice(0,3500),classes:[...new Set([...document.querySelectorAll('[class]')].filter(e=>e.getClientRects().length).map(e=>typeof e.className==='string'?e.className:'').filter(Boolean))].slice(0,80),inputs:[...document.querySelectorAll('input')].filter(e=>e.getClientRects().length).map(e=>({type:e.type,placeholder:e.placeholder,cls:e.className,value:e.value})),imgs:[...document.images].filter(e=>e.getClientRects().length).slice(0,35).map(e=>({src:e.currentSrc.slice(0,200),alt:e.alt,cls:e.className,parent:e.parentElement.className,w:e.width,h:e.height}))}))()\"); browser.capture(path=\"target/e2e-20261122/pure-l04.png\"); browser.background(enabled=false)\n"
+    },
+    {
+      "stage": "L4 visible carrot/onion/corn/potato at 2,3,6,8",
+      "program": "browser.background(enabled=true); browser.click(selector=\".grid-item:nth-child(2)\"); browser.click(selector=\".grid-item:nth-child(3)\"); browser.click(selector=\".grid-item:nth-child(6)\"); browser.click(selector=\".grid-item:nth-child(8)\"); browser.click(selector=\".verify-button\"); wait(ms=1400); browser.evaluate(expression=\"(()=>({text:(document.body.innerText||'').slice(0,1800),classes:[...new Set([...document.querySelectorAll('[class]')].filter(e=>e.getClientRects().length).map(e=>typeof e.className==='string'?e.className:''))].slice(0,60),grid:[...document.querySelectorAll('.grid-item')].map((e,i)=>({i:i+1,transform:getComputedStyle(e).transform,children:[...e.children].map(c=>({tag:c.tagName,cls:c.className,src:c.currentSrc||'',transform:getComputedStyle(c).transform}))}))}))()\"); browser.capture(path=\"target/e2e-20261122/pure-l05.png\"); browser.background(enabled=false)\n"
+    },
+    {
+      "stage": "L5 public CSS rotation observation, compact viewport",
+      "program": "browser.viewport(width=420,height=800); browser.evaluate(expression=\"(()=>({text:document.body.innerText,tiles:[...document.querySelectorAll('.rotating-item')].map((e,i)=>({i:i+1,transform:getComputedStyle(e).transform,backgroundImage:getComputedStyle(e).backgroundImage,backgroundPosition:getComputedStyle(e).backgroundPosition,children:[...e.children].map(c=>({tag:c.tagName,cls:c.className,transform:getComputedStyle(c).transform,backgroundImage:getComputedStyle(c).backgroundImage,backgroundPosition:getComputedStyle(c).backgroundPosition}))}))}))()\"); browser.capture(path=\"target/e2e-20261122/pure-l05-compact.png\")\n"
+    },
+    {
+      "stage": "L5 public CSS transforms to identity, clockwise turns 0,0,2,2,1,1,2,2,0",
+      "program": "browser.background(enabled=true); browser.click(selector=\".rotating-item:nth-child(3)\"); browser.click(selector=\".rotating-item:nth-child(3)\"); browser.click(selector=\".rotating-item:nth-child(4)\"); browser.click(selector=\".rotating-item:nth-child(4)\"); browser.click(selector=\".rotating-item:nth-child(5)\"); browser.click(selector=\".rotating-item:nth-child(6)\"); browser.click(selector=\".rotating-item:nth-child(7)\"); browser.click(selector=\".rotating-item:nth-child(7)\"); browser.click(selector=\".rotating-item:nth-child(8)\"); browser.click(selector=\".rotating-item:nth-child(8)\"); wait(ms=300); browser.evaluate(expression=\"Array.from(document.querySelectorAll('.rotating-item'),e=>getComputedStyle(e).transform)\"); browser.click(selector=\".verify-button\"); wait(ms=1400); browser.evaluate(expression=\"(()=>({text:(document.body.innerText||'').slice(0,3500),classes:[...new Set([...document.querySelectorAll('[class]')].filter(e=>e.getClientRects().length).map(e=>typeof e.className==='string'?e.className:'').filter(Boolean))].slice(0,80),inputs:[...document.querySelectorAll('input')].filter(e=>e.getClientRects().length).map(e=>({type:e.type,placeholder:e.placeholder,cls:e.className,value:e.value})),imgs:[...document.images].filter(e=>e.getClientRects().length).slice(0,35).map(e=>({src:e.currentSrc.slice(0,200),alt:e.alt,cls:e.className,parent:e.parentElement.className,w:e.width,h:e.height}))}))()\"); browser.capture(path=\"target/e2e-20261122/pure-l06.png\"); browser.background(enabled=false)\n"
+    }
+  ],
+  "receipts": [
+    {
+      "status": "completed",
+      "completed": 10,
+      "results": [
+        {
+          "step": 0,
+          "operation": "browser.background",
+          "elapsed_us": 231705,
+          "timing": {
+            "running": true,
+            "command_us": 231705,
+            "total_elapsed_us": 66036781,
+            "command_total_us": 1229840,
+            "commands": 3
+          },
+          "value": {
+            "enabled": true,
+            "focus_emulated": true,
+            "changed": true,
+            "focus_emulation_cleared": false,
+            "scope": "selected_page_session",
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "sessionId": "D5A1EED70384FFC149BF9D24D97B4077",
+            "document": {
+              "frameId": "941F2349B69ED71B7731A92ED7580525",
+              "loaderId": "B48E100AF5EE2A7DC775802388073086",
+              "url": "https://neal.fun/not-a-robot/"
+            },
+            "input_delivery": "cdp_selected_page",
+            "idle_navigation_cleanup": "next_zuse_command"
+          }
+        },
+        {
+          "step": 1,
+          "operation": "browser.click",
+          "elapsed_us": 147908,
+          "timing": {
+            "running": true,
+            "command_us": 147908,
+            "total_elapsed_us": 66184738,
+            "command_total_us": 1377749,
+            "commands": 4
+          },
+          "value": {
+            "x": 555.7999992370605,
+            "y": 236.40000534057617
+          }
+        },
+        {
+          "step": 2,
+          "operation": "browser.click",
+          "elapsed_us": 47183,
+          "timing": {
+            "running": true,
+            "command_us": 47183,
+            "total_elapsed_us": 66231933,
+            "command_total_us": 1424932,
+            "commands": 5
+          },
+          "value": {
+            "x": 667.4000358581543,
+            "y": 236.40000534057617
+          }
+        },
+        {
+          "step": 3,
+          "operation": "browser.click",
+          "elapsed_us": 9711,
+          "timing": {
+            "running": true,
+            "command_us": 9711,
+            "total_elapsed_us": 66241653,
+            "command_total_us": 1434643,
+            "commands": 6
+          },
+          "value": {
+            "x": 555.7999992370605,
+            "y": 348.0000114440918
+          }
+        },
+        {
+          "step": 4,
+          "operation": "browser.click",
+          "elapsed_us": 749262,
+          "timing": {
+            "running": true,
+            "command_us": 749262,
+            "total_elapsed_us": 66990925,
+            "command_total_us": 2183906,
+            "commands": 7
+          },
+          "value": {
+            "x": 667.4000358581543,
+            "y": 348.0000114440918
+          }
+        },
+        {
+          "step": 5,
+          "operation": "browser.click",
+          "elapsed_us": 168421,
+          "timing": {
+            "running": true,
+            "command_us": 168421,
+            "total_elapsed_us": 67159358,
+            "command_total_us": 2352328,
+            "commands": 8
+          },
+          "value": {
+            "x": 681.9374885559082,
+            "y": 659.7999877929688
+          }
+        },
+        {
+          "step": 6,
+          "operation": "wait",
+          "elapsed_us": 1807108,
+          "timing": {
+            "running": true,
+            "command_us": 1807108,
+            "total_elapsed_us": 68966477,
+            "command_total_us": 4159436,
+            "commands": 9
+          },
+          "value": {
+            "waited_ms": 1800
+          }
+        },
+        {
+          "step": 7,
+          "operation": "browser.evaluate",
+          "elapsed_us": 8498,
+          "timing": {
+            "running": true,
+            "command_us": 8498,
+            "total_elapsed_us": 68974988,
+            "command_total_us": 4167935,
+            "commands": 10
+          },
+          "value": {
+            "text": "Level 3: Wiggles\nEnter the text below\n> \nSubmit\nReset\nMade by Neal (human) ",
+            "classes": [
+              "page-container",
+              "content-wrapper",
+              "site-header",
+              "site-title",
+              "site-title-image",
+              "site-level",
+              "site-logo",
+              "site-logo-image",
+              "captcha-container",
+              "instruction",
+              "captcha-words",
+              "refresh-button",
+              "refresh-icon",
+              "audio-button",
+              "captcha-input-container",
+              "captcha-input",
+              "captcha-input-text",
+              "captcha-button captcha-button-valid",
+              "site-footer",
+              "site-footer-inner",
+              "reset",
+              "site-footer-text",
+              "site-footer-human",
+              "site-footer-link",
+              "site-footer-link-img"
+            ],
+            "inputs": [
+              {
+                "type": "text",
+                "placeholder": "Answer",
+                "cls": "captcha-input-text",
+                "value": ""
+              }
+            ],
+            "imgs": [
+              {
+                "src": "https://neal.fun/not-a-robot/title.svg",
+                "alt": "",
+                "cls": "site-title-image",
+                "parent": "site-title",
+                "w": 192,
+                "h": 23
+              },
+              {
+                "src": "https://neal.fun/general/logo.svg",
+                "alt": "",
+                "cls": "site-logo-image",
+                "parent": "",
+                "w": 125,
+                "h": 33
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/refresh.svg",
+                "alt": "",
+                "cls": "refresh-icon",
+                "parent": "refresh-button",
+                "w": 21,
+                "h": 21
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/speaker.svg",
+                "alt": "",
+                "cls": "audio-button",
+                "parent": "captcha-words",
+                "w": 22,
+                "h": 22
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/coffee.svg",
+                "alt": "",
+                "cls": "site-footer-link-img",
+                "parent": "site-footer-link",
+                "w": 12,
+                "h": 17
+              }
+            ]
+          }
+        },
+        {
+          "step": 8,
+          "operation": "browser.capture",
+          "elapsed_us": 447336,
+          "timing": {
+            "running": true,
+            "command_us": 447336,
+            "total_elapsed_us": 69422336,
+            "command_total_us": 4615271,
+            "commands": 11
+          },
+          "value": {
+            "path": "target/e2e-20261122/pure-l03.png",
+            "mimeType": "image/png",
+            "bytes": 144304,
+            "width": 1000,
+            "height": 900,
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "coordinateSpace": "css_viewport",
+            "cssViewport": {
+              "x": 0,
+              "y": 0,
+              "width": 1000,
+              "height": 900
+            },
+            "pixelsPerCssUnit": {
+              "x": 1,
+              "y": 1
+            },
+            "observation": {
+              "url": "https://neal.fun/not-a-robot/",
+              "timeOrigin": 1795345741226.1,
+              "width": 1000,
+              "height": 900,
+              "devicePixelRatio": 1.0000000149011612,
+              "scrollX": 0,
+              "scrollY": 0,
+              "visualViewport": {
+                "width": 1000,
+                "height": 900,
+                "scale": 1,
+                "offsetX": 0,
+                "offsetY": 0,
+                "pageX": 0,
+                "pageY": 0
+              }
+            }
+          }
+        },
+        {
+          "step": 9,
+          "operation": "browser.background",
+          "elapsed_us": 2159,
+          "timing": {
+            "running": true,
+            "command_us": 2159,
+            "total_elapsed_us": 69424504,
+            "command_total_us": 4617431,
+            "commands": 12
+          },
+          "value": {
+            "enabled": false,
+            "focus_emulated": false,
+            "changed": true,
+            "focus_emulation_cleared": true,
+            "scope": "selected_page_session",
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "sessionId": "D5A1EED70384FFC149BF9D24D97B4077",
+            "document": null,
+            "input_delivery": "cdp_selected_page",
+            "idle_navigation_cleanup": "next_zuse_command"
+          }
+        }
+      ]
+    },
+    {
+      "status": "completed",
+      "completed": 7,
+      "results": [
+        {
+          "step": 0,
+          "operation": "browser.background",
+          "elapsed_us": 179201,
+          "timing": {
+            "running": true,
+            "command_us": 179201,
+            "total_elapsed_us": 117907194,
+            "command_total_us": 4796633,
+            "commands": 13
+          },
+          "value": {
+            "enabled": true,
+            "focus_emulated": true,
+            "changed": true,
+            "focus_emulation_cleared": false,
+            "scope": "selected_page_session",
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "sessionId": "D5A1EED70384FFC149BF9D24D97B4077",
+            "document": {
+              "frameId": "941F2349B69ED71B7731A92ED7580525",
+              "loaderId": "B48E100AF5EE2A7DC775802388073086",
+              "url": "https://neal.fun/not-a-robot/"
+            },
+            "input_delivery": "cdp_selected_page",
+            "idle_navigation_cleanup": "next_zuse_command"
+          }
+        },
+        {
+          "step": 1,
+          "operation": "browser.fill",
+          "elapsed_us": 316034,
+          "timing": {
+            "running": true,
+            "command_us": 316034,
+            "total_elapsed_us": 118223238,
+            "command_total_us": 5112668,
+            "commands": 14
+          },
+          "value": {}
+        },
+        {
+          "step": 2,
+          "operation": "browser.click",
+          "elapsed_us": 278261,
+          "timing": {
+            "running": true,
+            "command_us": 278261,
+            "total_elapsed_us": 118501514,
+            "command_total_us": 5390929,
+            "commands": 15
+          },
+          "value": {
+            "x": 663.7000122070312,
+            "y": 327.6750183105469
+          }
+        },
+        {
+          "step": 3,
+          "operation": "wait",
+          "elapsed_us": 1411128,
+          "timing": {
+            "running": true,
+            "command_us": 1411128,
+            "total_elapsed_us": 119912654,
+            "command_total_us": 6802058,
+            "commands": 16
+          },
+          "value": {
+            "waited_ms": 1400
+          }
+        },
+        {
+          "step": 4,
+          "operation": "browser.evaluate",
+          "elapsed_us": 11539,
+          "timing": {
+            "running": true,
+            "command_us": 11539,
+            "total_elapsed_us": 119924199,
+            "command_total_us": 6813597,
+            "commands": 17
+          },
+          "value": {
+            "text": "Level 4: Vegetables\nSelect all the squares with a\nVegetable\nVerify\nReset\nMade by Neal (human) ",
+            "classes": [
+              "page-container",
+              "content-wrapper",
+              "site-header",
+              "site-title",
+              "site-title-image",
+              "site-level",
+              "site-logo",
+              "site-logo-image",
+              "captcha-container",
+              "captcha-title",
+              "captcha-title-type",
+              "captcha-content-wrapper",
+              "grid-container",
+              "grid-inner",
+              "grid-item grid-item",
+              "vegetable-image",
+              "captcha-controls",
+              "captcha-refresh",
+              "verify-button",
+              "site-footer",
+              "site-footer-inner",
+              "reset",
+              "site-footer-text",
+              "site-footer-human",
+              "site-footer-link",
+              "site-footer-link-img"
+            ],
+            "inputs": [],
+            "imgs": [
+              {
+                "src": "https://neal.fun/not-a-robot/title.svg",
+                "alt": "",
+                "cls": "site-title-image",
+                "parent": "site-title",
+                "w": 192,
+                "h": 23
+              },
+              {
+                "src": "https://neal.fun/general/logo.svg",
+                "alt": "",
+                "cls": "site-logo-image",
+                "parent": "",
+                "w": 125,
+                "h": 33
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/vegetables/tomato.webp",
+                "alt": "",
+                "cls": "vegetable-image",
+                "parent": "grid-item grid-item",
+                "w": 146,
+                "h": 146
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/vegetables/carrot.webp",
+                "alt": "",
+                "cls": "vegetable-image",
+                "parent": "grid-item grid-item",
+                "w": 146,
+                "h": 146
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/vegetables/onion.webp",
+                "alt": "",
+                "cls": "vegetable-image",
+                "parent": "grid-item grid-item",
+                "w": 146,
+                "h": 146
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/vegetables/banana.webp",
+                "alt": "",
+                "cls": "vegetable-image",
+                "parent": "grid-item grid-item",
+                "w": 146,
+                "h": 146
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/vegetables/grape.webp",
+                "alt": "",
+                "cls": "vegetable-image",
+                "parent": "grid-item grid-item",
+                "w": 146,
+                "h": 146
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/vegetables/corn.webp",
+                "alt": "",
+                "cls": "vegetable-image",
+                "parent": "grid-item grid-item",
+                "w": 146,
+                "h": 146
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/vegetables/avocado.webp",
+                "alt": "",
+                "cls": "vegetable-image",
+                "parent": "grid-item grid-item",
+                "w": 146,
+                "h": 146
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/vegetables/potato.webp",
+                "alt": "",
+                "cls": "vegetable-image",
+                "parent": "grid-item grid-item",
+                "w": 146,
+                "h": 146
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/vegetables/eggplant.webp",
+                "alt": "",
+                "cls": "vegetable-image",
+                "parent": "grid-item grid-item",
+                "w": 146,
+                "h": 146
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/refresh.svg",
+                "alt": "",
+                "cls": "captcha-refresh",
+                "parent": "captcha-controls",
+                "w": 24,
+                "h": 24
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/coffee.svg",
+                "alt": "",
+                "cls": "site-footer-link-img",
+                "parent": "site-footer-link",
+                "w": 12,
+                "h": 17
+              }
+            ]
+          }
+        },
+        {
+          "step": 5,
+          "operation": "browser.capture",
+          "elapsed_us": 551097,
+          "timing": {
+            "running": true,
+            "command_us": 551097,
+            "total_elapsed_us": 120475419,
+            "command_total_us": 7364694,
+            "commands": 18
+          },
+          "value": {
+            "path": "target/e2e-20261122/pure-l04.png",
+            "mimeType": "image/png",
+            "bytes": 333345,
+            "width": 1000,
+            "height": 900,
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "coordinateSpace": "css_viewport",
+            "cssViewport": {
+              "x": 0,
+              "y": 0,
+              "width": 1000,
+              "height": 900
+            },
+            "pixelsPerCssUnit": {
+              "x": 1,
+              "y": 1
+            },
+            "observation": {
+              "url": "https://neal.fun/not-a-robot/",
+              "timeOrigin": 1795345741226.1,
+              "width": 1000,
+              "height": 900,
+              "devicePixelRatio": 1.0000000149011612,
+              "scrollX": 0,
+              "scrollY": 0,
+              "visualViewport": {
+                "width": 1000,
+                "height": 900,
+                "scale": 1,
+                "offsetX": 0,
+                "offsetY": 0,
+                "pageX": 0,
+                "pageY": 0
+              }
+            }
+          }
+        },
+        {
+          "step": 6,
+          "operation": "browser.background",
+          "elapsed_us": 298,
+          "timing": {
+            "running": true,
+            "command_us": 298,
+            "total_elapsed_us": 120475722,
+            "command_total_us": 7364993,
+            "commands": 19
+          },
+          "value": {
+            "enabled": false,
+            "focus_emulated": false,
+            "changed": true,
+            "focus_emulation_cleared": true,
+            "scope": "selected_page_session",
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "sessionId": "D5A1EED70384FFC149BF9D24D97B4077",
+            "document": null,
+            "input_delivery": "cdp_selected_page",
+            "idle_navigation_cleanup": "next_zuse_command"
+          }
+        }
+      ]
+    },
+    {
+      "status": "completed",
+      "completed": 10,
+      "results": [
+        {
+          "step": 0,
+          "operation": "browser.background",
+          "elapsed_us": 85265,
+          "timing": {
+            "running": true,
+            "command_us": 85265,
+            "total_elapsed_us": 164900980,
+            "command_total_us": 7450259,
+            "commands": 20
+          },
+          "value": {
+            "enabled": true,
+            "focus_emulated": true,
+            "changed": true,
+            "focus_emulation_cleared": false,
+            "scope": "selected_page_session",
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "sessionId": "D5A1EED70384FFC149BF9D24D97B4077",
+            "document": {
+              "frameId": "941F2349B69ED71B7731A92ED7580525",
+              "loaderId": "B48E100AF5EE2A7DC775802388073086",
+              "url": "https://neal.fun/not-a-robot/"
+            },
+            "input_delivery": "cdp_selected_page",
+            "idle_navigation_cleanup": "next_zuse_command"
+          }
+        },
+        {
+          "step": 1,
+          "operation": "browser.click",
+          "elapsed_us": 157413,
+          "timing": {
+            "running": true,
+            "command_us": 157413,
+            "total_elapsed_us": 165058401,
+            "command_total_us": 7607673,
+            "commands": 21
+          },
+          "value": {
+            "x": 500.00000762939453,
+            "y": 255.00000762939453
+          }
+        },
+        {
+          "step": 2,
+          "operation": "browser.click",
+          "elapsed_us": 36119,
+          "timing": {
+            "running": true,
+            "command_us": 36119,
+            "total_elapsed_us": 165094534,
+            "command_total_us": 7643792,
+            "commands": 22
+          },
+          "value": {
+            "x": 648.8000259399414,
+            "y": 255.00000762939453
+          }
+        },
+        {
+          "step": 3,
+          "operation": "browser.click",
+          "elapsed_us": 236820,
+          "timing": {
+            "running": true,
+            "command_us": 236820,
+            "total_elapsed_us": 165331360,
+            "command_total_us": 7880613,
+            "commands": 23
+          },
+          "value": {
+            "x": 648.8000259399414,
+            "y": 403.7999954223633
+          }
+        },
+        {
+          "step": 4,
+          "operation": "browser.click",
+          "elapsed_us": 31210,
+          "timing": {
+            "running": true,
+            "command_us": 31210,
+            "total_elapsed_us": 165362579,
+            "command_total_us": 7911824,
+            "commands": 24
+          },
+          "value": {
+            "x": 500.00000762939453,
+            "y": 552.6000137329102
+          }
+        },
+        {
+          "step": 5,
+          "operation": "browser.click",
+          "elapsed_us": 89014,
+          "timing": {
+            "running": true,
+            "command_us": 89014,
+            "total_elapsed_us": 165451600,
+            "command_total_us": 8000839,
+            "commands": 25
+          },
+          "value": {
+            "x": 681.9374885559082,
+            "y": 659.7999877929688
+          }
+        },
+        {
+          "step": 6,
+          "operation": "wait",
+          "elapsed_us": 1404587,
+          "timing": {
+            "running": true,
+            "command_us": 1404587,
+            "total_elapsed_us": 166856197,
+            "command_total_us": 9405427,
+            "commands": 26
+          },
+          "value": {
+            "waited_ms": 1400
+          }
+        },
+        {
+          "step": 7,
+          "operation": "browser.evaluate",
+          "elapsed_us": 8139,
+          "timing": {
+            "running": true,
+            "command_us": 8139,
+            "total_elapsed_us": 166864356,
+            "command_total_us": 9413566,
+            "commands": 27
+          },
+          "value": {
+            "text": "Level 5: Rotation\nReassemble the\nIntersection\nVerify\nReset\nMade by Neal (human) ",
+            "classes": [
+              "page-container",
+              "content-wrapper",
+              "site-header",
+              "site-title",
+              "site-title-image",
+              "site-level",
+              "site-logo",
+              "site-logo-image",
+              "captcha-container",
+              "captcha-title",
+              "captcha-title-type",
+              "captcha-content-wrapper",
+              "rotating-container",
+              "rotating-item",
+              "captcha-controls",
+              "captcha-refresh",
+              "verify-button",
+              "site-footer",
+              "site-footer-inner",
+              "reset",
+              "site-footer-text",
+              "site-footer-human",
+              "site-footer-link",
+              "site-footer-link-img"
+            ],
+            "grid": []
+          }
+        },
+        {
+          "step": 8,
+          "operation": "browser.capture",
+          "elapsed_us": 509234,
+          "timing": {
+            "running": true,
+            "command_us": 509234,
+            "total_elapsed_us": 167373601,
+            "command_total_us": 9922801,
+            "commands": 28
+          },
+          "value": {
+            "path": "target/e2e-20261122/pure-l05.png",
+            "mimeType": "image/png",
+            "bytes": 462192,
+            "width": 1000,
+            "height": 900,
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "coordinateSpace": "css_viewport",
+            "cssViewport": {
+              "x": 0,
+              "y": 0,
+              "width": 1000,
+              "height": 900
+            },
+            "pixelsPerCssUnit": {
+              "x": 1,
+              "y": 1
+            },
+            "observation": {
+              "url": "https://neal.fun/not-a-robot/",
+              "timeOrigin": 1795345741226.1,
+              "width": 1000,
+              "height": 900,
+              "devicePixelRatio": 1.0000000149011612,
+              "scrollX": 0,
+              "scrollY": 0,
+              "visualViewport": {
+                "width": 1000,
+                "height": 900,
+                "scale": 1,
+                "offsetX": 0,
+                "offsetY": 0,
+                "pageX": 0,
+                "pageY": 0
+              }
+            }
+          }
+        },
+        {
+          "step": 9,
+          "operation": "browser.background",
+          "elapsed_us": 256,
+          "timing": {
+            "running": true,
+            "command_us": 256,
+            "total_elapsed_us": 167373861,
+            "command_total_us": 9923057,
+            "commands": 29
+          },
+          "value": {
+            "enabled": false,
+            "focus_emulated": false,
+            "changed": true,
+            "focus_emulation_cleared": true,
+            "scope": "selected_page_session",
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "sessionId": "D5A1EED70384FFC149BF9D24D97B4077",
+            "document": null,
+            "input_delivery": "cdp_selected_page",
+            "idle_navigation_cleanup": "next_zuse_command"
+          }
+        }
+      ]
+    },
+    {
+      "status": "completed",
+      "completed": 3,
+      "results": [
+        {
+          "step": 0,
+          "operation": "browser.viewport",
+          "elapsed_us": 382435,
+          "timing": {
+            "running": true,
+            "command_us": 382435,
+            "total_elapsed_us": 200508288,
+            "command_total_us": 10305493,
+            "commands": 30
+          },
+          "value": {}
+        },
+        {
+          "step": 1,
+          "operation": "browser.evaluate",
+          "elapsed_us": 54100,
+          "timing": {
+            "running": true,
+            "command_us": 54100,
+            "total_elapsed_us": 200562404,
+            "command_total_us": 10359593,
+            "commands": 31
+          },
+          "value": {
+            "text": "Level 5: Rotation\nReassemble the\nIntersection\nVerify\nReset\nMade by Neal (human) ",
+            "tiles": [
+              {
+                "i": 1,
+                "transform": "matrix(1, 0, 0, 1, 0, 0)",
+                "backgroundImage": "url(\"https://neal.fun/not-a-robot/rotating/rotating.webp\")",
+                "backgroundPosition": "0% 0%",
+                "children": []
+              },
+              {
+                "i": 2,
+                "transform": "matrix(1, 0, 0, 1, 0, 0)",
+                "backgroundImage": "url(\"https://neal.fun/not-a-robot/rotating/rotating.webp\")",
+                "backgroundPosition": "50% 0%",
+                "children": []
+              },
+              {
+                "i": 3,
+                "transform": "matrix(-1, 0, 0, -1, 0, 0)",
+                "backgroundImage": "url(\"https://neal.fun/not-a-robot/rotating/rotating.webp\")",
+                "backgroundPosition": "100% 0%",
+                "children": []
+              },
+              {
+                "i": 4,
+                "transform": "matrix(-1, 0, 0, -1, 0, 0)",
+                "backgroundImage": "url(\"https://neal.fun/not-a-robot/rotating/rotating.webp\")",
+                "backgroundPosition": "0% 50%",
+                "children": []
+              },
+              {
+                "i": 5,
+                "transform": "matrix(0, -1, 1, 0, 0, 0)",
+                "backgroundImage": "url(\"https://neal.fun/not-a-robot/rotating/rotating.webp\")",
+                "backgroundPosition": "50% 50%",
+                "children": []
+              },
+              {
+                "i": 6,
+                "transform": "matrix(0, -1, 1, 0, 0, 0)",
+                "backgroundImage": "url(\"https://neal.fun/not-a-robot/rotating/rotating.webp\")",
+                "backgroundPosition": "100% 50%",
+                "children": []
+              },
+              {
+                "i": 7,
+                "transform": "matrix(-1, 0, 0, -1, 0, 0)",
+                "backgroundImage": "url(\"https://neal.fun/not-a-robot/rotating/rotating.webp\")",
+                "backgroundPosition": "0% 100%",
+                "children": []
+              },
+              {
+                "i": 8,
+                "transform": "matrix(-1, 0, 0, -1, 0, 0)",
+                "backgroundImage": "url(\"https://neal.fun/not-a-robot/rotating/rotating.webp\")",
+                "backgroundPosition": "50% 100%",
+                "children": []
+              },
+              {
+                "i": 9,
+                "transform": "matrix(1, 0, 0, 1, 0, 0)",
+                "backgroundImage": "url(\"https://neal.fun/not-a-robot/rotating/rotating.webp\")",
+                "backgroundPosition": "100% 100%",
+                "children": []
+              }
+            ]
+          }
+        },
+        {
+          "step": 2,
+          "operation": "browser.capture",
+          "elapsed_us": 735271,
+          "timing": {
+            "running": true,
+            "command_us": 735271,
+            "total_elapsed_us": 201297685,
+            "command_total_us": 11094864,
+            "commands": 32
+          },
+          "value": {
+            "path": "target/e2e-20261122/pure-l05-compact.png",
+            "mimeType": "image/png",
+            "bytes": 375621,
+            "width": 420,
+            "height": 800,
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "coordinateSpace": "css_viewport",
+            "cssViewport": {
+              "x": 0,
+              "y": 0,
+              "width": 420,
+              "height": 800
+            },
+            "pixelsPerCssUnit": {
+              "x": 1,
+              "y": 1
+            },
+            "observation": {
+              "url": "https://neal.fun/not-a-robot/",
+              "timeOrigin": 1795345741226.1,
+              "width": 420,
+              "height": 800,
+              "devicePixelRatio": 1.0000000149011612,
+              "scrollX": 0,
+              "scrollY": 0,
+              "visualViewport": {
+                "width": 420,
+                "height": 800,
+                "scale": 1,
+                "offsetX": 0,
+                "offsetY": 0,
+                "pageX": 0,
+                "pageY": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "status": "failed",
+      "failed_step": 0,
+      "operation": "browser.background",
+      "error": "CDP Runtime.evaluate read: browser response deadline timed out; background focus emulation was cleared",
+      "error_code": "execution_error",
+      "elapsed_us": 2138964,
+      "timing": {
+        "running": true,
+        "command_us": 2138964,
+        "total_elapsed_us": 267245458,
+        "command_total_us": 13233829,
+        "commands": 33
+      },
+      "completed": 0,
+      "results": []
+    },
+    {
+      "status": "completed",
+      "completed": 2,
+      "results": [
+        {
+          "step": 0,
+          "operation": "browser.evaluate",
+          "elapsed_us": 715556,
+          "timing": {
+            "running": true,
+            "command_us": 715556,
+            "total_elapsed_us": 311453145,
+            "command_total_us": 13949385,
+            "commands": 34
+          },
+          "value": {
+            "text": "Level 5: Rotation\nReassemble the\nIntersection\nVerify\nReset\nMade by Neal (human) ",
+            "rotations": [
+              "matrix(1, 0, 0, 1, 0, 0)",
+              "matrix(1, 0, 0, 1, 0, 0)",
+              "matrix(-1, 0, 0, -1, 0, 0)",
+              "matrix(-1, 0, 0, -1, 0, 0)",
+              "matrix(0, -1, 1, 0, 0, 0)",
+              "matrix(0, -1, 1, 0, 0, 0)",
+              "matrix(-1, 0, 0, -1, 0, 0)",
+              "matrix(-1, 0, 0, -1, 0, 0)",
+              "matrix(1, 0, 0, 1, 0, 0)"
+            ]
+          }
+        },
+        {
+          "step": 1,
+          "operation": "browser.background",
+          "elapsed_us": 32,
+          "timing": {
+            "running": true,
+            "command_us": 32,
+            "total_elapsed_us": 311453197,
+            "command_total_us": 13949418,
+            "commands": 35
+          },
+          "value": {
+            "enabled": false,
+            "focus_emulated": false,
+            "changed": false,
+            "focus_emulation_cleared": true,
+            "scope": "selected_page_session",
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "sessionId": "D5A1EED70384FFC149BF9D24D97B4077",
+            "document": null,
+            "input_delivery": "cdp_selected_page",
+            "idle_navigation_cleanup": "next_zuse_command"
+          }
+        }
+      ]
+    },
+    {
+      "status": "completed",
+      "completed": 18,
+      "results": [
+        {
+          "step": 0,
+          "operation": "browser.background",
+          "elapsed_us": 463771,
+          "timing": {
+            "running": true,
+            "command_us": 463771,
+            "total_elapsed_us": 336764332,
+            "command_total_us": 14413190,
+            "commands": 36
+          },
+          "value": {
+            "enabled": true,
+            "focus_emulated": true,
+            "changed": true,
+            "focus_emulation_cleared": false,
+            "scope": "selected_page_session",
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "sessionId": "D5A1EED70384FFC149BF9D24D97B4077",
+            "document": {
+              "frameId": "941F2349B69ED71B7731A92ED7580525",
+              "loaderId": "B48E100AF5EE2A7DC775802388073086",
+              "url": "https://neal.fun/not-a-robot/"
+            },
+            "input_delivery": "cdp_selected_page",
+            "idle_navigation_cleanup": "next_zuse_command"
+          }
+        },
+        {
+          "step": 1,
+          "operation": "browser.click",
+          "elapsed_us": 404610,
+          "timing": {
+            "running": true,
+            "command_us": 404610,
+            "total_elapsed_us": 337168952,
+            "command_total_us": 14817800,
+            "commands": 37
+          },
+          "value": {
+            "x": 347.14376068115234,
+            "y": 294.6687545776367
+          }
+        },
+        {
+          "step": 2,
+          "operation": "browser.click",
+          "elapsed_us": 182917,
+          "timing": {
+            "running": true,
+            "command_us": 182917,
+            "total_elapsed_us": 337351892,
+            "command_total_us": 15000718,
+            "commands": 38
+          },
+          "value": {
+            "x": 347.14376068115234,
+            "y": 294.6687545776367
+          }
+        },
+        {
+          "step": 3,
+          "operation": "browser.click",
+          "elapsed_us": 391240,
+          "timing": {
+            "running": true,
+            "command_us": 391240,
+            "total_elapsed_us": 337743149,
+            "command_total_us": 15391958,
+            "commands": 39
+          },
+          "value": {
+            "x": 72.86874866485596,
+            "y": 431.80626678466797
+          }
+        },
+        {
+          "step": 4,
+          "operation": "browser.click",
+          "elapsed_us": 212763,
+          "timing": {
+            "running": true,
+            "command_us": 212763,
+            "total_elapsed_us": 337955931,
+            "command_total_us": 15604722,
+            "commands": 40
+          },
+          "value": {
+            "x": 72.86874866485596,
+            "y": 431.80626678466797
+          }
+        },
+        {
+          "step": 5,
+          "operation": "browser.click",
+          "elapsed_us": 295278,
+          "timing": {
+            "running": true,
+            "command_us": 295278,
+            "total_elapsed_us": 338251223,
+            "command_total_us": 15900000,
+            "commands": 41
+          },
+          "value": {
+            "x": 210.0062484741211,
+            "y": 431.80626678466797
+          }
+        },
+        {
+          "step": 6,
+          "operation": "browser.click",
+          "elapsed_us": 45301,
+          "timing": {
+            "running": true,
+            "command_us": 45301,
+            "total_elapsed_us": 338296540,
+            "command_total_us": 15945301,
+            "commands": 42
+          },
+          "value": {
+            "x": 347.14376068115234,
+            "y": 431.80626678466797
+          }
+        },
+        {
+          "step": 7,
+          "operation": "browser.click",
+          "elapsed_us": 51136,
+          "timing": {
+            "running": true,
+            "command_us": 51136,
+            "total_elapsed_us": 338347686,
+            "command_total_us": 15996437,
+            "commands": 43
+          },
+          "value": {
+            "x": 72.86874866485596,
+            "y": 568.9437484741211
+          }
+        },
+        {
+          "step": 8,
+          "operation": "browser.click",
+          "elapsed_us": 58051,
+          "timing": {
+            "running": true,
+            "command_us": 58051,
+            "total_elapsed_us": 338405748,
+            "command_total_us": 16054488,
+            "commands": 44
+          },
+          "value": {
+            "x": 72.86874866485596,
+            "y": 568.9437484741211
+          }
+        },
+        {
+          "step": 9,
+          "operation": "browser.click",
+          "elapsed_us": 77020,
+          "timing": {
+            "running": true,
+            "command_us": 77020,
+            "total_elapsed_us": 338482782,
+            "command_total_us": 16131509,
+            "commands": 45
+          },
+          "value": {
+            "x": 210.0062484741211,
+            "y": 568.9437484741211
+          }
+        },
+        {
+          "step": 10,
+          "operation": "browser.click",
+          "elapsed_us": 29748,
+          "timing": {
+            "running": true,
+            "command_us": 29748,
+            "total_elapsed_us": 338512545,
+            "command_total_us": 16161257,
+            "commands": 46
+          },
+          "value": {
+            "x": 210.0062484741211,
+            "y": 568.9437484741211
+          }
+        },
+        {
+          "step": 11,
+          "operation": "wait",
+          "elapsed_us": 303564,
+          "timing": {
+            "running": true,
+            "command_us": 303564,
+            "total_elapsed_us": 338816119,
+            "command_total_us": 16464821,
+            "commands": 47
+          },
+          "value": {
+            "waited_ms": 300
+          }
+        },
+        {
+          "step": 12,
+          "operation": "browser.evaluate",
+          "elapsed_us": 56558,
+          "timing": {
+            "running": true,
+            "command_us": 56558,
+            "total_elapsed_us": 338872685,
+            "command_total_us": 16521380,
+            "commands": 48
+          },
+          "value": [
+            "matrix(1, 0, 0, 1, 0, 0)",
+            "matrix(1, 0, 0, 1, 0, 0)",
+            "matrix(1, 0, 0, 1, 0, 0)",
+            "matrix(1, 0, 0, 1, 0, 0)",
+            "matrix(1, 0, 0, 1, 0, 0)",
+            "matrix(1, 0, 0, 1, 0, 0)",
+            "matrix(1, 0, 0, 1, 0, 0)",
+            "matrix(1, 0, 0, 1, 0, 0)",
+            "matrix(1, 0, 0, 1, 0, 0)"
+          ]
+        },
+        {
+          "step": 13,
+          "operation": "browser.click",
+          "elapsed_us": 1438632,
+          "timing": {
+            "running": true,
+            "command_us": 1438632,
+            "total_elapsed_us": 340311328,
+            "command_total_us": 17960012,
+            "commands": 49
+          },
+          "value": {
+            "x": 371.9375190734863,
+            "y": 667.8125
+          }
+        },
+        {
+          "step": 14,
+          "operation": "wait",
+          "elapsed_us": 1406923,
+          "timing": {
+            "running": true,
+            "command_us": 1406923,
+            "total_elapsed_us": 341718264,
+            "command_total_us": 19366935,
+            "commands": 50
+          },
+          "value": {
+            "waited_ms": 1400
+          }
+        },
+        {
+          "step": 15,
+          "operation": "browser.evaluate",
+          "elapsed_us": 24224,
+          "timing": {
+            "running": true,
+            "command_us": 24224,
+            "total_elapsed_us": 341742505,
+            "command_total_us": 19391160,
+            "commands": 51
+          },
+          "value": {
+            "text": "Level 6: XOXO\nWin at\nTic Tac Toe\nVerify\nReset\nMade by Neal (human) ",
+            "classes": [
+              "page-container",
+              "content-wrapper",
+              "site-header",
+              "site-title",
+              "site-title-image",
+              "site-level",
+              "site-logo",
+              "site-logo-image",
+              "captcha-container",
+              "captcha-title",
+              "captcha-title-type",
+              "captcha-content-wrapper",
+              "tic-tac-toe-container",
+              "grid-container",
+              "grid-inner",
+              "grid-item grid-item",
+              "tic-tac-toe-cell",
+              "grid-item grid-item grid-item-disabled",
+              "tic-tac-toe-cell cell-disabled cell-selected",
+              "captcha-controls",
+              "captcha-refresh",
+              "verify-button",
+              "site-footer",
+              "site-footer-inner",
+              "reset",
+              "site-footer-text",
+              "site-footer-human",
+              "site-footer-link",
+              "site-footer-link-img"
+            ],
+            "inputs": [],
+            "imgs": [
+              {
+                "src": "https://neal.fun/not-a-robot/title.svg",
+                "alt": "",
+                "cls": "site-title-image",
+                "parent": "site-title",
+                "w": 192,
+                "h": 23
+              },
+              {
+                "src": "https://neal.fun/general/logo.svg",
+                "alt": "",
+                "cls": "site-logo-image",
+                "parent": "",
+                "w": 112,
+                "h": 30
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/refresh.svg",
+                "alt": "",
+                "cls": "captcha-refresh",
+                "parent": "captcha-controls",
+                "w": 24,
+                "h": 24
+              },
+              {
+                "src": "https://neal.fun/not-a-robot/coffee.svg",
+                "alt": "",
+                "cls": "site-footer-link-img",
+                "parent": "site-footer-link",
+                "w": 12,
+                "h": 17
+              }
+            ]
+          }
+        },
+        {
+          "step": 16,
+          "operation": "browser.capture",
+          "elapsed_us": 1590560,
+          "timing": {
+            "running": true,
+            "command_us": 1590560,
+            "total_elapsed_us": 343333078,
+            "command_total_us": 20981720,
+            "commands": 52
+          },
+          "value": {
+            "path": "target/e2e-20261122/pure-l06.png",
+            "mimeType": "image/png",
+            "bytes": 22018,
+            "width": 420,
+            "height": 800,
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "coordinateSpace": "css_viewport",
+            "cssViewport": {
+              "x": 0,
+              "y": 0,
+              "width": 420,
+              "height": 800
+            },
+            "pixelsPerCssUnit": {
+              "x": 1,
+              "y": 1
+            },
+            "observation": {
+              "url": "https://neal.fun/not-a-robot/",
+              "timeOrigin": 1795345741226.1,
+              "width": 420,
+              "height": 800,
+              "devicePixelRatio": 1.0000000149011612,
+              "scrollX": 0,
+              "scrollY": 0,
+              "visualViewport": {
+                "width": 420,
+                "height": 800,
+                "scale": 1,
+                "offsetX": 0,
+                "offsetY": 0,
+                "pageX": 0,
+                "pageY": 0
+              }
+            }
+          }
+        },
+        {
+          "step": 17,
+          "operation": "browser.background",
+          "elapsed_us": 397,
+          "timing": {
+            "running": true,
+            "command_us": 397,
+            "total_elapsed_us": 343333481,
+            "command_total_us": 20982118,
+            "commands": 53
+          },
+          "value": {
+            "enabled": false,
+            "focus_emulated": false,
+            "changed": true,
+            "focus_emulation_cleared": true,
+            "scope": "selected_page_session",
+            "targetId": "941F2349B69ED71B7731A92ED7580525",
+            "sessionId": "D5A1EED70384FFC149BF9D24D97B4077",
+            "document": null,
+            "input_delivery": "cdp_selected_page",
+            "idle_navigation_cleanup": "next_zuse_command"
+          }
+        }
+      ]
+    }
+  ],
+  "redaction": {
+    "policy": "Developer-home paths and ephemeral ssmcp client/job identifiers are replaced with stable aliases shared across the 2026-11-22 acceptance evidence set. No test result, duration, software version, source SHA, or substantive error was changed.",
+    "aliases": [
+      "<SSMCP_CLIENT_01>",
+      "<SSMCP_JOB_01>",
+      "<SSMCP_JOB_05>"
+    ],
+    "source_sha256_before_redaction": "27605b3f8f4b6de4a753bd2bea2332cb7921c96dec3befdf3b142ea9e9b6df8b"
+  }
+}

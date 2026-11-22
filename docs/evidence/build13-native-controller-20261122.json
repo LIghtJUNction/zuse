@@ -1,0 +1,28 @@
+{
+  "schema": "zuse.acceptance.build.v1",
+  "iteration": 13,
+  "job_id": "<SSMCP_JOB_04>",
+  "status": "passed targeted native Chromium gates and CLI build",
+  "tests": 2,
+  "test_stdout": "\nrunning 2 tests\ntest browser::control_keys::tests::native_controller_reads_dom_and_canvas_carries_fresh_memory_and_rejects_side_effects ... ok\ntest browser::control_keys::tests::native_controller_side_effect_capabilities ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 255 filtered out; finished in 1.70s\n\n",
+  "diagnostic_stderr": "   Compiling zuse-computer v0.6.0 (<DEVELOPER_HOME_01>/Documents/GITHUB/zuse/target/e2e-worktree-20261122)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 52s\n     Running unittests src/lib.rs (/var/tmp/project-z-cargo-target/debug/build/zuse-computer/b052d54a8ced308c/out/zuse-b052d54a8ced308c)\ncontrol_keys capability Chromium: {\"protocolVersion\":\"1.3\",\"product\":\"Chrome/158.0.8127.36\",\"revision\":\"@14d6f648e8cd7ad750a4044200ce94d3321be260\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36\",\"jsVersion\":\"15.8.62.31\"}\ncontrol_keys capability document.hasFocus: Ok(\"true\")\ncontrol_keys capability document.visibilityState: Ok(\"\\\"visible\\\"\")\ncontrol_keys capability activeElement.isConnected: Ok(\"true\")\ncontrol_keys capability innerWidth/innerHeight: Ok(\"[780,493]\")\ncontrol_keys capability visualViewport.scale: Ok(\"1\")\ncontrol_keys capability isolated missing page global: Ok(\"\\\"undefined\\\"\")\ncontrol_keys capability getElementById/textContent: Err(\"control_keys JavaScript failed: {\\\"exceptionId\\\":1,\\\"text\\\":\\\"Uncaught\\\",\\\"lineNumber\\\":-1,\\\"columnNumber\\\":-1,\\\"scriptId\\\":\\\"1\\\",\\\"exception\\\":{\\\"type\\\":\\\"object\\\",\\\"subtype\\\":\\\"error\\\",\\\"className\\\":\\\"EvalError\\\",\\\"description\\\":\\\"EvalError: Possible side-effect in debug-evaluate\\\",\\\"objectId\\\":\\\"285774466961508493.3.3\\\"}}\")\ncontrol_keys capability querySelector/textContent: Ok(\"0\")\ncontrol_keys capability retained target guard: Ok(\"true\")\ncontrol_keys capability fresh JSON memory: Ok(\"{\\\"tick\\\":1}\")\ncontrol_keys capability full retained policy wrapper: Ok(\"{\\\"status\\\":\\\"decision\\\",\\\"decision\\\":{\\\"keys\\\":[],\\\"done\\\":true},\\\"memory\\\":{\\\"ticks\\\":1}}\")\ncontrol_keys capability wrapper without target guard: Ok(\"{\\\"status\\\":\\\"decision\\\",\\\"decision\\\":{\\\"keys\\\":[],\\\"done\\\":true},\\\"memory\\\":{\\\"ticks\\\":1}}\")\ncontrol_keys capability preexisting control mutation: Err(\"control_keys JavaScript failed: {\\\"exceptionId\\\":2,\\\"text\\\":\\\"Uncaught\\\",\\\"lineNumber\\\":-1,\\\"columnNumber\\\":-1,\\\"scriptId\\\":\\\"1\\\",\\\"exception\\\":{\\\"type\\\":\\\"object\\\",\\\"subtype\\\":\\\"error\\\",\\\"className\\\":\\\"EvalError\\\",\\\"description\\\":\\\"EvalError: Possible side-effect in debug-evaluate\\\",\\\"objectId\\\":\\\"285774466961508493.3.5\\\"}}\")\ncontrol_keys capability DOM attribute mutation: Err(\"control_keys JavaScript failed: {\\\"exceptionId\\\":3,\\\"text\\\":\\\"Uncaught\\\",\\\"lineNumber\\\":-1,\\\"columnNumber\\\":-1,\\\"scriptId\\\":\\\"1\\\",\\\"exception\\\":{\\\"type\\\":\\\"object\\\",\\\"subtype\\\":\\\"error\\\",\\\"className\\\":\\\"EvalError\\\",\\\"description\\\":\\\"EvalError: Possible side-effect in debug-evaluate\\\",\\\"objectId\\\":\\\"285774466961508493.3.7\\\"}}\")\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s\n",
+  "omitted": "One diagnostic line containing the owned fixture's base64 data URL; fixture source is tests/support/browser_control_keys.rs.",
+  "source": {
+    "support_file": "tests/support/browser_control_keys.rs",
+    "sha256_before_cargo_fmt": "1ee78978e83989f29f7045427b0e94a4c85333432e25bece022a069b7accde6d"
+  },
+  "boundaries": [
+    "The capability diagnosis submits no input.",
+    "The behavioral test uses owned fixture pages and trusted key events.",
+    "throwOnSideEffect remains enabled.",
+    "These tests do not establish completion of the public game or every ChatGPT desktop operation."
+  ],
+  "redaction": {
+    "policy": "Developer-home paths and ephemeral ssmcp client/job identifiers are replaced with stable aliases shared across the 2026-11-22 acceptance evidence set. No test result, duration, software version, source SHA, or substantive error was changed.",
+    "aliases": [
+      "<DEVELOPER_HOME_01>",
+      "<SSMCP_JOB_04>"
+    ],
+    "source_sha256_before_redaction": "8d6cb8eaffef752d79374a52273d01293dc17b118475b6184de6ddbb8c2047ab"
+  }
+}

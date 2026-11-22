@@ -40,7 +40,19 @@ fn native_chromium_isolated_profile() {
     assert!(browser.fill("#password", "secret").is_err());
     assert!(browser.text().unwrap().contains("Native zuse"));
     assert!(browser.tabs().unwrap().contains("targetInfos"));
-    browser.screenshot(screenshot.to_str().unwrap()).unwrap();
+    let capture = browser.screenshot(screenshot.to_str().unwrap()).unwrap();
+    zuse::json::with_value(&capture, |root| {
+        assert_eq!(root.get("width").unwrap().integer().unwrap(), 640);
+        assert_eq!(root.get("height").unwrap().integer().unwrap(), 480);
+        let viewport = root.get("cssViewport").unwrap();
+        assert_eq!(viewport.get("width").unwrap().integer().unwrap(), 640);
+        assert_eq!(viewport.get("height").unwrap().integer().unwrap(), 480);
+        let ratio = root.get("pixelsPerCssUnit").unwrap();
+        assert_eq!(ratio.get("x").unwrap().raw(), "1");
+        assert_eq!(ratio.get("y").unwrap().raw(), "1");
+        Ok(())
+    })
+    .unwrap();
     let png = std::fs::read(&screenshot).unwrap();
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 640);

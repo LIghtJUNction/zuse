@@ -1,0 +1,29 @@
+# Parameterized helpers for an existing browser page. Declarations alone perform
+# no browser or desktop operation. Import this file into a reviewed Zuse program.
+# These compose primitives exercised in the 2026-11-22 acceptance; this example
+# itself is not an end-to-end acceptance result.
+
+/// Attach to an observed /devtools/page/... WebSocket and set an explicit CSS viewport.
+/// The caller keeps the browser owner alive. This does not activate a hidden tab.
+fn attach_existing_page(page_endpoint, width, height) {
+    browser.connect(endpoint=page_endpoint)
+    browser.viewport(width=width, height=height)
+}
+
+/// Click one unique visible control in the selected page using trusted CDP input.
+/// Pass a simple compound selector, an observed scope and the exact page origin.
+/// The actual page must render normally; focus emulation alone does not ensure this.
+fn click_one_visible_control(scope, selector, origin, timeout_ms) {
+    watch_until_click(
+        source="browser", scope=scope, selector=selector, origin=origin,
+        max_clicks=1, timeout=timeout_ms,
+    )
+}
+
+/// Hold at most two non-opposite arrow keys until an owned canvas observation is true.
+/// The caller creates canvas.watch first and supplies a Boolean expression over state.
+/// Its TTL must cover the command; latest records need age checks and are not entities.
+/// The timeout is 1..10000 ms. Initially true means no input; timeout is a failure.
+fn hold_until_rendered_state(keys, condition, observer, timeout_ms) {
+    browser.hold_until(keys=keys, condition=condition, canvas=observer, timeout=timeout_ms)
+}

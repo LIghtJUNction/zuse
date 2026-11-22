@@ -4,7 +4,7 @@
 //! supplied local debugging endpoint. No browser driver or scripting runtime is used.
 use std::{
     collections::{BTreeSet, VecDeque},
-    fs::{self, OpenOptions},
+    fs,
     io::{Read, Write},
     net::{IpAddr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
@@ -15,8 +15,14 @@ use std::{
 };
 use zmcpio::json::{Document, Limits, Token, Value};
 
+mod activation;
+mod background;
+pub(crate) mod canvas;
+pub(crate) mod capture;
 mod click_watch;
+mod control_keys;
 mod key_hold;
+pub(crate) mod pointer;
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
@@ -38,6 +44,8 @@ pub struct Browser {
     close_error: Option<String>,
     observation_binding: String,
     observation_ids: BTreeSet<String>,
+    canvas_observer_owned: bool,
+    background_state: Option<background::State>,
 }
 
 impl Browser {
@@ -84,7 +92,10 @@ impl Browser {
                     && port.parse::<u16>().is_ok()
                     && path.starts_with("/devtools/browser/")
                 {
-                    break Self::connect(&format!("ws://127.0.0.1:{port}{path}"));
+                    break Self::connect_with_background(
+                        &format!("ws://127.0.0.1:{port}{path}"),
+                        false,
+                    );
                 }
             }
             match child.try_wait() {
@@ -117,8 +128,13 @@ impl Browser {
 
     /// Connect only to a literal loopback IP or `localhost`. An HTTP URL is
     /// resolved through `/json/version`; a WebSocket URL is used directly.
-    /// A fresh page is created; existing pages can be selected with `select`.
+    /// A fresh background page is created; existing pages can be selected with
+    /// `select`. Direct-page endpoints only attach. Neither path activates a page.
     pub fn connect(endpoint: &str) -> Result<Self> {
+        Self::connect_with_background(endpoint, true)
+    }
+
+    fn connect_with_background(endpoint: &str, background: bool) -> Result<Self> {
         let endpoint = if endpoint.starts_with("http://") {
             discover_endpoint(endpoint)?
         } else {
@@ -126,7 +142,7 @@ impl Browser {
         };
         let socket = WebSocket::connect(&endpoint)?;
         let page_endpoint = endpoint.contains("/devtools/page/");
-        Self::from_socket(socket, page_endpoint, false)
+        Self::from_socket_with_background(socket, page_endpoint, false, background)
     }
 
     /// Attach to one explicitly named, existing page. This does not create,
@@ -259,13 +275,24 @@ impl Browser {
                 PROFILE_ID.fetch_add(1, Ordering::Relaxed)
             ),
             observation_ids: BTreeSet::new(),
+            canvas_observer_owned: false,
+            background_state: None,
         }
     }
 
     fn from_socket(socket: WebSocket, page_endpoint: bool, mobile: bool) -> Result<Self> {
+        Self::from_socket_with_background(socket, page_endpoint, mobile, mobile)
+    }
+
+    fn from_socket_with_background(
+        socket: WebSocket,
+        page_endpoint: bool,
+        mobile: bool,
+        background: bool,
+    ) -> Result<Self> {
         let mut browser = Self::unattached_socket(socket, mobile);
         if !page_endpoint {
-            let params = if mobile {
+            let params = if background {
                 r#"{"url":"about:blank","background":true}"#
             } else {
                 r#"{"url":"about:blank"}"#
@@ -384,10 +411,16 @@ impl Browser {
         let candidate = self.attach_session(target)?;
         let previous_session = std::mem::replace(&mut self.session, candidate);
         let prepared = self.enable_page().and_then(|()| {
-            if !self.observation_ids.is_empty() {
+            if !self.observation_ids.is_empty()
+                || self.canvas_observer_owned
+                || self.background_state.is_some()
+            {
                 let candidate_session =
                     std::mem::replace(&mut self.session, previous_session.clone());
-                let cleanup = self.clear_observations();
+                let cleanup = self
+                    .clear_background()
+                    .and_then(|()| self.close_canvas_observer())
+                    .and_then(|()| self.clear_observations());
                 self.session = candidate_session;
                 cleanup?;
             }
@@ -419,6 +452,8 @@ impl Browser {
         if url.len() > 65536 || url.chars().any(|c| c == '\0') {
             return Err("invalid URL".into());
         }
+        self.clear_background()?;
+        self.close_canvas_observer()?;
         self.clear_observations()?;
         self.events.clear();
         let result = self.request(
@@ -807,34 +842,83 @@ impl Browser {
         self.request("Input.dispatchKeyEvent", &format!(r#"{{"type":"keyUp","key":{},"code":{},"windowsVirtualKeyCode":{vk},"modifiers":{modifiers}}}"#, quote(key), quote(&code)), true)
     }
 
-    /// Save the selected page as a PNG screenshot.
+    /// Save the selected page as a PNG screenshot with its CSS coordinate map.
+    /// Geometry is observed before capture and rechecked before replacing output.
+    /// Observation does not require focus or activate a background page.
     pub fn screenshot(&mut self, path: &str) -> Result<String> {
-        let result = self.request(
+        self.screenshot_with_format(path, "png", None)
+    }
+
+    /// Save native CDP PNG or JPEG bytes with the same geometry checks.
+    /// JPEG quality is 0..100 (default 80); PNG rejects an explicit quality.
+    pub fn screenshot_with_format(
+        &mut self,
+        path: &str,
+        format: &str,
+        quality: Option<i64>,
+    ) -> Result<String> {
+        crate::screenshot::validate_output_path(Path::new(path))?;
+        let format = capture::Format::parse(format, quality)?;
+        let deadline = Instant::now() + TIMEOUT;
+        let target = self.target.clone();
+        let session = self.session.clone();
+        let before = self.screenshot_state(deadline)?;
+        let result = self.request_until(
             "Page.captureScreenshot",
-            r#"{"format":"png","fromSurface":true,"captureBeyondViewport":false}"#,
+            &format.parameters(),
             true,
+            deadline,
+            None,
         )?;
         let encoded = field_string(&result, &["data"])?;
         let bytes = decode_base64(&encoded)?;
-        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-            return Err("browser returned invalid PNG data".into());
+        let (width, height) = format.dimensions(&bytes)?;
+        let metadata =
+            screenshot_metadata(path, bytes.len(), width, height, &target, &before, format)?;
+        crate::screenshot::write_image(Path::new(path), &bytes, || {
+            if self.target != target
+                || self.session != session
+                || self.screenshot_state(deadline)? != before
+            {
+                return Err("stale_target: browser page, viewport, scale or scroll changed during capture; capture again before using its coordinates".into());
+            }
+            if Instant::now() >= deadline {
+                return Err("timeout: browser screenshot deadline reached".into());
+            }
+            Ok(())
+        })?;
+        Ok(metadata)
+    }
+
+    fn screenshot_state(&mut self, deadline: Instant) -> Result<String> {
+        // As with pointer observation, document identity and geometry are read
+        // together. Focus/visibility deliberately do not gate screenshots.
+        let expression = r#"({url:location.href,timeOrigin:performance.timeOrigin,width:innerWidth,height:innerHeight,devicePixelRatio,scrollX,scrollY,visualViewport:visualViewport?{width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,offsetX:visualViewport.offsetLeft,offsetY:visualViewport.offsetTop,pageX:visualViewport.pageLeft,pageY:visualViewport.pageTop}:null})"#;
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis();
+        if remaining == 0 {
+            return Err("timeout: browser screenshot deadline reached".into());
         }
-        let mut options = OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options
-            .open(path)
-            .map_err(|e| format!("screenshot output: {e}"))?;
-        file.write_all(&bytes).map_err(|e| e.to_string())?;
-        Ok(format!(
-            r#"{{"path":{},"mimeType":"image/png","bytes":{}}}"#,
-            quote(path),
-            bytes.len()
-        ))
+        let result = self.request_until(
+            "Runtime.evaluate",
+            &format!(r#"{{"expression":{},"returnByValue":true,"awaitPromise":false,"timeout":{remaining}}}"#, quote(expression)),
+            true,
+            deadline,
+            None,
+        )?;
+        with_json(&result, |root| {
+            if let Some(exception) = root.get("exceptionDetails") {
+                return Err(format!(
+                    "browser screenshot observation failed: {}",
+                    exception.raw()
+                ));
+            }
+            root.get("result")
+                .and_then(|value| value.get("value"))
+                .map(|value| value.raw().to_owned())
+                .ok_or_else(|| "browser screenshot observation returned no state".into())
+        })
     }
 
     /// Set the page viewport in CSS pixels.
@@ -859,11 +943,19 @@ impl Browser {
                 None => Ok(r#"{"closed":true}"#.into()),
             };
         }
+        let background_error = self.clear_background().err();
+        let canvas_error = self.close_canvas_observer().err();
         let mut error = if self.child.is_none() && !self.owned_target {
             self.clear_attached_observations().err()
         } else {
             self.clear_observations().err()
         };
+        for cleanup in [background_error, canvas_error].into_iter().flatten() {
+            error = Some(match error {
+                Some(other) => format!("{cleanup}; {other}"),
+                None => cleanup,
+            });
+        }
         if self.child.is_none() && self.owned_target && !self.target.is_empty() {
             let closed = self.close_target(&self.target.clone());
             if let Err(value) = closed {
@@ -908,6 +1000,16 @@ impl Browser {
         self.request_until(method, params, page, deadline, None)
     }
 
+    fn connection_recovery_hint(&self) -> &'static str {
+        if self.socket.failed.is_none() {
+            ""
+        } else if self.child.is_some() || self.owned_target {
+            "; command outcome may be unknown and was not replayed; this session owns browser resources, so browser.close() can end its browser or page; preserve the owner and attach from a separate session if the page still exists"
+        } else {
+            "; command outcome may be unknown and was not replayed; browser.close() disconnects this attachment without closing the page, then explicitly browser.connect() and inspect the page before deciding whether to retry"
+        }
+    }
+
     fn request_until(
         &mut self,
         method: &str,
@@ -946,17 +1048,21 @@ impl Browser {
         } else {
             String::new()
         };
-        self.socket
-            .send_until(
-                1,
-                format!(
-                    r#"{{"id":{id},"method":{},"params":{params}{session}}}"#,
-                    quote(method)
-                )
-                .as_bytes(),
-                deadline.min(Instant::now() + Duration::from_secs(5)),
+        let sent = self.socket.send_until(
+            1,
+            format!(
+                r#"{{"id":{id},"method":{},"params":{params}{session}}}"#,
+                quote(method)
             )
-            .map_err(|error| format!("CDP {method} write: {error}"))?;
+            .as_bytes(),
+            deadline.min(Instant::now() + Duration::from_secs(5)),
+        );
+        if let Err(error) = sent {
+            return Err(format!(
+                "CDP {method} write: {error}{}",
+                self.connection_recovery_hint()
+            ));
+        }
         Ok(id)
     }
 
@@ -991,7 +1097,10 @@ impl Browser {
                         if error.starts_with("cancelled:") {
                             error
                         } else {
-                            format!("CDP {method} read: {error}")
+                            format!(
+                                "CDP {method} read: {error}{}",
+                                self.connection_recovery_hint()
+                            )
                         }
                     })?
             };
@@ -1024,6 +1133,65 @@ impl Drop for Browser {
     fn drop(&mut self) {
         let _ = self.close();
     }
+}
+
+fn screenshot_metadata(
+    path: &str,
+    bytes: usize,
+    width: u32,
+    height: u32,
+    target: &str,
+    observation: &str,
+    format: capture::Format,
+) -> Result<String> {
+    with_json(observation, |root| {
+        let css_width = number(root.get("width"))?;
+        let css_height = number(root.get("height"))?;
+        if css_width <= 0.0 || css_height <= 0.0 {
+            return Err("browser screenshot has an empty CSS viewport".into());
+        }
+        // A regular browser zoom changes DPR and CSS width/height together.
+        // Pinch zoom/pan adds a visual-viewport transform; retain the image but
+        // do not advertise an unverified layout-to-visual coordinate map.
+        let simple_viewport = match root.get("visualViewport") {
+            Some(viewport) if viewport.raw() != "null" => {
+                number(viewport.get("scale"))? == 1.0
+                    && number(viewport.get("offsetX"))? == 0.0
+                    && number(viewport.get("offsetY"))? == 0.0
+            }
+            _ => true,
+        };
+        // The compositor surface and emulated CSS viewport can disagree after
+        // attaching through a new CDP connection. A regular scale must fit both
+        // axes, allowing at most one pixel of independent raster rounding.
+        let minimum_scale =
+            ((f64::from(width) - 1.0) / css_width).max((f64::from(height) - 1.0) / css_height);
+        let maximum_scale =
+            ((f64::from(width) + 1.0) / css_width).min((f64::from(height) + 1.0) / css_height);
+        let consistent_scale = minimum_scale <= maximum_scale;
+        let mapping = if simple_viewport && consistent_scale {
+            format!(
+                r#"{{"x":{},"y":{}}}"#,
+                f64::from(width) / css_width,
+                f64::from(height) / css_height
+            )
+        } else {
+            "null".into()
+        };
+        let mapping_error = if !consistent_scale {
+            r#", "mappingError":"image surface and CSS viewport have inconsistent axis scales; explicitly set browser.viewport on this connection and capture again""#
+        } else if simple_viewport {
+            ""
+        } else {
+            r#", "mappingError":"pinch zoom or visual viewport pan requires a separate coordinate transform""#
+        };
+        Ok(format!(
+            r#"{{"path":{},"mimeType":{},"bytes":{bytes},"width":{width},"height":{height},"targetId":{},"coordinateSpace":"css_viewport","cssViewport":{{"x":0,"y":0,"width":{css_width},"height":{css_height}}},"pixelsPerCssUnit":{mapping},"observation":{observation}{mapping_error}}}"#,
+            quote(path),
+            quote(format.mime_type()),
+            quote(target)
+        ))
+    })
 }
 
 fn lifecycle_loaded(message: &str, loader: &str, session: &str) -> Result<bool> {
@@ -1466,6 +1634,7 @@ struct WebSocket {
     incoming: Vec<u8>,
     message: Vec<u8>,
     fragmented: bool,
+    failed: Option<String>,
 }
 impl WebSocket {
     fn new(stream: TcpStream) -> Self {
@@ -1474,6 +1643,7 @@ impl WebSocket {
             incoming: Vec::new(),
             message: Vec::new(),
             fragmented: false,
+            failed: None,
         }
     }
     fn connect(url: &str) -> Result<Self> {
@@ -1547,6 +1717,9 @@ impl WebSocket {
     }
 
     fn send_until(&mut self, opcode: u8, payload: &[u8], deadline: Instant) -> Result<()> {
+        if let Some(error) = &self.failed {
+            return Err(format!("browser connection is unusable: {error}"));
+        }
         if payload.len() > MAX_MESSAGE {
             return Err("WebSocket output exceeds 16 MiB".into());
         }
@@ -1565,15 +1738,29 @@ impl WebSocket {
         let mut mask = [0; 4];
         entropy(&mut mask)?;
         header.extend_from_slice(&mask);
-        write_all_deadline(&mut self.stream, &header, deadline)?;
+        if let Err(error) = write_all_deadline(&mut self.stream, &header, deadline) {
+            return Err(self.fail_connection(error));
+        }
         let mut buffer = [0; 8192];
         for (block, bytes) in payload.chunks(buffer.len()).enumerate() {
             for (index, byte) in bytes.iter().enumerate() {
                 buffer[index] = byte ^ mask[(block * 8192 + index) % 4];
             }
-            write_all_deadline(&mut self.stream, &buffer[..bytes.len()], deadline)?;
+            if let Err(error) =
+                write_all_deadline(&mut self.stream, &buffer[..bytes.len()], deadline)
+            {
+                return Err(self.fail_connection(error));
+            }
         }
         Ok(())
+    }
+
+    fn fail_connection(&mut self, error: String) -> String {
+        // A failed frame write may have sent a prefix. Do not append another
+        // frame or automatically replay a possibly delivered application action.
+        let reason = self.failed.get_or_insert(error);
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        format!("browser connection is unusable: {reason}")
     }
 
     fn read_text(&mut self, deadline: Instant) -> Result<String> {
@@ -1589,8 +1776,13 @@ impl WebSocket {
             if let Some(cancel) = cancellation {
                 cancel.check()?;
             }
-            if let Some(message) = self.buffered_text()? {
-                return Ok(message);
+            if let Some(error) = &self.failed {
+                return Err(format!("browser connection is unusable: {error}"));
+            }
+            match self.buffered_text() {
+                Ok(Some(message)) => return Ok(message),
+                Ok(None) => {}
+                Err(error) => return Err(self.fail_connection(error)),
             }
             let remaining = deadline
                 .checked_duration_since(Instant::now())
@@ -1608,7 +1800,7 @@ impl WebSocket {
                 .map_err(|e| e.to_string())?;
             let mut bytes = [0; 8192];
             match self.stream.read(&mut bytes) {
-                Ok(0) => return Err("browser closed the WebSocket".into()),
+                Ok(0) => return Err(self.fail_connection("browser closed the WebSocket".into())),
                 Ok(count) => self.incoming.extend_from_slice(&bytes[..count]),
                 Err(error)
                     if matches!(
@@ -1617,7 +1809,9 @@ impl WebSocket {
                             | std::io::ErrorKind::WouldBlock
                             | std::io::ErrorKind::Interrupted
                     ) => {}
-                Err(error) => return Err(format!("browser WebSocket read: {error}")),
+                Err(error) => {
+                    return Err(self.fail_connection(format!("browser WebSocket read: {error}")));
+                }
             }
         }
     }
@@ -1951,6 +2145,49 @@ fn sha1(input: &[u8]) -> [u8; 20] {
 mod tests {
     use super::*;
     #[test]
+    fn failed_websocket_write_is_terminal_and_never_replayed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut socket = WebSocket::new(stream);
+        let error = socket.send(1, b"first command").unwrap_err();
+        assert!(error.contains("unusable"));
+        let reason = socket.failed.clone().unwrap();
+        let error = socket.send(1, b"must not be sent").unwrap_err();
+        assert!(error.contains(&reason));
+        assert_eq!(socket.failed.as_deref(), Some(reason.as_str()));
+        let mut byte = [0];
+        assert_eq!(peer.read(&mut byte).unwrap(), 0);
+    }
+
+    #[test]
+    fn disconnected_page_attachment_closes_locally_with_explicit_recovery_hint() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        peer.write_all(&[0x88, 0]).unwrap();
+        let mut browser = Browser::unattached_socket(WebSocket::new(stream), false);
+        assert!(
+            browser
+                .socket
+                .read_text(Instant::now() + Duration::from_secs(1))
+                .is_err()
+        );
+        let error = browser.evaluate("document.title").unwrap_err();
+        assert!(error.contains("was not replayed"));
+        assert!(error.contains("without closing the page"));
+        assert!(browser.child.is_none() && !browser.owned_target);
+        browser.close().unwrap();
+        // Neither the rejected evaluation nor Browser.close/Target.closeTarget
+        // may be written to the failed attachment.
+        let mut byte = [0];
+        assert_eq!(peer.read(&mut byte).unwrap(), 0);
+    }
+
+    #[test]
     fn websocket_accept_vector() {
         assert_eq!(
             encode_base64(&sha1(
@@ -2110,3 +2347,11 @@ mod android_browser_tests;
 #[cfg(test)]
 #[path = "../tests/support/browser_selection.rs"]
 mod browser_selection_tests;
+
+#[cfg(test)]
+#[path = "../tests/support/browser_capture.rs"]
+mod browser_capture_tests;
+
+#[cfg(test)]
+#[path = "../tests/support/browser_canvas_lifecycle.rs"]
+mod browser_canvas_lifecycle_tests;

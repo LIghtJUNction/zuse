@@ -10,7 +10,25 @@ use std::str::Chars;
 
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_BATCH_CHARACTERS: usize = 1024;
-const MAX_DISTINCT_CHARACTERS: usize = 248;
+
+// XKB 8 becomes evdev KEY_RESERVED (0). Older Chromium Wayland clients
+// discard that code, and also discard codes without a DomCode mapping before
+// consulting the custom keymap. Use the nonzero XKB entries at or below 255 in
+// Chromium's common mapping table; its gaps must not become text slots.
+// https://chromium.googlesource.com/chromium/src/+/78141ba63b3e66e6c934c3a7e95cdb19b53a41c7/ui/events/keycodes/dom/dom_code_data.inc
+const TEXT_KEYCODES: &[u32] = &[
+    9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+    33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+    57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80,
+    81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 104,
+    105, 106, 107, 108, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 121, 122, 123, 124, 125,
+    126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 139, 140, 141, 142, 143, 144, 145,
+    146, 148, 150, 151, 152, 158, 160, 163, 164, 166, 167, 169, 171, 172, 173, 174, 175, 176, 177,
+    179, 180, 181, 182, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201,
+    202, 209, 212, 214, 215, 216, 217, 218, 225, 232, 233, 235, 236, 237, 238, 239, 240, 241, 242,
+    243, 252,
+];
+const MAX_DISTINCT_CHARACTERS: usize = TEXT_KEYCODES.len();
 
 /// Validate the entire input before the first externally visible effect.
 ///
@@ -37,13 +55,13 @@ pub(super) fn validate(text: &str) -> Result<(), String> {
 pub(super) struct Batch {
     /// Self-contained XKB text. Append a NUL byte when transferring it by FD.
     pub keymap: String,
-    /// XKB codes in 8..=255; send code - 8 through virtual-keyboard-v1.
+    /// Enumerated XKB codes in 9..=255; send code - 8 through virtual-keyboard-v1.
     pub codes: Vec<u32>,
 }
 
 /// Streams an already validated UTF-8 string without retaining prior batches.
 ///
-/// A batch holds at most 1024 input characters and 248 distinct characters.
+/// A batch holds at most 1024 input characters and 191 distinct characters.
 /// The caller must call validate once on the full source before execution;
 /// iteration alone is a planner and deliberately has no external effects.
 pub(super) struct Batches<'a> {
@@ -85,7 +103,7 @@ impl Iterator for Batches<'_> {
                 None => break,
             };
             self.remaining.next();
-            codes.push(slot as u32 + 8);
+            codes.push(TEXT_KEYCODES[slot]);
         }
 
         Some(Batch {
@@ -99,10 +117,10 @@ impl FusedIterator for Batches<'_> {}
 
 fn keymap(characters: &[char]) -> String {
     let mut map = String::with_capacity(400 + characters.len() * 110);
-    map.push_str("xkb_keymap {\nxkb_keycodes \"zuse\" {\nminimum = 8;\nmaximum = 255;\n");
-    for index in 0..characters.len() {
+    map.push_str("xkb_keymap {\nxkb_keycodes \"zuse\" {\nminimum = 9;\nmaximum = 255;\n");
+    for (index, code) in TEXT_KEYCODES.iter().take(characters.len()).enumerate() {
         // Formatting into a String cannot return a formatting error.
-        let _ = writeln!(map, "<K{index:03}> = {};", index + 8);
+        let _ = writeln!(map, "<K{index:03}> = {code};");
     }
     map.push_str(
         "};\nxkb_types \"zuse\" {\n\
@@ -174,7 +192,7 @@ mod tests {
     #[test]
     fn repeats_keep_codes_and_source_order() {
         let batch = Batches::new("中😀中\n\t\r!\"\\").next().unwrap();
-        assert_eq!(batch.codes, [8, 9, 8, 10, 11, 12, 13, 14, 15]);
+        assert_eq!(batch.codes, [9, 10, 9, 11, 12, 13, 14, 15, 16]);
         assert!(batch.keymap.contains("U4E2D"));
         assert!(batch.keymap.contains("U1F600"));
         assert!(batch.keymap.contains("U0022"));
@@ -189,37 +207,69 @@ mod tests {
         let source = "😀".repeat(MAX_BATCH_CHARACTERS + 1);
         let batches: Vec<_> = Batches::new(&source).collect();
         assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].codes, vec![8; MAX_BATCH_CHARACTERS]);
-        assert_eq!(batches[1].codes, [8]);
+        assert_eq!(batches[0].codes, vec![9; MAX_BATCH_CHARACTERS]);
+        assert_eq!(batches[1].codes, [9]);
     }
 
     #[test]
-    fn distinct_limit_uses_entire_xkb_code_range_without_dropping_next_char() {
-        let source: String = (0..249)
-            .map(|offset| char::from_u32(0x4e00 + offset).unwrap())
+    fn reserved_and_unmapped_codes_are_never_allocated_to_text() {
+        assert_eq!(TEXT_KEYCODES.first(), Some(&9));
+        assert_eq!(TEXT_KEYCODES.len(), 191);
+        assert!(TEXT_KEYCODES.windows(2).all(|codes| codes[0] < codes[1]));
+        assert!(TEXT_KEYCODES.iter().all(|code| (9..=255).contains(code)));
+        // These are XKB codes, not evdev codes: the first omitted holes are
+        // evdev 84, 95, 101 and 112. No custom symbol fixes a missing DomCode.
+        for code in [8, 92, 103, 109, 120, 138, 147, 255] {
+            assert!(!TEXT_KEYCODES.contains(&code));
+        }
+        let batch = Batches::new("zuse").next().unwrap();
+        assert_eq!(batch.codes, [9, 10, 11, 12]);
+        assert!(batch.keymap.contains("<K000> = 9;"));
+        assert!(!batch.keymap.contains(" = 8;"));
+    }
+
+    #[test]
+    fn distinct_limit_preserves_order_across_sparse_code_pool_and_next_batch() {
+        let source: String = (0..MAX_DISTINCT_CHARACTERS + 1)
+            .map(|offset| char::from_u32(0x4e00 + offset as u32).unwrap())
             .collect();
         let batches: Vec<_> = Batches::new(&source).collect();
         assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].codes, (8..=255).collect::<Vec<_>>());
-        assert_eq!(batches[1].codes, [8]);
-        assert!(batches[0].keymap.contains("<K247> = 255;"));
-        assert!(batches[1].keymap.contains("U4EF8"));
+        assert_eq!(batches[0].codes.as_slice(), TEXT_KEYCODES);
+        assert_eq!(batches[1].codes, [9]);
+        for (index, code) in TEXT_KEYCODES.iter().enumerate() {
+            assert!(
+                batches[0]
+                    .keymap
+                    .contains(&format!("<K{index:03}> = {code};"))
+            );
+            assert!(batches[0].keymap.contains(&format!(
+                "key <K{index:03}> {{ type[Group1] = \"ONE_LEVEL\", symbols[Group1] = [ U{:04X} ] }};",
+                0x4e00 + index as u32,
+            )));
+        }
+        assert!(
+            batches[1]
+                .keymap
+                .contains(&format!("U{:04X}", 0x4e00 + MAX_DISTINCT_CHARACTERS as u32))
+        );
     }
 
     #[test]
     fn repeats_after_distinct_limit_still_fit_until_the_next_new_character() {
-        let mut source: String = (0..248)
-            .map(|offset| char::from_u32(0x4e00 + offset).unwrap())
+        let mut source: String = (0..MAX_DISTINCT_CHARACTERS)
+            .map(|offset| char::from_u32(0x4e00 + offset as u32).unwrap())
             .collect();
         source.push_str(&"一".repeat(7));
-        source.push('\u{4ef8}');
+        source.push(char::from_u32(0x4e00 + MAX_DISTINCT_CHARACTERS as u32).unwrap());
+        source.push_str("一一");
         let batches: Vec<_> = Batches::new(&source).collect();
         assert_eq!(batches.len(), 2);
-        assert_eq!(&batches[0].codes[248..], &[8; 7]);
-        assert_eq!(batches[1].codes, [8]);
+        assert_eq!(&batches[0].codes[MAX_DISTINCT_CHARACTERS..], &[9; 7]);
+        assert_eq!(batches[1].codes, [9, 10, 10]);
         assert_eq!(
             batches.iter().map(|batch| batch.codes.len()).sum::<usize>(),
-            256
+            MAX_DISTINCT_CHARACTERS + 10
         );
     }
 }

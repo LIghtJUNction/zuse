@@ -3,8 +3,11 @@
 
 Requires GTK4 development files, cc, Hyprland and a built zuse executable.
 This opt-in live test briefly changes desktop focus and pointer position.
-It never opens a browser, captures another window, changes settings or kills
-unrelated processes. Run with --allow-desktop; pass --report for JSON evidence.
+Default capture checks use only owned window surfaces. Optional marker checks
+explicitly capture the single output of the private headless fixture, because
+compositor overlays are outside a window surface. It never opens a browser,
+changes settings or kills unrelated processes. Run with --allow-desktop;
+pass --report for JSON evidence.
 """
 import argparse
 import hashlib
@@ -281,6 +284,37 @@ def main():
                 zuse('keyboard.type(text="Zuse 42! 中文✓🙂")')
                 return {"text":wait_text(0,"AZuse 42! 中文✓🙂")}
             evaluate("foreground_input",foreground)
+            def focused_target():
+                focus(first);active(first)
+                start=text(0)
+                before=value(zuse('keyboard.state()'))["current"]
+                payload=" explicit Zuse 中文✓🙂"
+                zuse("keyboard.type(window="+json.dumps(first)+",text="+json.dumps(payload)+")")
+                observed=wait_text(0,start+payload)
+                active(first)
+                after=value(zuse('keyboard.state()'))["current"]
+                for field in ("address","name","rules","model","layout","variant","options","active_keymap","capsLock","numLock","active_layout_index"):
+                    assert before[field]==after[field],(before,after)
+                assert text(1)=="",text(1)
+                return {"text":observed,"explicit_window":first,
+                        "focus_unchanged":True,"keyboard_restored":True}
+            evaluate("focused_target_unicode",focused_target)
+            def text_keymap_batches():
+                focus(first);active(first)
+                start=text(0)
+                before=value(zuse('keyboard.state()'))["current"]
+                assert before["active_keymap"]!="zuse",before
+                # Cross the sparse, Chromium-compatible keycode capacity. An
+                # IME must observe a fresh identity for the second map and for
+                # the final original-map restoration, not retain batch one.
+                payload=" zuse zaz "+"".join(chr(0x4e00+i) for i in range(200))+" zuse"
+                zuse("keyboard.type(window="+json.dumps(first)+",text="+json.dumps(payload)+")")
+                observed=wait_text(0,start+payload)
+                after=value(zuse('keyboard.state()'))["current"]
+                for field in ("address","name","rules","model","layout","variant","options","active_keymap","capsLock","numLock","active_layout_index"):
+                    assert before[field]==after[field],(before,after)
+                return {"text":observed,"multiple_maps":True,"original_keymap_restored":True}
+            evaluate("text_keymap_batches",text_keymap_batches)
             def background():
                 focus(second);active(second)
                 start=text(0)
@@ -319,6 +353,29 @@ def main():
                 metadata=value(zuse("window.capture(id="+json.dumps(first)+",path="+json.dumps(str(screenshot))+")"))
                 image=png_center(screenshot)
                 assert (metadata["width"],metadata["height"])==(image["width"],image["height"])
+                w=current_own(first)
+                region=metadata["logicalRegion"]
+                assert metadata["window"]==first,metadata
+                assert metadata["captureMode"]=="hyprland-toplevel-export",metadata
+                assert metadata["coordinateSpace"]=="window-local",metadata
+                assert region=={"x":0,"y":0,
+                                "width":w["size"][0],"height":w["size"][1]},metadata
+                ratio=metadata["pixelsPerLogicalUnit"]
+                assert abs(ratio["x"]-image["width"]/region["width"])<1e-12,metadata
+                assert abs(ratio["y"]-image["height"]/region["height"])<1e-12,metadata
+                # The image only maps to window-local logical coordinates.
+                # This owned-fixture pointer check separately observes the
+                # current window position; it never reads a desktop origin
+                # from the native surface capture receipt.
+                point=(round(w["at"][0]+image["width"]/2/ratio["x"]),
+                       round(w["at"][1]+image["height"]/2/ratio["y"]))
+                assert abs(point[0]-(w["at"][0]+w["size"][0]/2))<=.5
+                assert abs(point[1]-(w["at"][1]+w["size"][1]/2))<=.5
+                zuse(f'mouse.use(kind="user",appearance="system");mouse.move(x={point[0]},y={point[1]},duration=0)')
+                observed=value(zuse('mouse.use(kind="user",appearance="system");mouse.position()'))
+                assert (observed["x"],observed["y"])==point,observed
+                image.update(logical_region=region,pixels_per_logical_unit=ratio,
+                             receipt_point_verified=True)
                 return image
             evaluate("window_capture",capture)
             if args.state_tests:
@@ -496,6 +553,15 @@ def main():
                 evaluate("independent_keyboard_locks",independent_keyboard_locks)
             if args.marker_tests:
                 def operation_marker():
+                    assert env.get("ZUSE_PRIVATE_WAYLAND_HEADLESS")=="1"
+                    assert env.get("XDG_CURRENT_DESKTOP")=="zuse-private-headless"
+                    outputs=compositor("monitors")
+                    assert len(outputs)==1,"marker screen capture requires exactly one owned output"
+                    output=outputs[0]
+                    assert output.get("transform",0)==0,output
+                    output_x,output_y=output["x"],output["y"]
+                    output_width=output["width"]/output["scale"]
+                    output_height=output["height"]/output["scale"]
                     focus(first)
                     window=current_own(first)
                     geometry=tuple(window["at"]+window["size"])
@@ -524,15 +590,20 @@ def main():
                         active(first)
                         assert tuple(current_own(first)["at"]+current_own(first)["size"])==geometry
                         path=directory/("marker-"+name+".png")
-                        session("wait(ms=120);window.capture(id="+json.dumps(first)+",path="+json.dumps(str(path))+")")
+                        # Layer-shell markers are compositor content, not part
+                        # of either owned GTK toplevel's exported surface.
+                        receipt=value(session("wait(ms=120);screen.capture(path="+json.dumps(str(path))+")"))
+                        assert receipt["captureMode"]=="composited-screen",receipt
+                        assert "window" not in receipt and "logicalRegion" not in receipt,receipt
                         active(first)
                         screenshots[name]=path
                         return png_pixels(path)
                     def marked_pixels(image, point):
-                        # Compare in captured physical pixels using the current
-                        # window's logical geometry, including 125% scaling.
-                        sx,sy=image["width"]/width,image["height"]/height
-                        cx,cy=(point[0]-x)*sx,(point[1]-y)*sy
+                        # This branch explicitly captures the sole private
+                        # output, whose origin/scale were observed above.
+                        assert (image["width"],image["height"])==(output["width"],output["height"])
+                        sx,sy=image["width"]/output_width,image["height"]/output_height
+                        cx,cy=(point[0]-output_x)*sx,(point[1]-output_y)*sy
                         found=[]
                         for py in range(max(0,int(cy-54*sy)),min(image["height"],int(cy+54*sy)+1)):
                             row=image["rows"][py]
@@ -609,7 +680,7 @@ def main():
                         assert shell.returncode==0,shell.returncode
                         time.sleep(.12)
                         dropped_path=directory/"marker-dropped.png"
-                        zuse("window.capture(id="+json.dumps(first)+",path="+json.dumps(str(dropped_path))+")")
+                        zuse("screen.capture(path="+json.dumps(str(dropped_path))+")")
                         screenshots["dropped"]=dropped_path
                         dropped=png_pixels(dropped_path)
                         assert all(marked_pixels(dropped,p)==0 for p in points)

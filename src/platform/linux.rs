@@ -140,6 +140,18 @@ impl Desktop {
             Backend::Wayland(w) => w.screenshot(path, window),
         }
     }
+    pub(crate) fn screenshot_with_cancellation(
+        &self,
+        path: &Path,
+        window: Option<&str>,
+        cancellation: &crate::observation::Cancellation,
+    ) -> Result<String> {
+        cancellation.check()?;
+        match &self.inner {
+            Backend::X11(x) => x.screenshot(path, window),
+            Backend::Wayland(w) => w.screenshot_with_cancellation(path, window, cancellation),
+        }
+    }
     pub fn type_into(&mut self, id: &str, text: &str) -> Result<()> {
         match &mut self.inner {
             Backend::X11(x) => x.type_into(id, text),

@@ -340,6 +340,8 @@ struct Connection {
     objects: Vec<Proxy>,
     state: Box<State>,
     virtual_keyboard: Proxy,
+    retired_keyboard: Proxy,
+    relay_restore: bool,
     seat: Proxy,
     manager: Proxy,
     original: Vec<u8>,
@@ -349,6 +351,9 @@ struct Connection {
 }
 impl Connection {
     fn open() -> Result<Self> {
+        Self::open_until(Instant::now() + Duration::from_secs(15))
+    }
+    fn open_until(deadline: Instant) -> Result<Self> {
         let library = Library::open(c"libwayland-client.so.0")?;
         let api = Api::load(&library)?;
         let display = unsafe { (api.connect)(ptr::null()) };
@@ -361,11 +366,13 @@ impl Connection {
             objects: Vec::new(),
             state: Box::default(),
             virtual_keyboard: ptr::null_mut(),
+            retired_keyboard: ptr::null_mut(),
+            relay_restore: false,
             seat: ptr::null_mut(),
             manager: ptr::null_mut(),
             original: Vec::new(),
             original_modifiers: None,
-            deadline: Instant::now() + Duration::from_secs(15),
+            deadline,
             _library: library,
         };
         // SAFETY: protocol opcodes and vararg order follow wayland.xml.
@@ -475,6 +482,51 @@ impl Connection {
             return Err("cannot create a virtual keyboard".into());
         }
         Ok(())
+    }
+    fn replace_keyboard(&mut self) -> Result<()> {
+        if !self.retired_keyboard.is_null() {
+            return Err("owned keyboard replacement is already pending".into());
+        }
+        let previous = std::mem::replace(&mut self.virtual_keyboard, ptr::null_mut());
+        match self.create_keyboard() {
+            Ok(()) => {
+                self.retired_keyboard = previous;
+                Ok(())
+            }
+            Err(error) => {
+                self.virtual_keyboard = previous;
+                Err(error)
+            }
+        }
+    }
+    fn destroy_virtual_keyboard(&self, keyboard: Proxy) {
+        if !keyboard.is_null() {
+            // SAFETY: only proxies owned by this Connection are passed here.
+            unsafe {
+                (self.api.marshal)(keyboard, 3, ptr::null(), 1, 1);
+            }
+        }
+    }
+    fn destroy_retired_keyboard(&mut self) {
+        let retired = std::mem::replace(&mut self.retired_keyboard, ptr::null_mut());
+        self.destroy_virtual_keyboard(retired);
+    }
+    fn send_modifiers(&self, modifiers: [u32; 4]) {
+        let [depressed, latched, locked, group] = modifiers;
+        // SAFETY: the owned virtual keyboard is live and has its keymap.
+        unsafe {
+            (self.api.marshal)(
+                self.virtual_keyboard,
+                2,
+                ptr::null(),
+                1,
+                0,
+                depressed,
+                latched,
+                locked,
+                group,
+            );
+        }
     }
     fn register(&mut self, proxy: Proxy) -> Result<()> {
         if proxy.is_null() {
@@ -675,6 +727,9 @@ impl Connection {
         if self.virtual_keyboard.is_null() {
             return Ok(());
         }
+        if self.relay_restore {
+            return self.restore_with_new_keyboard();
+        }
         // Give cleanup its own finite budget even when input reached deadline.
         self.deadline = Instant::now() + Duration::from_secs(2);
         let original = std::mem::take(&mut self.original);
@@ -706,12 +761,71 @@ impl Connection {
         let destroyed = self.roundtrip();
         installed.and(destroyed)
     }
+
+    /// Hyprland's input-method grab caches keymaps by keyboard identity. A map
+    /// restored on the same virtual keyboard is therefore not forwarded to an
+    /// IME that mirrored the temporary map. Publish through a distinct owned
+    /// keyboard, sending only the original modifiers, then remove both devices.
+    fn restore_with_new_keyboard(&mut self) -> Result<()> {
+        self.deadline = Instant::now() + Duration::from_secs(2);
+        let previous = std::mem::replace(&mut self.virtual_keyboard, ptr::null_mut());
+        let created = self.create_keyboard();
+        let submitted = (|| {
+            created?;
+            let original = std::mem::take(&mut self.original);
+            let installed = self.install(&original);
+            self.original = original;
+            installed?;
+            self.send_modifiers(self.original_modifiers.unwrap_or([0; 4]));
+            self.roundtrip()
+        })();
+        // Retire older objects while the new original-map object still exists.
+        // The final destruction reselects the previously verified last device.
+        self.destroy_virtual_keyboard(previous);
+        self.destroy_retired_keyboard();
+        let relay = std::mem::replace(&mut self.virtual_keyboard, ptr::null_mut());
+        self.destroy_virtual_keyboard(relay);
+        self.relay_restore = false;
+        let destroyed = self.roundtrip();
+        submitted.and(destroyed)?;
+        self.verify_restored_keymap()
+    }
+
+    fn verify_restored_keymap(&self) -> Result<()> {
+        let expected = xkb::normalized_keymap(&self.original)?;
+        loop {
+            if Instant::now() >= self.deadline {
+                return Err(
+                    "keyboard keymap restoration was not observed before its deadline".into(),
+                );
+            }
+            // This is a fresh read-only seat subscription, after all of our
+            // virtual devices have been removed. A compositor roundtrip alone
+            // does not acknowledge an IME's response on another connection.
+            let observed = Connection::open_until(self.deadline)?;
+            let current = xkb::normalized_keymap(&observed.original)?;
+            if Instant::now() >= self.deadline {
+                return Err(
+                    "keyboard keymap restoration was not observed before its deadline".into(),
+                );
+            }
+            if current == expected {
+                return Ok(());
+            }
+            // Poll only the restoration condition; this is not a typing delay.
+            std::thread::sleep(
+                Duration::from_millis(10)
+                    .min(self.deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
 }
 impl Drop for Connection {
     fn drop(&mut self) {
         if !self.virtual_keyboard.is_null() {
             let _ = self.restore();
         }
+        self.destroy_retired_keyboard();
         // SAFETY: objects belong to this display and are destroyed locally in
         // reverse creation order before disconnecting and unloading the ABI.
         unsafe {
@@ -730,10 +844,13 @@ pub(super) fn type_text(text: &str, before_input: impl FnOnce() -> Result<()>) -
         return Ok(());
     }
     before_input()?;
-    connection.create_keyboard()?;
+    connection.relay_restore = true;
     let start = Instant::now();
     let result = (|| {
         for batch in keymap::Batches::new(text) {
+            // A new identity also makes subsequent text batches visible to
+            // input-method grabs that cache maps by keyboard identity.
+            connection.replace_keyboard()?;
             let mut bytes = batch.keymap.into_bytes();
             if bytes.last() != Some(&0) {
                 bytes.push(0);
@@ -742,20 +859,9 @@ pub(super) fn type_text(text: &str, before_input: impl FnOnce() -> Result<()>) -
             // The caller has rejected known nonzero/held keyboard states.
             // Temporary keymaps reset client state; this implementation does
             // not claim preservation of unknown sticky/custom modifiers.
-            unsafe {
-                (connection.api.marshal)(
-                    connection.virtual_keyboard,
-                    2,
-                    ptr::null(),
-                    1,
-                    0,
-                    0u32,
-                    0u32,
-                    0u32,
-                    0u32,
-                );
-            }
+            connection.send_modifiers([0; 4]);
             connection.roundtrip()?;
+            connection.destroy_retired_keyboard();
             for (index, code) in batch.codes.iter().copied().enumerate() {
                 if Instant::now() >= connection.deadline {
                     return Err("Wayland input exceeded its deadline".into());
