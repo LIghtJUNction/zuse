@@ -1,0 +1,125 @@
+{
+  "schema": "zuse.acceptance.consumer-native-compatibility.v1",
+  "date": "2026-11-22",
+  "status": "environment_blocked_cancelled",
+  "propagated": false,
+  "validation_complete": false,
+  "implementation_owner": "/root",
+  "consumer": {
+    "name": "ztype",
+    "version": "0.4.2",
+    "repository": "https://github.com/LIghtJUNction/ztype",
+    "source_commit": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80",
+    "source_kind": "independent Git source archive",
+    "git_checkout": false,
+    "archive": {
+      "format": "tar.xz",
+      "bytes": 152804,
+      "sha256": "968cb0b95be5566bd859a1c31db20995fd313ba826fdde9058fa876bd6bc3423",
+      "embedded_commit_verified": true,
+      "original_lock_verified": true
+    }
+  },
+  "candidate": {
+    "package": "zuse-computer",
+    "version": "0.6.0",
+    "source_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518"
+  },
+  "configuration": {
+    "feature_arguments": [
+      "--no-default-features",
+      "--features",
+      "desktop",
+      "--all-targets"
+    ],
+    "binding": "temporary local Cargo path override to the fixed candidate",
+    "original_lock_sha256": "ce85b32f99c9066780c1298f775e9c14d6218f886e9e7744355053ad5b008995",
+    "fixture_lock_sha256": "27f0f9a0011891702a0b4dafef625fca299417151c170d3a04dd97e405b18bbc",
+    "local_candidate_config_sha256": "ec9e245ff239e73ee085af4ef4d4ed48ff8158ff299eda9be6c06a079e04a6d8",
+    "configuration_paths_published": false
+  },
+  "execution": {
+    "authoritative_status_source": "supervisor-status.json",
+    "cancelled": true,
+    "running": false,
+    "exit_code": null,
+    "exit_signal": null,
+    "duration_ms": 1137089,
+    "duration_scope": "Supervisor job elapsed time includes queue/build-lock waiting; it is not a completed test duration.",
+    "stdout_bytes": 327,
+    "stderr_bytes": 0,
+    "stdout_observation": "Only source-archive and lock preflight checks were reported; no test result was produced.",
+    "running_observed_at_utc": "2026-11-22T14:28:19Z",
+    "cancellation_observed_at_utc": "2026-11-22T14:38:02Z",
+    "cancellation_reason": "The main execution session cancelled the prolonged attempt to release resources after the test log remained empty.",
+    "root_cause": "not established; no complete lock-relationship diagnosis was obtained",
+    "deadlock_claimed": false,
+    "stale_runner_snapshot": "last-runner-state.txt records a pre-cancellation running state; final supervisor status takes precedence.",
+    "execution_observations": [
+      "shared build-lock queue",
+      "later running state with related Rust serial-lock flock processes"
+    ]
+  },
+  "test_results": {
+    "status": "not_produced",
+    "log": {
+      "name": "desktop-test.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "passed": null,
+    "failed": null,
+    "ignored": null,
+    "test_runner_exit_code": null,
+    "interpretation": "An empty log establishes no new passing or failing gate. Historical sandbox counts are not copied into this attempt."
+  },
+  "cleanup": {
+    "provenance": "Separate post-cancellation observations by /root, supported by the restored-lock and temporary-cleanup records; these are not assertions emitted by the empty test log.",
+    "owned_processes": {
+      "types": [
+        "bash",
+        "cargo",
+        "flock"
+      ],
+      "previous_owned_processes_confirmed_not_running": true
+    },
+    "lock": {
+      "restored_by_trap": false,
+      "before_explicit_restore_sha256": "27f0f9a0011891702a0b4dafef625fca299417151c170d3a04dd97e405b18bbc",
+      "restoration": "After checking that the remaining lock still matched the fixture hash, /root explicitly restored the original lock.",
+      "restored_sha256": "ce85b32f99c9066780c1298f775e9c14d6218f886e9e7744355053ad5b008995",
+      "restored_hash_verified": true
+    },
+    "private_temporary_directories": {
+      "method": "rmdir",
+      "all_owned_directories_removed": true
+    },
+    "git_status": "not applicable: the consumer input was an independent source archive"
+  },
+  "evidence": {
+    "raw_record_archive": {
+      "name": "receipt-logs.tgz",
+      "bytes": 2151,
+      "sha256": "bdadc65b7d237801145ac6edd7edd6c2aa7b70a85fe109c586ad9e3408355966"
+    },
+    "selected_record_sha256": {
+      "supervisor-status.json": "270b47fd2f565ee76d31c38a6a8285d925acb6e78ce0c106333de06b7a85cbda",
+      "restored-lock-sha256.txt": "c89d6ad403df672c9aeb4f6598b16f09c032a20fd7b1db0751f797165e609fac",
+      "temp-cleanup.txt": "3ce4f180cd8b2d572aba8017ad508ce55184c1a225c09b15f8307bcf17cb8143",
+      "cancellation-note.txt": "3f009d317418752a9d5cf84921f39aab29d273b820d4974f76ddc64e13475b5c"
+    },
+    "verification": "The source archive identity, raw record archive digest, empty test log and selected local record hashes were checked. This documentation update ran no consumer test."
+  },
+  "historical_receipt": "ztype-compatibility-20261122.json",
+  "next_step": {
+    "implementation_owner": "/root",
+    "status": "pending",
+    "description": "Establish a usable bounded build execution path before retrying the same fixed-source desktop-only gate; formal consumer propagation remains open."
+  },
+  "redaction": {
+    "private_absolute_paths_omitted": true,
+    "connection_identifiers_omitted": true,
+    "process_ids_omitted": true,
+    "raw_archive_logs_config_and_binaries_not_copied_into_repository": true
+  }
+}

@@ -120,7 +120,7 @@ zuse shell --idle-timeout-ms 14400000
 
 `cargo fmt --check`、`no_std` 检查、CLI 构建，以及 Clippy 1.100 的 `--all-targets -- -D warnings` 均通过；其中已记录的沙箱 Clippy 运行耗时 10.76 秒。已计入库测试的八项 AT-SPI ABI mock 和两项许可准备/取消回归覆盖许可后对同一保留对象复核、动作索引变化、提交诊断和不重放边界，不能当作新的真实桌面验收。候选源码固定为 commit `14c413dc385e076c6e0ecbd9002165a1acd68518`，tree `f86332e1688c4a7f5f572a3f1dc6363aba1721b3`。
 
-该源码提交已推送到官方 GitHub 分支 [`work/zuse-control-hardening-20261122`](https://github.com/LIghtJUNction/zuse/tree/work/zuse-control-hardening-20261122)。主执行会话随后从沙箱独立执行 `git ls-remote --exit-code origin refs/heads/work/zuse-control-hardening-20261122`，退出 0，读回与上述完整 commit 相同的 SHA。此项仅记录源码分支发布；没有创建 PR，未发布 release，也未安装候选二进制，不据此宣称已合并 main。远端 ref 的核验回执见[代码门禁记录](evidence/code-hardening-20261122.json)及[固定提交原生门禁证据](evidence/native-code-gates-20261122.json)。
+该源码提交已推送到官方 GitHub 分支 [`work/zuse-control-hardening-20261122`](https://github.com/LIghtJUNction/zuse/tree/work/zuse-control-hardening-20261122)。主执行会话随后从沙箱独立执行 `git ls-remote --exit-code origin refs/heads/work/zuse-control-hardening-20261122`，退出 0，当时读回与上述源码 commit 相同的 SHA。后续证据文档提交 `bef106de27504aa2c5996f0d0fe5514a9a9908c3` 也已推送，以下代码门禁仍绑定源码 `14c413dc385e076c6e0ecbd9002165a1acd68518`。此项仅记录源码与文档分支发布；没有创建 PR，未发布 release，也未安装候选二进制，不据此宣称已合并 main。源码 ref 的核验回执见[代码门禁记录](evidence/code-hardening-20261122.json)及[固定提交原生门禁证据](evidence/native-code-gates-20261122.json)。
 
 开发机在该提交的干净 fresh worktree 上完成复验，runner 状态为 `passed`、整体退出 0；fmt、no_std、完整 Rust、Clippy、CLI 构建及五项隔离 headless Chromium 门禁均退出 0。完整 Rust 日志包含 63 个测试汇总：库 270、CLI 二进制 12、60 个集成目标 311 项通过，合计 **593 passed、0 failed、35 ignored、0 filtered**；另一个汇总是 0 项文档测试。此前九项 Unix socket 夹具逐项通过，`sessions.rs` 的 11 项测试也全部通过，已关闭这两组环境阻断。原沙箱失败与过滤记录仍保留。开发机 Clippy 运行耗时 11.91 秒。日志、目标计数和源码身份见[固定提交原生门禁证据](evidence/native-code-gates-20261122.json)。
 
@@ -128,9 +128,13 @@ zuse shell --idle-timeout-ms 14400000
 
 该批 Chromium 为 158.0.8127.36，使用自有临时 profile 与 data/file 私有夹具；DISPLAY、WAYLAND_DISPLAY、AT_SPI_BUS_ADDRESS 未设置，DBus 指向不存在的私有地址，XDG_RUNTIME_DIR 为私有目录。测试未恢复真实游戏或桌面操作。候选 CLI 仍显示 `zuse 0.6.0`，已记录二进制 SHA，未安装或发布。公开记录核对了 20,377 字节归档及其中全部 16 份原始文件的 SHA，只保留脱敏结果，不提交原始日志、归档或二进制。用户 STOP 后的真实验收边界不变：纯 Zuse 游戏通过第 1–10 关、最后观察为第 11 关，归档成功数仍为 0。
 
-消费者方面，仅 ztype 完成了临时本地 path 依赖夹具的部分兼容性检查。固定 ztype 源码为 `5d245e5b0633b5ce0f9479fec9741fb23b7b5b80`，配置为 `--no-default-features --features desktop`，验证了候选 `zuse::platform::Desktop` API 的编译。两次调用合计 65 passed、3 failed、1 ignored：主 all-targets gate 仍退出 101；随后单独执行 composition、dictionary 等集成目标，退出 0。两项服务测试直接报告 Unix datagram socket 的 `EPERM`；另一项错误文本断言失败的实际返回值未打印，只能将其与同类 socket 限制的关系记为推断。plugin feature 未开启，其零测试结果不计作覆盖。原锁文件已恢复，消费者工作区保持干净，没有正式传播或 push。原始回执和两份日志的 SHA、候选源码清单 SHA 见[ztype 兼容性记录](evidence/ztype-compatibility-20261122.json)。
+消费者方面，ztype 已有的通过记录仍来自历史沙箱中的临时本地 path 依赖夹具。固定 ztype 源码为 `5d245e5b0633b5ce0f9479fec9741fb23b7b5b80`，配置为 `--no-default-features --features desktop`，验证了当时候选 `zuse::platform::Desktop` API 的编译。两次调用合计 65 passed、3 failed、1 ignored：主 all-targets gate 仍退出 101；随后单独执行 composition、dictionary 等集成目标，退出 0。两项服务测试直接报告 Unix datagram socket 的 `EPERM`；另一项错误文本断言失败的实际返回值未打印，只能将其与同类 socket 限制的关系记为推断。plugin feature 未开启，其零测试结果不计作覆盖。原锁文件已恢复，消费者工作区保持干净，没有正式传播或 push。原始回执和两份日志的 SHA、候选源码清单 SHA 见[ztype 兼容性记录](evidence/ztype-compatibility-20261122.json)。
 
-[消费者传播准备记录](evidence/consumer-propagation-20261122.json)因此仅将 ztype 标为部分兼容性已测、`validation_complete=false`、`propagated=false`；其他五个消费者与 Project Z 聚合记录仍未做本轮候选验证或传播。临时 path 候选的源码清单标识只证明当时的快照，不能替代本次固定 commit 的兼容性结果，也没有其他维护者承诺。
+针对固定 Zuse 提交 `14c413dc385e076c6e0ecbd9002165a1acd68518` 的后续兼容性补验使用了独立的同一 ztype 源码归档。任务在共享锁等待后进入编译启动阶段，但直到取消，`desktop-test.log` 仍为 0 字节，没有产生新测试结果。主执行会话为释放共享资源取消了补验；最终 supervisor 回执为 `cancelled=true`、`running=false`、`exit_code=null`，时长 1,137,089 ms，包含等待，不能当作测试执行耗时。现场观察到 Rust 串行锁进程，但完整锁关系的根因未查明，不能据此认定死锁。本次记录为环境阻断后的取消，不新增 passed，也不判为代码测试失败。
+
+取消后，自有进程均已结束；核对 fixture 锁文件 SHA 后，原锁已显式恢复并验得 SHA-256 `ce85b32f99c9066780c1298f775e9c14d6218f886e9e7744355053ad5b008995`，自有临时目录已通过 `rmdir` 清理。终态、日志与清理证据见[ztype 固定提交补验记录](evidence/ztype-native-compatibility-20261122.json)。该提交的完整消费者兼容性仍没有结果，后续由本执行会话负责人 `/root` 接续：先查清共享构建锁与自有进程关系，再安排有界复验并记录实际结果；该补验当前已停止运行，也没有向其他维护者分派或记入承诺。
+
+[消费者传播准备记录](evidence/consumer-propagation-20261122.json)因此保留 ztype 历史部分兼容性已测、`validation_complete=false`、`propagated=false`，并单独记录固定提交补验已取消、无新结果；其他五个消费者与 Project Z 聚合记录仍未做本轮候选验证或传播。临时 path 候选的源码清单标识只证明当时的快照，不能替代本次固定 commit 的兼容性结果。
 
 ## 本轮证据与待完成事项
 
@@ -158,7 +162,8 @@ zuse shell --idle-timeout-ms 14400000
 | 固定提交完整 Rust 门禁 | 库 270、CLI 二进制 12、60 个集成目标 311，合计 593 passed、0 failed、35 ignored、0 filtered；整体退出 0 | 原九项 Unix socket 失败与 11 项 session 全部通过；63 个汇总包括 0 项文档测试 |
 | 固定提交指定 Chromium 门禁 | 控制器能力、activate、JPEG、PNG、反馈控制各 1 项通过，runner passed | 五项此前均 ignored；独立通过总数 598，剩余 30 ignored；不加沙箱或旧源码截图结果 |
 | 格式、静态检查与声明示例 | 沙箱与开发机 fmt、no_std、CLI 构建、Clippy 均通过；两份示例离线检查均 valid、steps=0 | 示例函数未调用；CLI 仍为 0.6.0，未安装或发布 |
-| ztype 消费者兼容性 | desktop-only 临时 path 夹具编译成功；两次调用合计 65 passed、3 failed、1 ignored | 主 gate 退出 101；直接 EPERM 两项、相关推断一项；原锁恢复，尚未正式传播或完整验证 |
+| ztype 历史沙箱兼容性 | desktop-only 临时 path 夹具编译成功；两次调用合计 65 passed、3 failed、1 ignored | 主 gate 退出 101 保持；直接 EPERM 两项、相关推断一项；不替代固定 14c413 的兼容性结果 |
+| ztype 固定提交补验 | 等待共享锁后进入编译启动阶段；取消时测试日志仍为 0 字节，无新结果；cancelled=true、running=false、exit_code=null | 环境阻断后主动取消，含等待 1,137,089 ms；完整锁关系未查明，不认定死锁或代码失败；自有进程结束、原锁恢复、临时目录清理，后续负责人 `/root` |
 
 ### 草案自检
 

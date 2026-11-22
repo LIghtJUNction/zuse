@@ -212,5 +212,14 @@
     "connection_and_job_ids_omitted": true,
     "raw_logs_not_copied_into_repository": true,
     "note": "Private checkout, Cargo home and resolved package paths are omitted. The config argument is represented by its filename; it is not the original absolute argv. Original receipt and log hashes remain unchanged."
-  }
+  },
+  "follow_up_receipts": [
+    {
+      "receipt": "ztype-native-compatibility-20261122.json",
+      "candidate_source_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+      "status": "environment_blocked_cancelled",
+      "new_test_results_available": false,
+      "historical_results_unchanged": true
+    }
+  ]
 }

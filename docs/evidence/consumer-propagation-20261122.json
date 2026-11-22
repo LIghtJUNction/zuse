@@ -1,15 +1,15 @@
 {
   "schema": "zuse.acceptance.consumer-propagation.v1",
   "date": "2026-11-22",
-  "status": "prepared_partial_compatibility_tested_not_propagated",
-  "scope": "Preparation snapshot for the current uncommitted Zuse acceptance candidate, with one temporary ztype compatibility fixture recorded separately. Existing pins and historical validations remain observations; no formal candidate propagation has occurred.",
+  "status": "source_branch_verified_consumer_propagation_pending",
+  "scope": "The fixed Zuse source candidate and its official work branch are verified. Six consumer repositories and the Project Z catalog are inventoried, but no formal consumer propagation has occurred. Historical ztype path-fixture results and its cancelled fixed-commit attempt without test results remain separate from Zuse's own validation.",
   "implementation_owner": "/root",
   "commitments": {
     "external_maintainer_commitments_recorded": false,
     "note": "Planned follow-up work is assigned only to /root in this session; no other maintainer promise is asserted."
   },
   "provenance": {
-    "source": "Previously verified inventory.json and fixed catalog/source snapshots, supplemented by the linked ztype compatibility receipt. This documentation update performed no new network or consumer execution.",
+    "source": "Previously verified inventory and fixed catalog/source snapshots, the linked ztype compatibility receipts, and the fixed-commit code/native-gate publication receipts. The final ztype cancellation state is supported by its supervisor record and separate post-cancellation cleanup observations. This documentation update performed no network operation or consumer execution.",
     "inventory_schema": "zuse.release_inventory.v1",
     "inventory_observed_at_utc": "2026-11-22T12:35:45Z",
     "inventory_sha256": "d17f132200d0e4ba25ccdd214068a073a68158277fccd8187bba5ff3e4f54662",
@@ -18,23 +18,99 @@
       "zuse"
     ],
     "compatibility_receipts": [
-      "ztype-compatibility-20261122.json"
-    ]
+      "ztype-compatibility-20261122.json",
+      "ztype-native-compatibility-20261122.json"
+    ],
+    "candidate_receipts": [
+      "code-hardening-20261122.json",
+      "native-code-gates-20261122.json"
+    ],
+    "gate_plan": {
+      "status": "source_review_only_not_executed",
+      "analyzed_revisions": {
+        "zrc": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+        "oh-my-ztty": "0e698f596a08a7e8481055a9545cc96672500059",
+        "project-z": "47bd4a54e3e6a48df8361cde4f61cc8974320795"
+      },
+      "scope": "The suite and Project Z gate-analysis revisions precede the inventory heads below. These are planned gate requirements, not a claim that the later heads were executed or re-audited. Recheck their gate definitions at the selected propagation revisions.",
+      "source_urls": [
+        "https://github.com/LIghtJUNction/zrc/blob/31f37e9bb8f5c5adcf195f68692c47ec7ea26705/scripts/check_cargo.py",
+        "https://github.com/LIghtJUNction/zrc/blob/31f37e9bb8f5c5adcf195f68692c47ec7ea26705/tests/test_native_cli.py",
+        "https://github.com/LIghtJUNction/zrc/blob/31f37e9bb8f5c5adcf195f68692c47ec7ea26705/scripts/release_projection.py",
+        "https://github.com/LIghtJUNction/zrc/blob/31f37e9bb8f5c5adcf195f68692c47ec7ea26705/scripts/check.py",
+        "https://github.com/LIghtJUNction/oh-my-ztty/blob/0e698f596a08a7e8481055a9545cc96672500059/scripts/workspace.py",
+        "https://github.com/LIghtJUNction/oh-my-ztty/blob/0e698f596a08a7e8481055a9545cc96672500059/Makefile",
+        "https://github.com/LIghtJUNction/oh-my-ztty/blob/0e698f596a08a7e8481055a9545cc96672500059/scripts/build_bundle.py",
+        "https://github.com/LIghtJUNction/oh-my-ztty/blob/0e698f596a08a7e8481055a9545cc96672500059/scripts/smoke_bundle.py",
+        "https://github.com/LIghtJUNction/project-z/blob/47bd4a54e3e6a48df8361cde4f61cc8974320795/scripts/project_z.py",
+        "https://github.com/LIghtJUNction/project-z/blob/47bd4a54e3e6a48df8361cde4f61cc8974320795/scripts/catalog_docs.py",
+        "https://github.com/LIghtJUNction/project-z/blob/47bd4a54e3e6a48df8361cde4f61cc8974320795/scripts/maintenance.py"
+      ]
+    }
   },
   "candidate": {
     "package": "zuse-computer",
     "observed_base_version": "0.6.0",
     "observed_base_commit": "f13412e3c148ecf01c347423caba509d45df9ccc",
-    "final_tested_commit": null,
+    "final_tested_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
     "release_version": null,
-    "released_artifact": null
+    "released_artifact": null,
+    "validation": {
+      "status": "passed",
+      "unique_passed": 598,
+      "failed": 0,
+      "remaining_ignored": 30,
+      "counting_rule": "593 complete Rust passes plus five distinct tests ignored in that same run. Sandbox and earlier different-source results are not added. These are Zuse tests, not consumer propagation results.",
+      "receipts": [
+        "code-hardening-20261122.json",
+        "native-code-gates-20261122.json"
+      ]
+    },
+    "source_publication": {
+      "status": "source_branch_published_and_independently_verified",
+      "repository": "https://github.com/LIghtJUNction/zuse",
+      "branch": "work/zuse-control-hardening-20261122",
+      "ref": "refs/heads/work/zuse-control-hardening-20261122",
+      "commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+      "verification": {
+        "command": [
+          "git",
+          "ls-remote",
+          "--exit-code",
+          "origin",
+          "refs/heads/work/zuse-control-hardening-20261122"
+        ],
+        "environment": "sandbox",
+        "exit_code": 0,
+        "observed_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+        "exact_match": true,
+        "receipt": "native-code-gates-20261122.json"
+      },
+      "merged_into_main": false,
+      "release_published": false,
+      "candidate_installed": false,
+      "scope": "This records the tested source commit and its verified publication, not the current live branch tip after later documentation-only commits."
+    }
   },
-  "current_blocker": {
-    "codes": [
-      "candidate_has_no_final_tested_commit",
-      "candidate_artifact_not_released"
+  "current_status": {
+    "source_commit_and_branch_verified": true,
+    "source_compatibility_checks": "can_proceed_against_fixed_commit",
+    "formal_default_branch_or_release_propagation": "publication_decision_pending",
+    "consumer_propagation_complete": false,
+    "implementation_owner": "/root",
+    "description": "The tested source commit is available for source-level compatibility checks. Each consumer's binding-specific work remains open below. Formal default-branch or release-artifact propagation requires the subsequent publication decision; a pushed source branch does not complete it."
+  },
+  "execution_constraints": {
+    "python_execution": "prohibited_by_user",
+    "affected_gate_groups": [
+      "zrc",
+      "oh-my-ztty",
+      "zuse-skills",
+      "project-z"
     ],
-    "description": "The current candidate has not yet become a final tested commit and no candidate artifact has been released. ztype has partial desktop-only compatibility evidence for a temporary local path snapshot; its complete gate remains environment-blocked. Formal propagation and final immutable-candidate validation remain pending."
+    "required_follow_up": "Implement or verify native equivalents of the original Python gates, including their assertions and cleanup, before marking those complete gates passed. Direct Cargo/CLI, import/check or syntax-only subsets must be recorded separately.",
+    "native_tool_availability": "not_rechecked_by_this_update",
+    "implementation_owner": "/root"
   },
   "totals": {
     "consumer_repositories": 6,
@@ -42,10 +118,15 @@
     "consumers_tested": 1,
     "project_z_catalog_propagated": false,
     "project_z_catalog_tested": false,
-    "consumers_validation_complete": 0
+    "consumers_validation_complete": 0,
+    "consumers_tested_against_final_commit": 0,
+    "consumer_retests_queued": 0,
+    "consumer_retests_running": 0,
+    "counting_note": "consumers_tested=1 records the historical partial ztype fixture only. The fixed-commit native attempt was cancelled after environmental execution blockage and produced no test result. Zuse's 598 independent passes are not counted here.",
+    "consumer_retests_blocked_cancelled": 1
   },
   "observed_heads": {
-    "zuse": "f13412e3c148ecf01c347423caba509d45df9ccc",
+    "zuse": "14c413dc385e076c6e0ecbd9002165a1acd68518",
     "project-z": "68badf28bf344ccf2a2a564059e0ed8f38cdf8ee",
     "ztype": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80",
     "ssmcp": "87c4a17faf0dd2c140cb707ec59b1f05725f06f0",
@@ -54,6 +135,7 @@
     "zuse-std": "d79f43f8f3c2a1bff05962420f014b6c16403c5c",
     "zuse-skills": "201a7508d3ed2928295ebaf0853ea4528212b980"
   },
+  "observed_heads_scope": "Zuse identifies the verified work-branch candidate. Consumer and Project Z heads remain fixed inventory observations. Their recorded dependency/catalog pins below retain their observed historical values.",
   "consumers": [
     {
       "name": "ztype",
@@ -78,21 +160,63 @@
         "resulting_commit": null
       },
       "validation": {
-        "status": "partial_compatibility_tested_environment_blocked",
+        "status": "historical_partial_compatibility_only_retest_blocked_cancelled",
         "tested": true,
         "validation_complete": false,
-        "configuration": "desktop-only temporary local path fixture",
-        "candidate_commit": null,
-        "candidate_source_manifest_sha256": "d5ce5903b3382c9472e44e36e2baba863f78d48b04073c7fd7008b4f5e97562e",
-        "passed": 65,
-        "failed": 3,
-        "ignored": 1,
-        "all_targets_gate_exit_code": 101,
-        "receipts": [
-          "ztype-compatibility-20261122.json"
-        ]
+        "tested_basis": "Historical partial compatibility evidence only; the fixed-commit native attempt was cancelled without producing test results.",
+        "historical_attempt": {
+          "status": "partial_compatibility_tested_environment_blocked",
+          "configuration": "desktop-only temporary local path fixture",
+          "candidate_commit": null,
+          "candidate_source_manifest_sha256": "d5ce5903b3382c9472e44e36e2baba863f78d48b04073c7fd7008b4f5e97562e",
+          "passed": 65,
+          "failed": 3,
+          "ignored": 1,
+          "all_targets_gate_exit_code": 101,
+          "receipts": [
+            "ztype-compatibility-20261122.json"
+          ]
+        },
+        "current_attempt": {
+          "status": "environment_blocked_cancelled",
+          "running_observed_at_utc": "2026-11-22T14:28:19Z",
+          "previous_status": "running_results_pending",
+          "queue_history_note": "The job first waited for the shared build lock, then was observed running. It was later cancelled after the test log remained empty; elapsed time includes waiting and does not measure a completed test.",
+          "environment": "development_host",
+          "consumer_source": "independent source archive",
+          "consumer_commit": "5d245e5b0633b5ce0f9479fec9741fb23b7b5b80",
+          "candidate_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+          "configuration": "--no-default-features --features desktop --all-targets",
+          "normal_tests_expected": 68,
+          "external_full_vocabulary_test": "excluded from the planned normal gate; no ignored-test count was produced",
+          "results": null,
+          "exit_code": null,
+          "receipts": [
+            "ztype-native-compatibility-20261122.json"
+          ],
+          "implementation_owner": "/root",
+          "cancelled": true,
+          "running": false,
+          "cancellation_observed_at_utc": "2026-11-22T14:38:02Z",
+          "duration_ms": 1137089,
+          "exit_signal": null,
+          "cleanup": "The independent archive's lock was explicitly restored and hash-verified after cancellation; owned process and private-directory cleanup was separately confirmed."
+        }
       },
-      "planned_next_step": "Resolve or rerun the three blocked service tests on a permitted host, then validate against the final immutable Zuse commit and update the Cargo lock only when an actual propagation is performed.",
+      "required_binding_update": "The immutable Cargo.lock source is the direct binding. A temporary path override and its fixture lock validate compatibility but do not update the published consumer pin.",
+      "pending_work": [
+        {
+          "code": "native_gate_environment_blocked_cancelled",
+          "description": "The fixed-commit desktop-only attempt was cancelled after shared/serial build-lock observations and an empty test log. No complete lock diagnosis or test result exists. Establish a usable bounded execution path before retrying.",
+          "implementation_owner": "/root"
+        },
+        {
+          "code": "cargo_lock_not_propagated",
+          "description": "The recorded Cargo.lock still pins f13412e3c148ecf01c347423caba509d45df9ccc. After the publication decision, update the immutable source lock to the selected publishable commit, validate resolution, and record the consumer commit/push and receipt.",
+          "implementation_owner": "/root"
+        }
+      ],
+      "planned_next_step": "Diagnose the blocked execution path before a bounded fixed-commit desktop-only retry. Preserve the cancellation receipt and historical 65 passed / 3 failed / 1 ignored evidence. The temporary archive lock has already been explicitly restored and verified. Formal Cargo.lock propagation remains separate.",
       "source_refs": [
         "ztype:Cargo.lock",
         "ztype:Cargo.toml"
@@ -123,9 +247,24 @@
         "status": "not_started",
         "tested": false,
         "candidate_commit": null,
-        "receipts": []
+        "receipts": [],
+        "target_candidate_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+        "validation_complete": false
       },
-      "planned_next_step": "Validate standalone CLI selection, startup and release-receipt verification against the finalized candidate artifact; do not invent a Zuse Cargo pin.",
+      "required_binding_update": "Record the selected standalone release and verified download/runtime receipt; update integration source only if required by validation. There is no observed Zuse Cargo pin to rewrite.",
+      "pending_work": [
+        {
+          "code": "standalone_candidate_contract_not_tested",
+          "description": "Run source-level standalone CLI selection, startup and protocol compatibility checks against the fixed candidate using owned fixtures; no such consumer result is recorded.",
+          "implementation_owner": "/root"
+        },
+        {
+          "code": "release_artifact_and_receipt_pending",
+          "description": "This consumer selects an official standalone release, not a Zuse Cargo dependency. After a release decision, verify the selected version and release_id, asset_id, SHA-256 and size receipt, then validate its startup path. The published work branch is not that release artifact.",
+          "implementation_owner": "/root"
+        }
+      ],
+      "planned_next_step": "Perform fixed-source standalone contract checks now; complete the release-selection/download-receipt path when the publication decision provides an official artifact. Record the validated SSMCP source identity and any resulting commit/push.",
       "source_refs": [
         "ssmcp:Cargo.toml",
         "ssmcp:src/computer/release.rs",
@@ -156,9 +295,24 @@
         "status": "not_started",
         "tested": false,
         "candidate_commit": null,
-        "receipts": []
+        "receipts": [],
+        "target_candidate_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+        "validation_complete": false
       },
-      "planned_next_step": "Check the ssmcp-facing runtime/configuration path against the finalized standalone candidate; record whether any source change is needed.",
+      "required_binding_update": "Record the verified SSMCP-facing configuration/runtime identity and any required configuration change; do not invent a direct Zuse lock entry.",
+      "pending_work": [
+        {
+          "code": "ssmcp_runtime_configuration_not_validated",
+          "description": "Validate the runtime/configuration integration using the selected SSMCP/Zuse combination. No static SSMCP or Zuse source pin was observed in this consumer.",
+          "implementation_owner": "/root"
+        },
+        {
+          "code": "python_gates_need_native_equivalents",
+          "description": "The original check_cargo.py/check.py gates have not run under the no-Python constraint. Direct fmt/clippy/test/build/metadata can cover only their Cargo subset. Full completion also needs the 12 CLI-regression assertions and trusted oracle, release-projection/TOML and archive checks where applicable, and the original configuration-tool fixtures.",
+          "implementation_owner": "/root"
+        }
+      ],
+      "planned_next_step": "Recheck the reviewed gate definitions at the selected source revision, run the native Cargo subset, and implement/verify the remaining native CLI/configuration gate equivalents. Record absent native tools as specific unrun checks; do not mark the original Python gate passed.",
       "source_refs": [
         "zrc:Cargo.toml",
         "zrc:VERSION",
@@ -198,9 +352,24 @@
         "status": "not_started",
         "tested": false,
         "candidate_commit": null,
-        "receipts": []
+        "receipts": [],
+        "target_candidate_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+        "validation_complete": false
       },
-      "planned_next_step": "Validate the suite integration and record its ssmcp/zrc component locks; update only confirmed changed component commits.",
+      "required_binding_update": "Update confirmed changed SSMCP/zrc entries in dependencies.lock.json and record bundle BUILD.json/MANIFEST.sha256 and archive digest after complete validation; no direct Zuse Cargo lock was observed.",
+      "pending_work": [
+        {
+          "code": "upstream_component_results_and_locks_pending",
+          "description": "dependencies.lock.json still records the inventoried SSMCP and zrc commits. Select their validated outcomes, update only component commits that actually changed, and retain all seven component identities in bundle metadata.",
+          "implementation_owner": "/root"
+        },
+        {
+          "code": "python_suite_bundle_smoke_gates_need_native_equivalents",
+          "description": "workspace.py/make check and build_bundle.py/smoke_bundle.py have not run. Shell syntax checks and five Cargo binary builds are partial gates only. Complete native equivalents must preserve source/recursive-worktree, Cargo-artifact, ELF, archive/manifest checks and isolated install/configuration-conflict/restore smoke assertions.",
+          "implementation_owner": "/root"
+        }
+      ],
+      "planned_next_step": "Recheck gate definitions against the selected suite revision, validate the component lock, and implement/verify the full native suite/bundle/smoke assertions before producing a propagation receipt.",
       "source_refs": [
         "oh-my-ztty:VERSION",
         "oh-my-ztty:dependencies.lock.json"
@@ -227,9 +396,19 @@
         "status": "not_started",
         "tested": false,
         "candidate_commit": null,
-        "receipts": []
+        "receipts": [],
+        "target_candidate_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+        "validation_complete": false
       },
-      "planned_next_step": "Check package imports and existing examples against the finalized Zuse candidate, then record compatibility and any required metadata change.",
+      "required_binding_update": "Record exact tested runtime source identity and package compatibility. Change zuse.json version/minimum-runtime metadata only if the selected public runtime contract requires it; no static Zuse source pin exists.",
+      "pending_work": [
+        {
+          "code": "fixed_source_package_compatibility_not_run",
+          "description": "Validate imports, exported catalog and existing package examples against 14c413dc385e076c6e0ecbd9002165a1acd68518. The documented catalog.zuse example can enumerate exports; validate-api.zuse contains placeholder targets and must only be checked, not dispatched as real input. No candidate result is recorded.",
+          "implementation_owner": "/root"
+        }
+      ],
+      "planned_next_step": "Run source-package compatibility checks against the fixed candidate now, then record the outcome and any metadata/source change. Formal published-runtime compatibility follows the publication decision.",
       "source_refs": [
         "zuse-std:README.md",
         "zuse-std:zuse.json"
@@ -259,9 +438,24 @@
         "status": "not_started",
         "tested": false,
         "candidate_commit": null,
-        "receipts": []
+        "receipts": [],
+        "target_candidate_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+        "validation_complete": false
       },
-      "planned_next_step": "Check source-module imports and guarded interfaces against the finalized Zuse candidate; keep historical 0.5.0 validation separate.",
+      "required_binding_update": "Record a new exact-runtime compatibility receipt and update affected source/catalog requirements only if needed; no static Zuse source pin exists.",
+      "pending_work": [
+        {
+          "code": "fixed_source_module_and_guard_compatibility_not_run",
+          "description": "Validate source-module imports, catalog contracts and guarded interfaces against 14c413dc385e076c6e0ecbd9002165a1acd68518 using checks or owned fixtures. Historical runtime 0.5.0 validation does not cover this candidate.",
+          "implementation_owner": "/root"
+        },
+        {
+          "code": "python_unittest_gate_needs_native_equivalent",
+          "description": "The documented full unittest entry point uses Python and has not run. Native import/check or catalog success alone cannot establish that the complete regression gate passed; preserve its assertions in a verified native equivalent.",
+          "implementation_owner": "/root"
+        }
+      ],
+      "planned_next_step": "Run fixed-source module/guard checks now, preserve the existing 0.5.0 receipt as history, and implement/verify the complete non-Python regression gate. Record any required source/catalog changes and resulting commit/push.",
       "source_refs": [
         "zuse-skills:README.md",
         "zuse-skills:catalog.json",
@@ -279,10 +473,22 @@
     "catalog_regenerated": false,
     "resulting_commit": null,
     "validation_receipts": [],
-    "planned_next_step": "After actual consumer outcomes and the final Zuse identity are available, regenerate/check the Project Z catalog and record resulting source commits and validation.",
+    "planned_next_step": "Recheck the coordinator contract at the selected Project Z revision, implement/verify its native equivalent, then regenerate and validate the catalog from actual consumer outcomes and selected publication refs. Record catalog/docs changes and the resulting commit/push.",
     "source_refs": [
       "project-z:project-z.toml",
       "project-z:catalog.json"
+    ],
+    "pending_work": [
+      {
+        "code": "consumer_outcomes_and_publication_targets_pending",
+        "description": "Retain the inventory until actual consumer results and the formal default-branch/release publication targets are selected. The final candidate commit itself is already known.",
+        "implementation_owner": "/root"
+      },
+      {
+        "code": "python_coordinator_needs_native_equivalent",
+        "description": "The sync/check/impact/resolve and maintenance coordinators have not run under the no-Python constraint. Git identities and Cargo metadata/locked resolution are partial gates. A native equivalent must also enforce canonical dependency/TOML policy, patch.unused locks, recursive gitlinks, runtime requires and reverse impact, remote freshness, and deterministic catalog.json/docs/PROJECTS.md generation.",
+        "implementation_owner": "/root"
+      }
     ]
   },
   "graph": {
@@ -291,7 +497,7 @@
       {
         "name": "zuse",
         "role": "candidate runtime",
-        "observed_head": "f13412e3c148ecf01c347423caba509d45df9ccc"
+        "observed_head": "14c413dc385e076c6e0ecbd9002165a1acd68518"
       },
       {
         "name": "project-z",
@@ -651,10 +857,13 @@
     }
   ],
   "exclusions": [
-    "The initial inventory did not change consumer repositories or run their tests; the later ztype fixture is recorded separately above.",
-    "The temporary ztype path fixture was removed, its original Cargo.lock was restored, and its worktree is clean. No formal consumer propagation or released artifact update occurred.",
+    "The initial inventory did not change consumer repositories or run their tests; later compatibility attempts are recorded separately.",
+    "The historical ztype path fixture was removed and its original Cargo.lock restored. The fixed-commit development-host attempt used an independent source archive, was cancelled after execution blockage without test results, and had its lock explicitly restored and verified afterward.",
+    "No formal consumer pin, release-selection, component-lock or published-runtime propagation has been completed. Consumers propagated remains zero.",
     "No candidate test is recorded for the other five consumers, and no Project Z regeneration was run.",
-    "No update or promise is attributed to other maintainers.",
-    "Observed SHAs are fixed to the inventory timestamp and are not a claim about current live repository heads."
+    "The Zuse work branch is published and independently verified; main merge, release publication and candidate installation have not occurred.",
+    "No update or commitment is attributed to other maintainers; all pending work in this receipt is assigned to /root.",
+    "Consumer/catalog SHAs retain their inventory-time meaning. The verified Zuse candidate SHA does not change the historical dependency/catalog pins.",
+    "Original Python gates remain unrun. Planned native subsets do not establish full equivalence or a complete gate pass."
   ]
 }
