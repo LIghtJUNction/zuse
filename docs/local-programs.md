@@ -265,6 +265,20 @@ host-input revocation and shared-file dispatch gate. Native pinch, rotate and sw
 planning remains available, but unavailable native touchpad input is explicitly
 unsupported; scrolling and browser zoom are not substituted.
 
+The persistent `zuse shell` owns its signal handler until its retained Runtime
+has been dropped. On Linux and macOS builds with native signal support,
+SIGINT or SIGTERM cancels active work and exits the whole shell with status 1.
+An executing program returns its cancellation receipt; queued input is discarded.
+Idle input and incomplete lines also exit through normal cleanup, including
+termination and reaping of managed child processes. The signal handler only sets
+a flag; resource cleanup runs on the ordinary Rust execution path.
+
+The shell checks idle interruption every 25 ms while preserving the configured
+total idle timeout. Command execution remains excluded from idle time. Use
+`session cancel NAME` when a controller needs to cancel one job and retain a
+named session for subsequent work. Linux subprocess checks and their exact
+coverage are recorded in [shell signal validation](validation-shell-signals-20261122.md).
+
 ## Reproduce the included examples
 
 ```sh

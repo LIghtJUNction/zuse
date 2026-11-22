@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Keep the persistent shell's SIGINT/SIGTERM handler active while waiting for input and cleaning up its Runtime. Interrupting an idle shell now reaps managed child processes; interrupting active work cancels the command, discards queued input, and exits with status 1 on supported native signal platforms.
+- Add isolated subprocess regressions for both signals with idle input, incomplete lines, active commands and managed-process cleanup; preserve existing idle-timeout and CLI execution behavior.
+
 ## 0.6.0 — 2026-11-22
 
 - Add `zuse -c` / `--code` for direct inline programs and `shell --idle-timeout-ms` for bounded persistent sessions. Idle shells close after 15 minutes by default; running commands do not consume idle time.

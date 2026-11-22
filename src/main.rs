@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use zclap::{Arg, Command, Event};
 use zuse::{
     human, json,
@@ -137,7 +137,18 @@ fn with_cancellation(
     action: impl FnOnce(&mut Runtime) -> Result<String, String>,
 ) -> Result<String, String> {
     let interrupt = zuse::script::interrupt::InterruptGuard::install()?;
+    with_interrupt(machine, &interrupt, action)
+}
+
+fn with_interrupt(
+    machine: &mut Runtime,
+    interrupt: &zuse::script::interrupt::InterruptGuard,
+    action: impl FnOnce(&mut Runtime) -> Result<String, String>,
+) -> Result<String, String> {
     let cancellation = zuse::observation::Cancellation::default();
+    if interrupt.cancelled() {
+        cancellation.cancel();
+    }
     machine.set_cancellation(cancellation.clone());
     std::thread::scope(|scope| {
         let (stop, stopped) = std::sync::mpsc::channel::<()>();
@@ -239,29 +250,43 @@ fn shell_input() -> Result<Receiver<Result<String, String>>, String> {
 }
 
 fn repl(options: Options, idle_timeout: Duration) -> Result<i32, String> {
+    // Keep signal ownership until after the retained Runtime has been dropped.
+    let interrupt = zuse::script::interrupt::InterruptGuard::install()?;
     let interactive = io::stdin().is_terminal();
     let mut machine = Runtime::new();
     let input = shell_input()?;
     let mut failed = false;
-    loop {
+    'shell: loop {
         if interactive {
             eprint!("zuse> ");
             io::stderr().flush().map_err(|e| e.to_string())?;
         }
-        let line = match input.recv_timeout(idle_timeout) {
-            Ok(line) => line?,
-            Err(RecvTimeoutError::Disconnected) => break,
-            Err(RecvTimeoutError::Timeout) => {
-                if interactive {
-                    eprintln!();
+        let idle_started = Instant::now();
+        let line = loop {
+            if interrupt.cancelled() {
+                return Err("shell interrupted".into());
+            }
+            let remaining = idle_timeout.saturating_sub(idle_started.elapsed());
+            match input.recv_timeout(remaining.min(Duration::from_millis(25))) {
+                Ok(line) => break line?,
+                Err(RecvTimeoutError::Disconnected) => break 'shell,
+                Err(RecvTimeoutError::Timeout) if idle_started.elapsed() >= idle_timeout => {
+                    if interactive {
+                        eprintln!();
+                    }
+                    eprintln!(
+                        "zuse shell: idle timeout after {} ms",
+                        idle_timeout.as_millis()
+                    );
+                    break 'shell;
                 }
-                eprintln!(
-                    "zuse shell: idle timeout after {} ms",
-                    idle_timeout.as_millis()
-                );
-                break;
+                Err(RecvTimeoutError::Timeout) => {}
             }
         };
+        // A queued line must not start another command after an interrupt.
+        if interrupt.cancelled() {
+            return Err("shell interrupted".into());
+        }
         match line.trim() {
             "" => continue,
             ":quit" | ":exit" => break,
@@ -275,7 +300,9 @@ fn repl(options: Options, idle_timeout: Duration) -> Result<i32, String> {
             }
             _ => {}
         }
-        match with_cancellation(&mut machine, |machine| machine.execute(&line, options)) {
+        match with_interrupt(&mut machine, &interrupt, |machine| {
+            machine.execute(&line, options)
+        }) {
             Ok(result) => {
                 failed |= output(result)? != 0;
             }

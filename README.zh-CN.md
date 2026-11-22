@@ -77,7 +77,7 @@ zuse session result board
 
 取得观察结果后，由外部控制器决定下一步，把短程序交给 `zuse session script board -`，按返回的 `job_id` 查询结果，再观察。`accepted` 表示已接收，完成情况以结果回执为准。同一会话一次执行一个作业；`status`、`result`、`cancel`、`close` 可继续控制当前工作，取消后需查询清理结果。
 
-公开的 [JSON-lines 协议 v1](docs/session-protocol.md) 使用 `start` 返回的私有 Unix socket。稳定请求 ID 用于有界重试，`--expect-revision` 检查 Zuse 会话状态；应用内容仍需重新观察。该通道执行 flat Runtime 及展开后的数值程序；scoped mouse 仅支持 dry-run 预检。默认空闲 15 分钟释放会话，运行时间不计入空闲；单一 stdin 流仍可使用 `zuse shell`。详见[会话说明](docs/sessions.md)。
+公开的 [JSON-lines 协议 v1](docs/session-protocol.md) 使用 `start` 返回的私有 Unix socket。稳定请求 ID 用于有界重试，`--expect-revision` 检查 Zuse 会话状态；应用内容仍需重新观察。该通道执行 flat Runtime 及展开后的数值程序；scoped mouse 仅支持 dry-run 预检。默认空闲 15 分钟释放会话，运行时间不计入空闲；单一 stdin 流仍可使用 `zuse shell`。支持原生信号处理的构建中，SIGINT 或 SIGTERM 会取消当前工作、清理 shell 持有的运行时与子进程，并丢弃排队命令；空闲等待和未输入完整一行时也会清理退出。详见[会话说明](docs/sessions.md)与[shell 取消](docs/local-programs.md#timing-and-cancellation)。
 
 随附的 [Python 控制器示例](examples/session_client.py) 从 stdin 提交一次源码，并在同一连接上等到作业终态。它只使用 Python 标准库，接收实际观察到的 socket 路径、执行预算及可选修订号。
 
