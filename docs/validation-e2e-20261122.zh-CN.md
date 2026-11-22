@@ -66,7 +66,7 @@ browser.hold_keys(keys="ArrowUp,ArrowRight",duration=500)
 
 `browser.hold_until` 把停止条件放入本地观察循环；初始条件为 true 时不按键，超时和错误时仍统一释放。配套 `canvas.watch/read/close` 只记录公开 `drawImage` 参数、source 元数据和绘制变换，不读取游戏变量，也不把 source 当作控件或独立实体。`latest` 是每个 source 的最后一次绘制，条件需考虑 `age_ms` 和覆盖限制。详见[条件按键](key-holds.md#hold-until-an-observed-condition)与[绘制观察](canvas-observer.md)。
 
-主执行会话已在真实停车页面观察到一次以 `x>=100` 为停止阈值的 `hold_until` 成功触发，回执为 `released:true`。这确认了该次条件观察与松键链路。随后用户手动驾驶影响了轨迹，不能把混合轨迹计为 Zuse 自动完成。当前仍为第 15 关第二张图，停车与全站终局均未通过。
+主执行会话已在真实停车页面观察到一次以 `x>=100` 为停止阈值的 `hold_until` 成功触发，回执为 `released:true`。这确认了该次条件观察与松键链路。随后用户手动驾驶影响了轨迹，不能把混合轨迹计为 Zuse 自动完成。该轮当时停在第 15 关第二张图，停车与全站终局均未通过。
 
 现场完整历史曾在约 500 次绘制后耗尽 256 KiB，观察停止，也使 `canvas.read` 回执过大。新增 `canvas.watch(...,history=false)` 只保留每个 source 的最新绘制和元数据；同一 source 的替换扣除旧记录字节，`event_count` 累计，`retained_event_count=0`、`history_recorded=false`、`events=[]`。默认 `history=true` 保留原契约。两种模式都保留 64 个 source、256 KiB 和最长 15 秒的边界，删除历史不会使记录成为当前可见性的证明。主执行会话已报告远端 Build 8 的原生 Chromium 定向夹具通过：5000 次重复绘制后仍能记录末次替换，source、字节及 TTL 预算检查通过；canvas 参数预检也通过。这支持该模式的保留策略及限制，不构成真实游戏通关证据。
 
@@ -112,21 +112,29 @@ zuse shell --idle-timeout-ms 14400000
 
 通过 `/devtools/page/...` 附着的 Runtime 不拥有页面，可以显式 `browser.close()` 后重新 `browser.connect()`；不要在仍需保留游戏状态的 owner 上执行关闭。写帧失败或收到终态关闭后，连接会拒绝后续帧，避免向可能残缺的协议流追加数据。动作结果不明时先重新观察，不自动重放。
 
-## 最终沙箱代码门禁与消费者兼容性
+## 固定提交的代码门禁与消费者兼容性
 
 停止真实 UI 操作后，工作转为实现复核、编译和可隔离的测试。Build 15b 的全部测试源码编译成功，但首次 all-targets 执行在库测试阶段以退出码 101 结束：261 passed、9 failed、8 ignored。九项失败均在 Unix socket 夹具的 `UnixListener::bind` 处直接收到 `EPERM`，原始失败名称和日志 SHA 保留在[代码门禁记录](evidence/code-hardening-20261122.json)。这是环境阻断的失败记录，不能改写成该次全量门禁通过。
 
-最终格式与 Clippy 整理后，沙箱复跑库测试得到 261 passed、0 failed、8 ignored、9 filtered；过滤的正是上述九项 Unix socket 夹具，仍需在允许建立 socket 的开发机补验。另执行 59 个集成目标，得到 300 passed、0 failed、27 ignored；整个 `sessions.rs` 目标的 11 项 Unix socket session 测试未运行。库与集成合计 **561 项通过**，两组互不重叠；9 项过滤、11 项未运行和 35 项忽略均未计入通过数。较早 18 个集成目标的 64 项通过是子集，不再相加。文档测试命令退出 0，但其中没有测试；这组结果也不是完整 all-targets 通过。具体日志及其 SHA 见同一份[代码门禁记录](evidence/code-hardening-20261122.json)。
+最终格式与 Clippy 整理后，沙箱复跑库测试得到 261 passed、0 failed、8 ignored、9 filtered；过滤的正是上述九项 Unix socket 夹具。另执行 59 个集成目标，得到 300 passed、0 failed、27 ignored；整个 `sessions.rs` 目标的 11 项 Unix socket session 测试未在沙箱运行。候选提交固定后，补跑 `cargo test --offline --locked --bin zuse -- --test-threads=1`，得到 12 passed、0 failed、0 ignored，退出 0。该轮库、CLI 二进制与集成合计 **573 项通过（261 + 12 + 300）**，三组互不重叠；9 项过滤、11 项未运行和 35 项忽略均未计入通过数。较早 18 个集成目标的 64 项通过是子集，不再相加。文档测试命令退出 0，但其中没有测试；这组沙箱结果不是完整 all-targets 通过。具体日志及其 SHA 见[代码门禁记录](evidence/code-hardening-20261122.json)；后续开发机结果单独列示。
 
-最终 `cargo fmt --check`、`no_std` 检查、CLI 构建，以及 Clippy 1.100 的 `--all-targets -- -D warnings` 均通过；Clippy 最后一次运行耗时 10.76 秒。已计入库测试的八项 AT-SPI ABI mock 和两项许可准备/取消回归覆盖许可后对同一保留对象复核、动作索引变化、提交诊断和不重放边界，不能当作新的真实桌面验收。JPEG 与显式 `browser.activate` 的当前候选原生门禁仍未执行。最终源码 commit 尚待固定，本文不宣称版本已发布。
+`cargo fmt --check`、`no_std` 检查、CLI 构建，以及 Clippy 1.100 的 `--all-targets -- -D warnings` 均通过；其中已记录的沙箱 Clippy 运行耗时 10.76 秒。已计入库测试的八项 AT-SPI ABI mock 和两项许可准备/取消回归覆盖许可后对同一保留对象复核、动作索引变化、提交诊断和不重放边界，不能当作新的真实桌面验收。候选源码固定为 commit `14c413dc385e076c6e0ecbd9002165a1acd68518`，tree `f86332e1688c4a7f5f572a3f1dc6363aba1721b3`。
+
+该源码提交已推送到官方 GitHub 分支 [`work/zuse-control-hardening-20261122`](https://github.com/LIghtJUNction/zuse/tree/work/zuse-control-hardening-20261122)。主执行会话随后从沙箱独立执行 `git ls-remote --exit-code origin refs/heads/work/zuse-control-hardening-20261122`，退出 0，读回与上述完整 commit 相同的 SHA。此项仅记录源码分支发布；没有创建 PR，未发布 release，也未安装候选二进制，不据此宣称已合并 main。远端 ref 的核验回执见[代码门禁记录](evidence/code-hardening-20261122.json)及[固定提交原生门禁证据](evidence/native-code-gates-20261122.json)。
+
+开发机在该提交的干净 fresh worktree 上完成复验，runner 状态为 `passed`、整体退出 0；fmt、no_std、完整 Rust、Clippy、CLI 构建及五项隔离 headless Chromium 门禁均退出 0。完整 Rust 日志包含 63 个测试汇总：库 270、CLI 二进制 12、60 个集成目标 311 项通过，合计 **593 passed、0 failed、35 ignored、0 filtered**；另一个汇总是 0 项文档测试。此前九项 Unix socket 夹具逐项通过，`sessions.rs` 的 11 项测试也全部通过，已关闭这两组环境阻断。原沙箱失败与过滤记录仍保留。开发机 Clippy 运行耗时 11.91 秒。日志、目标计数和源码身份见[固定提交原生门禁证据](evidence/native-code-gates-20261122.json)。
+
+五项指定 Chromium 门禁分别覆盖控制器只读能力、选中页面激活、JPEG 完整 viewport 尺寸、原生 PNG 浏览器夹具，以及 DOM/canvas 反馈控制与 fresh memory，每项 1 passed。已逐项确认它们在上述完整 Rust 运行中属于 ignored，因此这批固定提交的**独立通过总数为 598（593 + 5），剩余 30 项 ignored**。定向调用为选择单项测试而产生的 `filtered out` 不代表新增遗漏，也不计作通过；沙箱 573 项与此前不同源码的原生窗口截图证据均不再相加。
+
+该批 Chromium 为 158.0.8127.36，使用自有临时 profile 与 data/file 私有夹具；DISPLAY、WAYLAND_DISPLAY、AT_SPI_BUS_ADDRESS 未设置，DBus 指向不存在的私有地址，XDG_RUNTIME_DIR 为私有目录。测试未恢复真实游戏或桌面操作。候选 CLI 仍显示 `zuse 0.6.0`，已记录二进制 SHA，未安装或发布。公开记录核对了 20,377 字节归档及其中全部 16 份原始文件的 SHA，只保留脱敏结果，不提交原始日志、归档或二进制。用户 STOP 后的真实验收边界不变：纯 Zuse 游戏通过第 1–10 关、最后观察为第 11 关，归档成功数仍为 0。
 
 消费者方面，仅 ztype 完成了临时本地 path 依赖夹具的部分兼容性检查。固定 ztype 源码为 `5d245e5b0633b5ce0f9479fec9741fb23b7b5b80`，配置为 `--no-default-features --features desktop`，验证了候选 `zuse::platform::Desktop` API 的编译。两次调用合计 65 passed、3 failed、1 ignored：主 all-targets gate 仍退出 101；随后单独执行 composition、dictionary 等集成目标，退出 0。两项服务测试直接报告 Unix datagram socket 的 `EPERM`；另一项错误文本断言失败的实际返回值未打印，只能将其与同类 socket 限制的关系记为推断。plugin feature 未开启，其零测试结果不计作覆盖。原锁文件已恢复，消费者工作区保持干净，没有正式传播或 push。原始回执和两份日志的 SHA、候选源码清单 SHA 见[ztype 兼容性记录](evidence/ztype-compatibility-20261122.json)。
 
-[消费者传播准备记录](evidence/consumer-propagation-20261122.json)因此仅将 ztype 标为部分兼容性已测、`validation_complete=false`、`propagated=false`；其他五个消费者与 Project Z 聚合记录仍未做本轮候选验证或传播。临时 path 候选的源码清单标识只证明当时的快照，不能替代未来固定 commit 的兼容性结果，也没有其他维护者承诺。
+[消费者传播准备记录](evidence/consumer-propagation-20261122.json)因此仅将 ztype 标为部分兼容性已测、`validation_complete=false`、`propagated=false`；其他五个消费者与 Project Z 聚合记录仍未做本轮候选验证或传播。临时 path 候选的源码清单标识只证明当时的快照，不能替代本次固定 commit 的兼容性结果，也没有其他维护者承诺。
 
 ## 本轮证据与待完成事项
 
-下表区分早期现场与协议门禁、停止 UI 后的最终沙箱门禁及消费者检查。文档整理核对已有日志与回执，没有重复执行产品测试。忽略或未运行的原生项目仍需补验，已有结果尚不构成完整发布验收。
+下表区分早期现场与协议门禁、停止 UI 后的沙箱与固定提交开发机门禁，以及消费者检查。文档整理核对已有日志与回执，没有重复执行产品测试。固定提交仍有 30 项 ignored；代码门禁不替代暂停中的真实应用验收，也不构成发布完成。
 
 | 项目 | 已确认结果 | 结论范围 |
 | --- | --- | --- |
@@ -136,7 +144,7 @@ zuse shell --idle-timeout-ms 14400000
 | Build 5fix 定向门禁 | clipboard 单元 3、semantic 5、clipboard 集成 1 通过 | 只记录这批已报告执行项，不推断未重跑的全量库测试结果 |
 | CLI 构建 | Build 4 与 Build 5fix 均完成 | 不据构建推断实际应用结果 |
 | 官方游戏 | 早先运行到第 15 关第二张图；本次纯 Zuse 重跑通过第 1–10 关，最后观察为第 11 关 | 两段记录分开；全通关和“快速”验收未完成 |
-| 原生窗口表面截图 | 私有双窗口门禁 1 passed、0 failed、1 filtered，1.63 秒；runner 退出 0 | 未提交候选；请求 scale=1.25，实际比例与稳定性通过检查，但未证明最终比例恰为 1.25；空 cleanup 日志不补充额外断言 |
+| 原生窗口表面截图 | 私有双窗口门禁 1 passed、0 failed、1 filtered，1.63 秒；runner 退出 0 | 当时未提交候选的独立历史证据，不加进当前 598；请求 scale=1.25，实际比例与稳定性通过检查，但未证明最终比例恰为 1.25；空 cleanup 日志不补充额外断言 |
 | 纯 Zuse 剪贴板与编辑框 | 原生读取、写入 117 字节；三行中文、英文、emoji 精确读回 | 同一真实 ChatGPT 窗口；未使用坐标或外部粘贴辅助 |
 | 纯 Zuse 发送与回复 | 语义发送成功；3653 ms 后精确读到 `ZUSE_DESKTOP_OK`，1 项匹配 | 本次文本链路通过，不能泛化为所有桌面功能通过 |
 | ChatGPT 直接中文输入与搜索 | 窗口限定 keyboard.type 输入中文，3693 ms 后精确读回；select 打开已观察到的本轮测试聊天 | 只证明该输入与搜索流程，未覆盖所有键盘模式 |
@@ -146,14 +154,16 @@ zuse shell --idle-timeout-ms 14400000
 | 显式后台焦点（Build 9 cleanup） | loopback 4、参数预检 1、修订后的原生双页面夹具 1 通过；二进制构建完成；现场背景路线约 7 秒无失焦中止 | 关闭仅确认清除 override；空闲外部导航到下一命令才检测清理；游戏仍未通关 |
 | control_keys 反馈控制（Build 13） | 两项真实 Chromium 控制器门禁通过，1.70 秒；正式 CLI 构建完成；保留 side-effect guard | 公开 DOM getter 支持有实测边界；不等于停车或全站通过 |
 | Build 15b 首次 all-targets | 全部测试源码编译成功；库 261 passed、9 failed、8 ignored，整体退出 101 | 九项 Unix socket 夹具直接报告 EPERM；保留原失败，不据此称全量通过 |
-| 最终沙箱门禁 | 库 261 与 59 个集成目标 300 项通过，合计 561，所选命令退出 0 | 另有 9 filtered、11 项 session 未运行、35 ignored；较早子集不重复计数，文档测试为 0 项 |
-| 格式、静态检查与声明示例 | fmt、no_std、CLI 构建、Clippy 严格检查通过；两份示例离线检查均 valid、steps=0 | 未调用示例函数；JPEG 与 activate 的当前候选原生门禁仍待执行 |
+| 沙箱门禁历史 | 库 261、CLI 二进制 12 与 59 个集成目标 300 项通过，合计 573，所选命令退出 0 | 该轮 9 filtered、11 项 session 未运行、35 ignored；后续开发机已补过前两组，573 不与新结果相加 |
+| 固定提交完整 Rust 门禁 | 库 270、CLI 二进制 12、60 个集成目标 311，合计 593 passed、0 failed、35 ignored、0 filtered；整体退出 0 | 原九项 Unix socket 失败与 11 项 session 全部通过；63 个汇总包括 0 项文档测试 |
+| 固定提交指定 Chromium 门禁 | 控制器能力、activate、JPEG、PNG、反馈控制各 1 项通过，runner passed | 五项此前均 ignored；独立通过总数 598，剩余 30 ignored；不加沙箱或旧源码截图结果 |
+| 格式、静态检查与声明示例 | 沙箱与开发机 fmt、no_std、CLI 构建、Clippy 均通过；两份示例离线检查均 valid、steps=0 | 示例函数未调用；CLI 仍为 0.6.0，未安装或发布 |
 | ztype 消费者兼容性 | desktop-only 临时 path 夹具编译成功；两次调用合计 65 passed、3 failed、1 ignored | 主 gate 退出 101；直接 EPERM 两项、相关推断一项；原锁恢复，尚未正式传播或完整验证 |
 
 ### 草案自检
 
 - **贡献是否明确？** 各项改动对应现场坐标、输入或生命周期问题，未宣称完整解题能力。
 - **说明能否复现？** 给出接口、单位、限制和对应源码；窗口与节点 ID 必须现场获取。
-- **实验是否足够？** 最终沙箱 561 项通过，早期真实 Chromium 和纯 Zuse 多语言发送与回复有已报告结果；Unix socket、被忽略原生门禁、完整消费者验证及游戏终局仍缺证据。
+- **实验是否足够？** 固定提交在开发机独立通过 598 项，已补齐沙箱 Unix socket 与 session 阻断；仍有 30 项 ignored，完整消费者验证与暂停中的游戏、桌面终局验收仍缺证据。
 - **覆盖是否完整？** 不完整；未给出符合新标准的全程通关耗时、归档或原剪贴板恢复结果。
 - **设计边界是否说明？** 取消不能撤销已提交动作，截图映射不锁定未来输入，失去传输时不能承诺松键已送达。

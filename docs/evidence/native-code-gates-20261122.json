@@ -1,0 +1,503 @@
+{
+  "schema": "zuse.acceptance.native-code-gates.v1",
+  "date": "2026-11-22",
+  "status": "passed",
+  "candidate": {
+    "package": "zuse-computer",
+    "version": "0.6.0",
+    "source_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+    "source_tree": "f86332e1688c4a7f5f572a3f1dc6363aba1721b3",
+    "checkout": "clean_fresh_worktree",
+    "worktree_status_empty": true,
+    "released": false,
+    "installed": false
+  },
+  "runner": {
+    "overall_exit_code": 0,
+    "overall_exit_code_source": "Main execution session receipt; also cross-checked with passed state and ten zero exit codes in status.tsv.",
+    "state": "passed",
+    "gates": [
+      {
+        "gate": "fmt",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:08:15Z",
+        "finished_utc": "2026-11-22T14:08:15Z"
+      },
+      {
+        "gate": "no_std",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:08:15Z",
+        "finished_utc": "2026-11-22T14:08:15Z"
+      },
+      {
+        "gate": "all_rust",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:08:15Z",
+        "finished_utc": "2026-11-22T14:09:24Z"
+      },
+      {
+        "gate": "clippy",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:09:24Z",
+        "finished_utc": "2026-11-22T14:09:36Z"
+      },
+      {
+        "gate": "cli_build",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:09:36Z",
+        "finished_utc": "2026-11-22T14:09:36Z"
+      },
+      {
+        "gate": "controller_capabilities",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:09:36Z",
+        "finished_utc": "2026-11-22T14:09:37Z"
+      },
+      {
+        "gate": "activation",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:09:37Z",
+        "finished_utc": "2026-11-22T14:09:37Z"
+      },
+      {
+        "gate": "jpeg",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:09:37Z",
+        "finished_utc": "2026-11-22T14:09:38Z"
+      },
+      {
+        "gate": "png",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:09:38Z",
+        "finished_utc": "2026-11-22T14:09:38Z"
+      },
+      {
+        "gate": "controller_feedback",
+        "exit_code": 0,
+        "started_utc": "2026-11-22T14:09:38Z",
+        "finished_utc": "2026-11-22T14:09:39Z"
+      }
+    ]
+  },
+  "environment": {
+    "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
+    "cargo": "1.100.0 (3acc79c0c 2026-11-05)",
+    "chromium": "158.0.8127.36",
+    "v8": "15.8.62.31",
+    "chromium_binary_sha256": "7d78d12043e614bea88c5916be050bb5b73ebfa2357142fc60f510fbfb7eb3d3",
+    "isolation": {
+      "display": "unset",
+      "wayland_display": "unset",
+      "at_spi_bus_address": "unset",
+      "dbus": "absent-private-address",
+      "xdg_runtime_dir": "private",
+      "chromium_profiles": "owned_temporary_profiles",
+      "fixture_pages": [
+        "data URLs",
+        "local fixture files"
+      ],
+      "real_user_ui_operated": false
+    },
+    "provenance": "Version and isolation markers are in metadata.txt; V8 is reported by the native capability fixture. Owned profiles, private fixture use and no real user UI operation are confirmed by the main execution session."
+  },
+  "all_rust": {
+    "status": "passed",
+    "exit_code": 0,
+    "summary_count": 63,
+    "categories": {
+      "lib": {
+        "summary_count": 1,
+        "passed": 270,
+        "failed": 0,
+        "ignored": 8,
+        "filtered_out": 0
+      },
+      "bin": {
+        "summary_count": 1,
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "integration": {
+        "summary_count": 60,
+        "passed": 311,
+        "failed": 0,
+        "ignored": 27,
+        "filtered_out": 0
+      },
+      "doc": {
+        "summary_count": 1,
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      }
+    },
+    "integration_target_count": 60,
+    "integration_targets": [
+      "accessibility_controls",
+      "accessibility_guard_native",
+      "accessibility_native",
+      "accessibility_reveal_native",
+      "accessibility_semantics",
+      "accessibility_semantics_native",
+      "accessibility_windows",
+      "android_capture",
+      "android_review",
+      "browser_activation",
+      "browser_background",
+      "browser_canvas",
+      "browser_capture",
+      "browser_click_watch",
+      "browser_control_keys",
+      "browser_hold_keys",
+      "browser_hold_until",
+      "browser_native",
+      "browser_pointer",
+      "browser_selection_native",
+      "chatgpt_desktop_module",
+      "cli_code",
+      "clipboard",
+      "core",
+      "cursor",
+      "drawing",
+      "function_metadata",
+      "functional_motion",
+      "key_hold",
+      "key_hold_browser",
+      "move_to",
+      "native_wayland_capture",
+      "observation",
+      "observation_native",
+      "package_imports",
+      "packages",
+      "pointer",
+      "process_launch",
+      "runtime",
+      "runtime_cancellation",
+      "runtime_mice",
+      "runtime_modules",
+      "runtime_review",
+      "scalar_programs",
+      "script_compile",
+      "script_entrypoints",
+      "script_modules",
+      "script_syntax",
+      "sessions",
+      "shell_idle",
+      "shell_signals",
+      "target",
+      "target_window",
+      "timing",
+      "touchpad_entrypoints",
+      "vision",
+      "vision_runtime_native",
+      "visual_timeline",
+      "window_capture",
+      "x11_utf8_native"
+    ],
+    "totals": {
+      "passed": 593,
+      "failed": 0,
+      "ignored": 35,
+      "filtered_out": 0
+    },
+    "doc_test_count": 0,
+    "log": "all_rust.log"
+  },
+  "selected_native_gates": [
+    {
+      "gate": "controller_capabilities",
+      "test": "browser::control_keys::tests::native_controller_side_effect_capabilities",
+      "target": "lib",
+      "kind": "lib",
+      "status": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "selection_filtered_out": 277,
+      "duration_seconds": 0.73,
+      "previously_ignored_in_all_rust": true,
+      "log": "controller_capabilities.log"
+    },
+    {
+      "gate": "activation",
+      "test": "browser::activation::tests::native_activation_preserves_selection_and_verifies_owned_tabs",
+      "target": "lib",
+      "kind": "lib",
+      "status": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "selection_filtered_out": 277,
+      "duration_seconds": 0.41,
+      "previously_ignored_in_all_rust": true,
+      "log": "activation.log"
+    },
+    {
+      "gate": "jpeg",
+      "test": "native_jpeg_capture_preserves_full_viewport_dimensions",
+      "target": "browser_capture",
+      "kind": "integration",
+      "status": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "selection_filtered_out": 1,
+      "duration_seconds": 0.35,
+      "previously_ignored_in_all_rust": true,
+      "log": "jpeg.log"
+    },
+    {
+      "gate": "png",
+      "test": "native_chromium_isolated_profile",
+      "target": "browser_native",
+      "kind": "integration",
+      "status": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "selection_filtered_out": 0,
+      "duration_seconds": 0.41,
+      "previously_ignored_in_all_rust": true,
+      "log": "png.log"
+    },
+    {
+      "gate": "controller_feedback",
+      "test": "browser::control_keys::tests::native_controller_reads_dom_and_canvas_carries_fresh_memory_and_rejects_side_effects",
+      "target": "lib",
+      "kind": "lib",
+      "status": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "selection_filtered_out": 277,
+      "duration_seconds": 0.66,
+      "previously_ignored_in_all_rust": true,
+      "log": "controller_feedback.log"
+    }
+  ],
+  "aggregate": {
+    "unique_passed": 598,
+    "failed": 0,
+    "remaining_ignored": 30,
+    "counting_rule": "593 complete Rust passes plus five distinct tests that were ignored in that same run. The targeted native invocations select one test each; their selection-filtered counts are not new outstanding tests. The sandbox 573 passes and earlier different-source native window capture receipt are not added.",
+    "sandbox_passes_added": 0,
+    "earlier_different_source_native_capture_passes_added": 0
+  },
+  "resolved_prior_environment_blocks": {
+    "previous_receipt": "code-hardening-20261122.json",
+    "previous_all_targets_exit_code_preserved": 101,
+    "unix_socket_fixture_count": 9,
+    "unix_socket_fixture_tests": [
+      "clipboard::wayland::tests::missing_protocol_and_nontext_selection_do_not_become_empty_text",
+      "clipboard::wayland::tests::utf8_source_is_served_after_write_returns_until_owner_is_dropped",
+      "platform::linux::wayland::capture::tests::native_connection_reports_missing_protocol_without_fallback",
+      "platform::linux::wayland::capture::tests::native_connection_wait_has_a_total_deadline",
+      "platform::linux::wayland::capture::tests::native_connection_wait_observes_runtime_cancellation",
+      "platform::linux::wayland::pointer::tests::frames_preserve_coordinates_and_reuse_one_virtual_pointer",
+      "platform::linux::wayland::pointer::tests::missing_virtual_pointer_protocol_fails_before_input",
+      "platform::linux::wayland::pointer::tests::unacknowledged_frame_times_out_without_replay",
+      "platform::linux::wayland::state_tests::keyboard_inspection_rejects_held_or_unreported_keys_before_input"
+    ],
+    "unix_socket_fixture_status": "all_passed_in_this_exact_commit_run",
+    "sessions": {
+      "target": "sessions",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 0,
+      "duration_seconds": 1.97
+    },
+    "scope": "These results close the earlier sandbox environment blocks without rewriting those original failed or skipped runs."
+  },
+  "remaining_ignored_tests": [
+    "browser::background::tests::native_background_keeps_trusted_input_on_selected_page_and_restores_focus",
+    "browser::click_watch::tests::browser_click_watch_existing_attachment_neither_creates_nor_activates_a_tab",
+    "browser::click_watch::tests::browser_click_watch_stops_on_real_tab_focus_loss",
+    "platform::linux::wayland::state_tests::native_evdev_preflight_current_keyboard_without_input",
+    "script::interrupt::platform::tests::signal_fixture",
+    "cancelling_a_submitted_edit_does_not_wait_for_the_gtk_reply",
+    "conditional_draft_edits_use_the_native_object_and_preserve_other_actions",
+    "native_atspi_observe_edit_action_and_redaction",
+    "native_reveal_fixture_child",
+    "native_reveal_preserves_guards_and_never_activates_an_offscreen_control",
+    "semantic_controls_enumerate_select_focus_wait_and_cancel_without_coordinates",
+    "native_canvas_caps_records_without_suppressing_native_draws",
+    "native_canvas_expires_invalidates_and_preserves_restore_conflicts",
+    "native_canvas_latest_mode_stays_fresh_without_growing_history",
+    "native_canvas_records_public_draws_and_binds_read_only_conditions",
+    "browser_click_watch_cancellation_and_navigation_stop_before_input",
+    "browser_click_watch_only_clicks_once_per_visible_episode",
+    "browser_click_watch_refuses_occlusion_ambiguity_and_different_origin",
+    "browser_click_watch_reports_fixture_received_click_latency",
+    "native_browser_receives_trusted_coordinate_clicks_and_drags",
+    "native_selection_preserves_document_and_input",
+    "browser_receives_a_real_hold_and_releases_on_cancellation_or_focus_change",
+    "browser_receives_overlapping_direction_keys_and_releases_both_on_cancel",
+    "browser_rejects_ambiguous_watch_and_reports_removed_scope",
+    "browser_waits_on_scoped_changes_without_requery_or_screenshots",
+    "atspi_watches_only_the_selected_scope_and_survives_cancellation",
+    "independent_application_fixture",
+    "native_x11_num_lock_cli_changes_only_the_requested_bit_and_reads_back",
+    "native_x11_window_hit_test_respects_invisible_input_cover_without_moving_pointer_or_focus",
+    "input"
+  ],
+  "capability_observations": {
+    "throw_on_side_effect_preserved": true,
+    "query_selector_text_content": "read_succeeded",
+    "get_element_by_id_text_content": "EvalError: Possible side-effect in debug-evaluate",
+    "fresh_json_memory": "read_and_local_update_succeeded",
+    "full_retained_policy_wrapper": "succeeded",
+    "preexisting_control_mutation": "rejected",
+    "dom_attribute_mutation": "rejected",
+    "scope": "Observed on the recorded Chromium/V8 version; this is not a guarantee for every DOM getter or browser version."
+  },
+  "artifact": {
+    "kind": "locally_built_cli",
+    "reported_version": "zuse 0.6.0",
+    "sha256": "8881de3e5cc32d9b09c9968f12319b0f805362f3975af8504f2ddd1b079649b8",
+    "released": false,
+    "installed": false,
+    "binary_in_repository": false
+  },
+  "acceptance_limits": {
+    "real_game_and_desktop_acceptance_paused_by_user_stop": true,
+    "real_user_ui_automation_resumed": false,
+    "pure_zuse_game_levels_passed": 10,
+    "last_game_level_observed": 11,
+    "game_completed": false,
+    "quick_completion_proven": false,
+    "chatgpt_archives_confirmed": 0,
+    "full_desktop_acceptance": false,
+    "remaining_native_tests_not_promoted_to_pass": true
+  },
+  "provenance": {
+    "archive": {
+      "file": "receipt-logs.tgz",
+      "bytes": 20377,
+      "sha256": "36f0fabf4862857836efa683d215f66275233170ea010c0661d5aa3e1cc686e5"
+    },
+    "archive_members_verified_against_local_files": 16,
+    "original_files": [
+      {
+        "file": "activation.log",
+        "bytes": 426,
+        "sha256": "05c3c86ffd781f7e2b21bcde70eb36ba72361912fbc218a17f63bf8084805f91"
+      },
+      {
+        "file": "all_rust.log",
+        "bytes": 71538,
+        "sha256": "bd359309a0944c2eac18d560d4ab4d577d4fad142821ae58209bb91f4543506f"
+      },
+      {
+        "file": "binary-sha256.txt",
+        "bytes": 109,
+        "sha256": "26e06931b756cb0329d28d8a4873f145a25a7973c18b5e786c5fa9891ae414b8"
+      },
+      {
+        "file": "binary-version.txt",
+        "bytes": 11,
+        "sha256": "5bf746d66e3aa919b4b4d997784e6fb44bf54305adce12cd1705cfaf2cc12bc0"
+      },
+      {
+        "file": "cli_build.log",
+        "bytes": 72,
+        "sha256": "2b34696728dc82b03cbf6311d7e3a6a41658bbde097834c3010a78bc82842c1a"
+      },
+      {
+        "file": "clippy.log",
+        "bytes": 177,
+        "sha256": "1dc050228efdb7ebc62f4c552600634f26c35c9af433edc61a4596e2fd322cbd"
+      },
+      {
+        "file": "controller_capabilities.log",
+        "bytes": 4204,
+        "sha256": "8bcc426c31cc07704fc8e114a91850e8bbbec5deaa5838289bb27a24e7913c42"
+      },
+      {
+        "file": "controller_feedback.log",
+        "bytes": 451,
+        "sha256": "5ecde843266e85c900da935ed7ce4391ec794b8fb25d2ed74de1c013046fff1a"
+      },
+      {
+        "file": "fmt.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "jpeg.log",
+        "bytes": 404,
+        "sha256": "2d5c51ffdb1a6122127be3ae9b3ddbc6fa205c36088ce077646b6e23fadda194"
+      },
+      {
+        "file": "metadata.txt",
+        "bytes": 392,
+        "sha256": "1d6763ccb021f3d67a00aee50a036ed907929f093eefe180f0fee599f447877f"
+      },
+      {
+        "file": "no_std.log",
+        "bytes": 176,
+        "sha256": "6696a2d2323f42c6153de2d2b92bb20f0236fd60c9773f434a05d9e3efd27b24"
+      },
+      {
+        "file": "png.log",
+        "bytes": 380,
+        "sha256": "5a5fd826b68124c3ba4f87974982f5cb18885ea16161d6b411ae2a77506fa0f1"
+      },
+      {
+        "file": "state",
+        "bytes": 7,
+        "sha256": "2700165975f68815c97d605c56eca8e90d497ade1264b6282401d13fee99ac27"
+      },
+      {
+        "file": "status.tsv",
+        "bytes": 581,
+        "sha256": "35cd0eda86a521a1e61854e4829aaa305f12bec0d3883a2b7d3676bcbeee9199"
+      },
+      {
+        "file": "worktree-status.txt",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "verification": "Every local evidence file was hashed and its SHA-256 matched the corresponding member in the supplied archive. Counts and target names were parsed from the original logs; the five selected native tests were checked against the earlier ignored list."
+  },
+  "redaction": {
+    "private_absolute_paths_omitted": true,
+    "connection_job_and_temporary_object_ids_omitted": true,
+    "raw_logs_archive_and_binary_not_copied_into_repository": true,
+    "note": "Only basenames, public source identity, versions, test names, numeric results, selected capability outcomes and original SHA-256 values are published. Raw log paths and private fixture URLs/object IDs are omitted."
+  },
+  "source_publication": {
+    "status": "source_branch_published",
+    "repository": "https://github.com/LIghtJUNction/zuse",
+    "branch": "work/zuse-control-hardening-20261122",
+    "ref": "refs/heads/work/zuse-control-hardening-20261122",
+    "url": "https://github.com/LIghtJUNction/zuse/tree/work/zuse-control-hardening-20261122",
+    "commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+    "verification": {
+      "command": [
+        "git",
+        "ls-remote",
+        "--exit-code",
+        "origin",
+        "refs/heads/work/zuse-control-hardening-20261122"
+      ],
+      "exit_code": 0,
+      "observed_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+      "exact_match": true,
+      "provenance": "The main execution session reported a successful push, then independently read the official origin ref from the sandbox. This documentation update did not perform a network operation."
+    },
+    "pull_request_created": false,
+    "release_published": false,
+    "candidate_installed": false,
+    "scope": "Source branch publication only. No main-branch merge is claimed."
+  }
+}

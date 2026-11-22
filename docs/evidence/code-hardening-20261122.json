@@ -1,18 +1,19 @@
 {
   "schema": "zuse.acceptance.code-hardening.v1",
   "date": "2026-11-22",
-  "status": "selected_final_sandbox_gates_passed_native_gates_pending",
+  "status": "exact_commit_host_code_gates_passed_remaining_ignored",
   "candidate": {
     "package": "zuse-computer",
     "version": "0.6.0",
     "base_commit": "f13412e3c148ecf01c347423caba509d45df9ccc",
-    "source_kind": "uncommitted_working_tree_candidate",
-    "final_source_commit": null,
-    "release": false
+    "source_kind": "git_commit_candidate",
+    "final_source_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+    "release": false,
+    "final_source_tree": "f86332e1688c4a7f5f572a3f1dc6363aba1721b3"
   },
   "provenance": {
     "source": "Original local test logs and the main execution session reported exit codes and post-format checks. This documentation step did not rerun product tests or operate a UI.",
-    "source_identity_limit": "The final source commit has not been created. Earlier candidate runs are retained separately and are not asserted to have one identical source digest.",
+    "source_identity_limit": "The candidate source is now fixed to the recorded Git commit and tree. Earlier candidate runs remain separate historical records and are not asserted to have one identical source digest. No release is claimed.",
     "logs": [
       {
         "file": "zuse-build15b-all-targets.log",
@@ -43,8 +44,14 @@
         "file": "zuse-clippy-final4.log",
         "bytes": 146,
         "sha256": "86f84e6bb58fc7f52b38dead5b11b6f4bbda61277454e8d9c7bf2ff87c526bee"
+      },
+      {
+        "file": "zuse-final-sandbox-bin.log",
+        "bytes": 1526,
+        "sha256": "f75caaf06d30c7f2830786506170a47930d96469341113b6d49bbdd6b275ff74"
       }
-    ]
+    ],
+    "native_gate_receipt": "native-code-gates-20261122.json"
   },
   "initial_all_targets_gate": {
     "label": "Build 15b all-targets attempt",
@@ -77,7 +84,13 @@
         "platform::linux::wayland::state_tests::keyboard_inspection_rejects_held_or_unreported_keys_before_input"
       ]
     },
-    "log": "zuse-build15b-all-targets.log"
+    "log": "zuse-build15b-all-targets.log",
+    "followup": {
+      "status": "nine_failed_fixture_tests_subsequently_passed",
+      "source_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+      "receipt": "native-code-gates-20261122.json",
+      "original_exit_code_unchanged": 101
+    }
   },
   "final_sandbox_gates": {
     "status": "passed_with_explicit_exclusions",
@@ -99,8 +112,29 @@
         "platform::linux::wayland::pointer::tests::unacknowledged_frame_times_out_without_replay",
         "platform::linux::wayland::state_tests::keyboard_inspection_rejects_held_or_unreported_keys_before_input"
       ],
-      "filtered_reason": "The nine previously recorded UnixListener::bind EPERM cases are deferred to a host that permits their Unix socket fixtures; filtering does not validate them.",
+      "filtered_reason": "The nine recorded UnixListener::bind EPERM cases were filtered in this sandbox run. All nine later passed on the development host at the fixed candidate commit; filtering itself did not validate them. See native-code-gates-20261122.json.",
       "log": "zuse-final-sandbox-lib.log"
+    },
+    "bin": {
+      "target": "zuse",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--bin",
+        "zuse",
+        "--",
+        "--test-threads=1"
+      ],
+      "source_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 0,
+      "duration_seconds": 0.1,
+      "exit_code": 0,
+      "log": "zuse-final-sandbox-bin.log"
     },
     "integrations": {
       "target_count": 59,
@@ -191,7 +225,7 @@
         "target": "sessions",
         "file": "tests/sessions.rs",
         "test_count": 11,
-        "reason": "Unix socket session tests are deferred to the development host; the entire target was not run."
+        "reason": "This sandbox run omitted the entire Unix socket sessions target. All eleven tests later passed on the development host at the fixed candidate commit. See native-code-gates-20261122.json."
       },
       "log": "zuse-final-sandbox-integration.log"
     },
@@ -203,12 +237,12 @@
       "log": "zuse-final-sandbox-doc.log"
     },
     "aggregate": {
-      "passed": 561,
+      "passed": 573,
       "failed": 0,
       "ignored": 35,
       "filtered_lib_tests": 9,
       "unrun_session_tests": 11,
-      "counting_rule": "261 library passes plus 300 integration passes are disjoint. Ignored, filtered and unrun tests are excluded. Earlier subset runs are not added again."
+      "counting_rule": "261 library passes, 12 binary passes and 300 integration passes are disjoint. Ignored, filtered and unrun tests are excluded. Earlier subset runs are not added again."
     },
     "all_targets_passed": false
   },
@@ -270,26 +304,84 @@
     "scope": "Same retained target rechecks after permission, action-index consistency, cancellation/deadline boundaries, no input replay and native-call diagnostics. Mock tests are not real desktop acceptance."
   },
   "pending_validation": [
-    "Nine Unix socket library fixtures on a permitted host",
-    "The eleven tests in the omitted sessions integration target",
-    "Ignored native tests that were not explicitly run in a separately linked historical receipt",
-    "Native JPEG capture gate for the current candidate",
-    "Native browser.activate gate for the current candidate",
-    "Final source commit identity and any later immutable artifact validation"
+    "Thirty tests remain ignored in this exact-commit host run; see the explicit inventory in native-code-gates-20261122.json. Historical results on earlier sources do not silently validate them for this commit.",
+    "Consumer validation and formal propagation of the immutable candidate are recorded separately.",
+    "Artifact installation and release validation; the candidate remains version 0.6.0 and is neither released nor installed."
   ],
   "acceptance_limits": {
-    "new_ui_actions_executed_for_these_gates": false,
     "game_pure_zuse_levels_passed": 10,
     "game_last_observed_level": 11,
     "game_fully_completed": false,
     "quick_completion_proven": false,
     "chatgpt_archives_confirmed": 0,
-    "full_desktop_acceptance": false
+    "full_desktop_acceptance": false,
+    "real_user_ui_actions_executed_for_code_gates": false,
+    "isolated_fixture_input_executed": true,
+    "real_game_and_desktop_acceptance_paused_by_user_stop": true
   },
   "redaction": {
     "private_absolute_paths_omitted": true,
     "connection_and_job_ids_omitted": true,
     "raw_logs_not_copied_into_repository": true,
     "note": "Log filenames are evidence labels, not public download links. SHA-256 values refer to the original unredacted files; test counts, test names, versions and error meaning are preserved."
+  },
+  "development_host_validation": {
+    "source_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+    "source_tree": "f86332e1688c4a7f5f572a3f1dc6363aba1721b3",
+    "checkout": "clean_fresh_worktree",
+    "status": "passed",
+    "runner_exit_code": 0,
+    "rust_suite": {
+      "summary_count": 63,
+      "lib_passed": 270,
+      "bin_passed": 12,
+      "integration_targets": 60,
+      "integration_passed": 311,
+      "passed": 593,
+      "failed": 0,
+      "ignored": 35,
+      "filtered_out": 0
+    },
+    "isolated_headless_chromium": {
+      "specified_gates": 5,
+      "passed": 5,
+      "failed": 0,
+      "previously_ignored": true
+    },
+    "unique_passed": 598,
+    "remaining_ignored": 30,
+    "previous_unix_socket_fixtures_passed": 9,
+    "previous_session_tests_passed": 11,
+    "receipt": "native-code-gates-20261122.json",
+    "raw_receipt_archive_sha256": "36f0fabf4862857836efa683d215f66275233170ea010c0661d5aa3e1cc686e5",
+    "binary_sha256": "8881de3e5cc32d9b09c9968f12319b0f805362f3975af8504f2ddd1b079649b8",
+    "released": false,
+    "installed": false,
+    "counting_rule": "593 complete Rust passes plus five previously ignored native tests. Do not add earlier sandbox or different-source native capture passes."
+  },
+  "source_publication": {
+    "status": "source_branch_published",
+    "repository": "https://github.com/LIghtJUNction/zuse",
+    "branch": "work/zuse-control-hardening-20261122",
+    "ref": "refs/heads/work/zuse-control-hardening-20261122",
+    "url": "https://github.com/LIghtJUNction/zuse/tree/work/zuse-control-hardening-20261122",
+    "commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+    "verification": {
+      "command": [
+        "git",
+        "ls-remote",
+        "--exit-code",
+        "origin",
+        "refs/heads/work/zuse-control-hardening-20261122"
+      ],
+      "exit_code": 0,
+      "observed_commit": "14c413dc385e076c6e0ecbd9002165a1acd68518",
+      "exact_match": true,
+      "provenance": "The main execution session reported a successful push, then independently read the official origin ref from the sandbox. This documentation update did not perform a network operation."
+    },
+    "pull_request_created": false,
+    "release_published": false,
+    "candidate_installed": false,
+    "scope": "Source branch publication only. No main-branch merge is claimed."
   }
 }
