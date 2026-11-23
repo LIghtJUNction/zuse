@@ -1832,119 +1832,51 @@ fn entropy(bytes: &mut [u8]) -> Result<()> {
 }
 
 pub(crate) fn encode_base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let bits = ((chunk[0] as u32) << 16)
-            | ((chunk.get(1).copied().unwrap_or(0) as u32) << 8)
-            | chunk.get(2).copied().unwrap_or(0) as u32;
-        output.push(ALPHABET[(bits >> 18) as usize] as char);
-        output.push(ALPHABET[((bits >> 12) & 63) as usize] as char);
-        output.push(if chunk.len() > 1 {
-            ALPHABET[((bits >> 6) & 63) as usize] as char
-        } else {
-            '='
-        });
-        output.push(if chunk.len() > 2 {
-            ALPHABET[(bits & 63) as usize] as char
-        } else {
-            '='
-        });
-    }
-    output
+    let len =
+        z64::encoded_len(bytes.len(), z64::Mode::Standard).expect("base64 output length overflow");
+    let mut output = vec![0; len];
+    z64::encode(bytes, &mut output, z64::Mode::Standard).expect("exact base64 output capacity");
+    String::from_utf8(output).expect("base64 output is ASCII")
 }
 
 fn decode_base64(text: &str) -> Result<Vec<u8>> {
     if !text.len().is_multiple_of(4) || text.len() > MAX_MESSAGE {
         return Err("invalid base64 length".into());
     }
-    let mut output = Vec::with_capacity(text.len() / 4 * 3);
-    let value = |byte: u8| -> Result<u8> {
-        match byte {
-            b'A'..=b'Z' => Ok(byte - b'A'),
-            b'a'..=b'z' => Ok(byte - b'a' + 26),
-            b'0'..=b'9' => Ok(byte - b'0' + 52),
-            b'+' => Ok(62),
-            b'/' => Ok(63),
-            _ => Err("invalid base64 character".into()),
-        }
-    };
-    for (index, chunk) in text.as_bytes().as_chunks::<4>().0.iter().enumerate() {
-        let last = (index + 1) * 4 == text.len();
-        let a = value(chunk[0])?;
-        let b = value(chunk[1])?;
-        let pad_c = chunk[2] == b'=';
-        let pad_d = chunk[3] == b'=';
-        if (pad_c && !pad_d) || ((pad_c || pad_d) && !last) {
-            return Err("invalid base64 padding".into());
-        }
-        let c = if pad_c { 0 } else { value(chunk[2])? };
-        let d = if pad_d { 0 } else { value(chunk[3])? };
-        if (pad_c && b & 15 != 0) || (pad_d && !pad_c && c & 3 != 0) {
-            return Err("non-canonical base64 padding".into());
-        }
-        output.push((a << 2) | (b >> 4));
-        if !pad_c {
-            output.push((b << 4) | (c >> 2));
-        }
-        if !pad_d {
-            output.push((c << 6) | d);
-        }
-    }
+    let mut output = vec![0; z64::decoded_capacity(text.len()).expect("bounded base64 length")];
+    let written = z64::decode(text.as_bytes(), &mut output, z64::Mode::Standard)
+        .map_err(|error| base64_error(text.as_bytes(), error))?;
+    output.truncate(written);
     Ok(output)
 }
 
+fn base64_error(input: &[u8], error: z64::Error) -> String {
+    match error {
+        z64::Error::InvalidLength { .. }
+        | z64::Error::LengthOverflow
+        | z64::Error::OutputTooSmall { .. } => "invalid base64 length",
+        z64::Error::NonCanonical { .. } => "non-canonical base64 padding",
+        z64::Error::InvalidByte { index, .. } | z64::Error::InvalidPadding { index } => {
+            // Preserve the browser's diagnostic precedence within the failing
+            // quantum. z64 alone validates and converts the encoded bytes.
+            let start = index / 4 * 4;
+            let chunk = &input[start..start + 4];
+            if index % 4 >= 2
+                && ((chunk[2] == b'=' && chunk[3] != b'=')
+                    || ((chunk[2] == b'=' || chunk[3] == b'=') && start + 4 != input.len()))
+            {
+                "invalid base64 padding"
+            } else {
+                "invalid base64 character"
+            }
+        }
+    }
+    .into()
+}
+
 fn sha1(input: &[u8]) -> [u8; 20] {
-    let mut bytes = input.to_vec();
-    bytes.push(0x80);
-    while bytes.len() % 64 != 56 {
-        bytes.push(0);
-    }
-    bytes.extend_from_slice(&((input.len() as u64) * 8).to_be_bytes());
-    let mut state = [
-        0x67452301u32,
-        0xefcdab89,
-        0x98badcfe,
-        0x10325476,
-        0xc3d2e1f0,
-    ];
-    for chunk in bytes.as_chunks::<64>().0 {
-        let mut words = [0u32; 80];
-        for (i, bytes) in chunk.as_chunks::<4>().0.iter().enumerate() {
-            words[i] = u32::from_be_bytes(*bytes);
-        }
-        for i in 16..80 {
-            words[i] = (words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16]).rotate_left(1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e] = state;
-        for (i, word) in words.into_iter().enumerate() {
-            let (f, k) = match i {
-                0..=19 => ((b & c) | ((!b) & d), 0x5a827999),
-                20..=39 => (b ^ c ^ d, 0x6ed9eba1),
-                40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1bbcdc),
-                _ => (b ^ c ^ d, 0xca62c1d6),
-            };
-            let next = a
-                .rotate_left(5)
-                .wrapping_add(f)
-                .wrapping_add(e)
-                .wrapping_add(k)
-                .wrapping_add(word);
-            e = d;
-            d = c;
-            c = b.rotate_left(30);
-            b = a;
-            a = next;
-        }
-        for (item, value) in state.iter_mut().zip([a, b, c, d, e]) {
-            *item = item.wrapping_add(value);
-        }
-    }
-    let mut output = [0; 20];
-    for (chunk, value) in output.as_chunks_mut::<4>().0.iter_mut().zip(state) {
-        chunk.copy_from_slice(&value.to_be_bytes());
-    }
-    output
+    use sha1::{Digest, Sha1};
+    Sha1::digest(input).into()
 }
 
 #[cfg(test)]
@@ -1960,6 +1892,34 @@ mod tests {
         );
     }
     #[test]
+    fn sha1_standard_vectors() {
+        for (input, expected) in [
+            (
+                b"".as_slice(),
+                [
+                    0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32, 0x55, 0xbf, 0xef, 0x95,
+                    0x60, 0x18, 0x90, 0xaf, 0xd8, 0x07, 0x09,
+                ],
+            ),
+            (
+                b"abc",
+                [
+                    0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e, 0x25, 0x71, 0x78,
+                    0x50, 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d,
+                ],
+            ),
+            (
+                b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+                [
+                    0x84, 0x98, 0x3e, 0x44, 0x1c, 0x3b, 0xd2, 0x6e, 0xba, 0xae, 0x4a, 0xa1, 0xf9,
+                    0x51, 0x29, 0xe5, 0xe5, 0x46, 0x70, 0xf1,
+                ],
+            ),
+        ] {
+            assert_eq!(sha1(input), expected);
+        }
+    }
+    #[test]
     fn base64_round_trip_and_padding() {
         for n in 0..128 {
             let bytes = (0..n).map(|v| v as u8).collect::<Vec<_>>();
@@ -1968,6 +1928,65 @@ mod tests {
         for text in ["A", "====", "AB==", "AAB=", "AA=A", "AA==AA==", "?AAA"] {
             assert!(decode_base64(text).is_err(), "{text}");
         }
+    }
+    #[test]
+    fn base64_standard_vectors() {
+        for (bytes, encoded) in [
+            (b"".as_slice(), ""),
+            (b"f", "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg=="),
+            (b"fooba", "Zm9vYmE="),
+            (b"foobar", "Zm9vYmFy"),
+            (&[0xfb, 0xff], "+/8="),
+        ] {
+            assert_eq!(encode_base64(bytes), encoded);
+            assert_eq!(decode_base64(encoded).unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn base64_preserves_input_error_categories() {
+        for (invalid, expected) in [
+            ("A", "invalid base64 length"),
+            ("AAA", "invalid base64 length"),
+            ("AAA==", "invalid base64 length"),
+            ("-AAA", "invalid base64 character"),
+            ("_AAA", "invalid base64 character"),
+            ("AAA ", "invalid base64 character"),
+            ("AAA\n", "invalid base64 character"),
+            ("éAA", "invalid base64 character"),
+            ("====", "invalid base64 character"),
+            ("A===", "invalid base64 character"),
+            ("AA?=", "invalid base64 character"),
+            ("AA=A", "invalid base64 padding"),
+            ("AA= ", "invalid base64 padding"),
+            ("AA==AAAA", "invalid base64 padding"),
+            ("AA?=AAAA", "invalid base64 padding"),
+            ("AAA=AAAA", "invalid base64 padding"),
+            ("AB==", "non-canonical base64 padding"),
+            ("AAB=", "non-canonical base64 padding"),
+        ] {
+            for prefix in ["", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] {
+                assert_eq!(
+                    decode_base64(&format!("{prefix}{invalid}")).unwrap_err(),
+                    expected,
+                    "{prefix}{invalid:?}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn base64_message_limit_is_inclusive() {
+        let mut encoded = "AAAA".repeat(MAX_MESSAGE / 4);
+        let decoded = decode_base64(&encoded).unwrap();
+        assert_eq!(decoded.len(), MAX_MESSAGE / 4 * 3);
+        assert!(decoded.iter().all(|&byte| byte == 0));
+        encoded.push_str("AAAA");
+        assert_eq!(
+            decode_base64(&encoded).unwrap_err(),
+            "invalid base64 length"
+        );
     }
     #[test]
     fn endpoint_is_loopback_only() {

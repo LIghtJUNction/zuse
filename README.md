@@ -8,7 +8,7 @@ zuse turns small programs into desktop observations and actions. The same execut
 
 ## Small core, explicit effects
 
-The flat-call parser and pointer-motion kernel compile with `no_std`, use no allocator, and have no dependencies. The optional host runtime, including the scoped-script compiler and scheduler, uses Rust's standard library and six Project Z crates across its dependency tree: zmcpio, zcall, zconv, zclap, z64, and zsys. Native dynamic-library loading reuses zsys 0.1.1. There is no embedded JavaScript engine or browser automation framework.
+The flat-call parser and pointer-motion kernel compile with `no_std`, use no allocator, and have no dependencies. The optional host runtime, including the scoped-script compiler and scheduler, uses Rust's standard library and six Project Z crates across its dependency tree: zmcpio, zcall, zconv, zclap, z64, and zsys. WebSocket handshakes use the `sha1` crate with its default features disabled. Native dynamic-library loading reuses zsys 0.1.1. There is no embedded JavaScript engine or browser automation framework.
 
 The runtime checks the entire program before its first effect. Unknown operations, wrong argument types, duplicate arguments, malformed strings, excessive steps, and excess fixed-duration wait budgets fail before execution. Speed-based target movement is charged to the remaining wait budget after its path is resolved, before sending its first pointer event. Runtime errors return completed steps and stop the remaining program. Execution records omit keyboard input contents.
 
