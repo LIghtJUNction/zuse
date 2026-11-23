@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Use zconv for JSON string output and share the same adapter with native platform responses. Preserve lowercase `\u0008` and `\u000c` escapes and keep the dependency optional under `std`.
 - Keep the persistent shell's SIGINT/SIGTERM handler active while waiting for input and cleaning up its Runtime. Interrupting an idle shell now reaps managed child processes; interrupting active work cancels the command, discards queued input, and exits with status 1 on supported native signal platforms.
 - Add isolated subprocess regressions for both signals with idle input, incomplete lines, active commands and managed-process cleanup; preserve existing idle-timeout and CLI execution behavior.
 

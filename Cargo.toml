@@ -18,9 +18,10 @@ path = "src/lib.rs"
 [features]
 default = ["std"]
 vision = ["std"]
-std = ["dep:sha1", "dep:zmcpio", "dep:zclap", "dep:z64", "dep:zsys"]
+std = ["dep:zconv", "dep:sha1", "dep:zmcpio", "dep:zclap", "dep:z64", "dep:zsys"]
 
 [dependencies]
+zconv = { git = "https://github.com/LIghtJUNction/zconv.git", default-features = false, optional = true }
 sha1 = { version = "0.11.0", default-features = false, optional = true }
 zmcpio = { default-features = false, features = ["std"], optional = true, git = "https://github.com/LIghtJUNction/zmcpio.git"}
 zclap = { default-features = false, optional = true, git = "https://github.com/LIghtJUNction/zclap.git"}
