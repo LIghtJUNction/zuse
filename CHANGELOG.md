@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add Wayland semantic mice with independently animated click-through cursors and targeted AT-SPI actions. Reuse the scoped scheduler and keep coordinate input on the existing native pointer paths.
+
 - Add native Sway and niri window listing and exact-ID focus with compositor readback. Wayland `doctor` reports window IPC readiness and the capture helper separately.
 - Validate and atomically replace Wayland PNG captures. Window crops carry logical geometry and discard the image if the target changes during capture. Desktop helpers drain both streams with output limits and a deadline.
 - Read Linux `screen.text` without requesting node geometry or actions. Native AT-SPI uses the protocol role for password redaction and edit guards.

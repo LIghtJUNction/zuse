@@ -5,6 +5,7 @@ use super::{
     syntax::{self, Argument, Call, Expr, Span, Statement, StatementKind},
 };
 use crate::{
+    accessibility::ElementAction,
     cursor::{CursorColor, CursorImage, CursorShape, CursorStyle},
     motion::{Curve, DEFAULT_MOVE_DURATION_MS, DEFAULT_MOVE_JITTER, MAX_COORDINATE, Point},
     mouse::{MouseMode, MouseOptions},
@@ -24,6 +25,7 @@ const MAX_RETAINED_STRING_BYTES: usize = 16 * 1024 * 1024;
 
 const CONSTRUCTOR_ARGS: &[&str] = &[
     "name",
+    "kind",
     "color",
     "shape",
     "size",
@@ -495,7 +497,19 @@ impl<'a> Compiler<'a> {
                 ));
             }
             let (action, wait) = action(call)?;
+            let mode = self.modes[id as usize];
             match &action {
+                Action::Activate(_) if mode != MouseMode::Semantic => {
+                    return Err(at(call.span, "activate requires mouse(kind=\"semantic\")"));
+                }
+                Action::Click { .. } | Action::Button { .. } | Action::Scroll { .. }
+                    if mode == MouseMode::Semantic =>
+                {
+                    return Err(at(
+                        call.span,
+                        "semantic mice use activate(path, pid, name, action) for input",
+                    ));
+                }
                 Action::Click { button, .. } if self.held_buttons[id as usize].contains(button) => {
                     return Err(at(
                         call.span,
@@ -515,6 +529,7 @@ impl<'a> Compiler<'a> {
             }
             match &action {
                 Action::Appearance(image) => self.image(image, call.span)?,
+                Action::Activate(target) => self.strings(target.retained_bytes(), call.span)?,
                 Action::MoveTo { query, .. } => self.strings(
                     query.text.len()
                         + query.role.as_ref().map_or(0, String::len)
@@ -829,12 +844,19 @@ fn mouse_options(call: &Call) -> Result<MouseOptions> {
     if explicit_user && !shared {
         return Err(args.bad("shared", "cannot be false for user_mouse"));
     }
-    let mode = if shared {
-        MouseMode::User
-    } else {
-        MouseMode::Independent
+    let mode = match args
+        .text("kind", if shared { "user" } else { "independent" })?
+        .as_str()
+    {
+        "semantic" if !shared => MouseMode::Semantic,
+        "user" if shared || !args.has("shared") => MouseMode::User,
+        "independent" if !shared => MouseMode::Independent,
+        "independent" | "user" | "semantic" => {
+            return Err(args.bad("kind", "conflicts with shared or user_mouse"));
+        }
+        _ => return Err(args.bad("kind", "must be independent, user or semantic")),
     };
-    let (appearance, image) = appearance(&args, shared)?;
+    let (appearance, image) = appearance(&args, mode == MouseMode::User)?;
     let start = match (args.has("x"), args.has("y")) {
         (false, false) => None,
         (true, true) => Some(Point {
@@ -960,6 +982,20 @@ fn action(call: &Call) -> Result<(Action, u64)> {
             let options = movement(&args)?;
             let wait = u64::from(options.scheduled_duration_ms());
             Ok((Action::MoveTo { query, options }, wait))
+        }
+        "activate" => {
+            let args = Args::new(call, &["path", "pid", "name", "action"])?;
+            for key in ["path", "pid", "name"] {
+                args.require(key)?;
+            }
+            let target = ElementAction::new(
+                args.text("path", "")?,
+                args.unsigned("pid", 0, 1, u64::from(u32::MAX))? as u32,
+                args.text("name", "")?,
+                args.text("action", "click")?,
+            )
+            .map_err(|error| at(call.span, error))?;
+            Ok((Action::Activate(target), 0))
         }
         "click" => {
             let args = Args::new(call, &["button", "count", "interval"])?;

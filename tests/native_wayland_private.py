@@ -254,6 +254,8 @@ def main():
     parser.add_argument("--weston", default="weston", help="Weston parent executable")
     parser.add_argument("--render-node", type=Path, help="optional Cage renderer node, for example /dev/dri/renderD129")
     parser.add_argument("--compositor", default="Hyprland", help="private child executable")
+    parser.add_argument("--semantic-demo", type=Path, help="capture and verify the owned GTK multi-cursor demo")
+    parser.add_argument("--semantic-mice", type=int, choices=range(2, 6), default=2)
     args = parser.parse_args()
     if not args.headless:
         parser.error("--headless is required; nesting on the current desktop is disabled")
@@ -470,6 +472,20 @@ def main():
                 raise RuntimeError("owned baseline keyboard exited during the native fixtures")
             isolation["physical_input_or_kms_fds"] = physical_device_fds(parent) + physical_device_fds(child)
             report = json.loads(report_path.read_text())
+            if result.returncode == 0 and args.semantic_demo:
+                stage = "run-private-semantic-demo"
+                demo = subprocess.run(
+                    ["/usr/bin/python3", str(ROOT / "examples/semantic-mice.py"), "--binary",
+                     str(binary), "--once", "--count", str(args.semantic_mice),
+                     "--artifacts", str(args.semantic_demo.resolve())],
+                    env=env, stdin=subprocess.DEVNULL, timeout=50,
+                )
+                demo.check_returncode()
+                demo_report = json.loads((args.semantic_demo / "semantic-mice.json").read_text())
+                report["semantic_mice"] = {
+                    key: demo_report[key] for key in
+                    ("callbacks", "pointer_before", "pointer_after", "focus_unchanged")
+                }
             report["isolation"] = isolation
             if report.get("native_wayland") == "starting":
                 report.update(native_wayland="blocked", stage=stage,

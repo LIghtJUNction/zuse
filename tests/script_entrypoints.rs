@@ -225,3 +225,26 @@ fn script_receipt_mcp_encodes_large_results_and_serves_the_next_request() {
         .unwrap();
     }
 }
+
+#[test]
+fn semantic_mice_preflight_keeps_coordinate_input_separate() {
+    use zuse::{runtime::Options, script::compile};
+
+    let activate = r#"p.activate(path="0/1/2/3", pid=123, name="Continue")"#;
+    let valid = format!(r#"let p = mouse(kind="semantic"); p.move(x=50,y=60); {activate}"#);
+    assert!(compile(&valid, Options::default()).is_ok());
+    for method in ["p.click()", "p.down()", "p.up()", "p.scroll(y=1)"] {
+        let source = format!("{valid}; {method}");
+        assert!(
+            compile(&source, Options::default())
+                .unwrap_err()
+                .contains("semantic mice use activate")
+        );
+    }
+    assert!(
+        compile(&format!("let p=mouse(); {activate}"), Options::default())
+            .unwrap_err()
+            .contains("activate requires")
+    );
+    assert!(compile(&valid.replace("pid=123", "pid=0"), Options::default()).is_err());
+}

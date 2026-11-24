@@ -4,6 +4,26 @@
 
 The following examples describe the current repository implementation. Independent mice and custom native cursors require Linux X11 with XInput2, XTEST, and ARGB cursor support. [Platform selection](#platform-selection-and-limits) explains the explicit user-pointer option for other supported desktop backends.
 
+## Wayland semantic mice
+
+On Hyprland, `mouse(kind="semantic")` creates an independently positioned, click-through Wayland cursor. Each cursor can move and change appearance, including in `parallel` branches. Its position is in logical desktop coordinates. Give it `x` and `y` at creation, or start at the current Hyprland pointer position.
+
+Use `activate` with the path, PID, element name and action name from `accessibility.tree()`. The default action name is `click`. Zuse resolves the AT-SPI object, checks its identity and advertised action, and calls the action without moving the system pointer or focusing a window. The cursor position does not select the recipient. The application can change its own UI or focus in response.
+
+```text
+let blue = mouse(kind="semantic", color="#22D3EE", x=120, y=120)
+let pink = mouse(kind="semantic", color="#F472B6", x=450, y=120)
+parallel {
+    blue.move(x=160, y=300, duration=480)
+    pink.move(x=480, y=300, duration=640)
+}
+blue.activate(path="0/0/0/2", pid=1234, name="Apply", action="click")
+```
+
+Replace the example path and PID with values from the target application. In a flat program use `mouse.use(kind="semantic")`, `mouse.move(...)` and `mouse.activate(...)`. Coordinate clicks, button holds and wheel events require a native pointer mode. Semantic mice require Linux Wayland with layer shell, logical output information, shared-memory cursor images and a working AT-SPI session.
+
+Run the local [GTK demonstration](../examples/semantic-mice.py) with `python3 examples/semantic-mice.py --binary target/debug/zuse` inside Hyprland. Append `--count 5` to run five cursors. Replay starts their parallel program and the buttons report the application callbacks.
+
 ## Run a first script
 
 Validate the included example before opening a display:

@@ -1,7 +1,9 @@
 //! Owned pointers. Independent mice are the default; user input is opt-in.
 use crate::{
+    accessibility::ElementAction,
     cursor::{CursorImage, CursorStyle},
     motion::{MAX_COORDINATE, Point},
+    observation::Cancellation,
     platform::Desktop,
     pointer::{MoveOptions, MovePlan},
     target::{self, LocatedTarget, TargetQuery},
@@ -12,12 +14,23 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// An independent native pointer or an explicitly borrowed user pointer.
+/// A native pointer, borrowed user pointer, or Wayland cursor with semantic actions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MouseMode {
     #[default]
     Independent,
     User,
+    Semantic,
+}
+
+impl MouseMode {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Independent => "independent",
+            Self::User => "user",
+            Self::Semantic => "semantic",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -56,9 +69,10 @@ impl MouseOptions {
         if let Some(image) = &self.image {
             image.validate()?;
         }
-        if self.mode == MouseMode::Independent && self.appearance.is_none() && self.image.is_none()
-        {
-            return Err("independent mice require their own visible appearance".into());
+        if self.mode != MouseMode::User && self.appearance.is_none() && self.image.is_none() {
+            return Err(
+                "independent and semantic mice require their own visible appearance".into(),
+            );
         }
         if let Some(p) = self.start {
             validate_point(p)?;
@@ -86,6 +100,8 @@ enum Backend {
         desktop: Desktop,
         marker: Box<crate::platform::wayland_marker::WaylandMarker>,
     },
+    #[cfg(target_os = "linux")]
+    Semantic(Box<crate::platform::wayland_marker::WaylandMarker>),
     System(Desktop),
 }
 
@@ -133,6 +149,18 @@ impl Mouse {
                         &options.name,
                         image,
                     )?)
+                } else if options.mode == MouseMode::Semantic {
+                    require_semantic_wayland()?;
+                    let mut marker = crate::platform::wayland_marker::WaylandMarker::connect(
+                        &options.name,
+                        image,
+                    )?;
+                    let point = match options.start {
+                        Some(p) => (p.x.round() as i32, p.y.round() as i32),
+                        None => Desktop::connect()?.position()?,
+                    };
+                    marker.move_to(point.0, point.1)?;
+                    Backend::Semantic(Box::new(marker))
                 } else {
                     let desktop = Desktop::connect()?;
                     if desktop.backend() == "wayland" {
@@ -163,7 +191,9 @@ impl Mouse {
             held: BTreeSet::new(),
             user_lease,
         };
-        if let Some(p) = options.start {
+        if mouse.mode != MouseMode::Semantic
+            && let Some(p) = options.start
+        {
             mouse.submit(p)?;
         }
         Ok(mouse)
@@ -201,6 +231,8 @@ impl Mouse {
             Backend::X11(native) => native.position()?,
             #[cfg(target_os = "linux")]
             Backend::WaylandMarker { desktop, .. } => desktop.position()?,
+            #[cfg(target_os = "linux")]
+            Backend::Semantic(marker) => marker.position()?,
             Backend::System(desktop) => desktop.position()?,
         };
         Ok(Point {
@@ -276,6 +308,8 @@ impl Mouse {
                     format!("user pointer moved but operation marker update failed: {error}")
                 })
             }
+            #[cfg(target_os = "linux")]
+            Backend::Semantic(marker) => marker.animate_to(x, y),
             Backend::System(desktop) => desktop.move_to(x, y),
         }
     }
@@ -303,8 +337,36 @@ impl Mouse {
         ))
     }
 
+    /// Activate a named action on a verified accessibility object.
+    pub fn activate(&self, target: &ElementAction) -> Result<String, String> {
+        self.activate_checked(target, None, || Ok(()))
+    }
+
+    pub(crate) fn activate_checked(
+        &self,
+        target: &ElementAction,
+        cancellation: Option<&Cancellation>,
+        before_action: impl FnOnce() -> Result<(), String>,
+    ) -> Result<String, String> {
+        if self.mode != MouseMode::Semantic || self.backend.is_none() {
+            return Err("activate requires a live semantic mouse".into());
+        }
+        target.activate(cancellation, before_action)
+    }
+
+    pub(crate) fn require_pointer_input(&self) -> Result<(), String> {
+        if self.mode == MouseMode::Semantic {
+            return Err(
+                "unsupported_state: semantic mice use activate(path, pid, name, action) for input"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
     /// `action` is `down`, `up`, or `click`. Held buttons are released on close.
     pub fn button(&mut self, button: &str, action: &str) -> Result<(), String> {
+        self.require_pointer_input()?;
         let button = match button {
             "1" => "left",
             "2" => "middle",
@@ -340,6 +402,8 @@ impl Mouse {
                     format!("button input was sent but operation marker update failed: {error}")
                 })?;
             }
+            #[cfg(target_os = "linux")]
+            Backend::Semantic(_) => unreachable!("pointer input was checked"),
             Backend::System(desktop) => desktop.button(button, action)?,
         }
         if action == "up" {
@@ -357,6 +421,7 @@ impl Mouse {
     }
 
     pub fn scroll(&mut self, dx: i32, dy: i32) -> Result<(), String> {
+        self.require_pointer_input()?;
         if dx.unsigned_abs() > 1000 || dy.unsigned_abs() > 1000 {
             return Err("scroll x/y must be -1000..1000".into());
         }
@@ -371,6 +436,8 @@ impl Mouse {
                     format!("scroll input was sent but operation marker update failed: {error}")
                 })
             }
+            #[cfg(target_os = "linux")]
+            Backend::Semantic(_) => unreachable!("pointer input was checked"),
             Backend::System(desktop) => desktop.scroll(dx, dy),
         }
     }
@@ -384,7 +451,9 @@ impl Mouse {
             #[cfg(target_os = "linux")]
             Backend::X11(native) => native.set_cursor(image),
             #[cfg(target_os = "linux")]
-            Backend::WaylandMarker { marker, .. } => marker.set_cursor(image),
+            Backend::WaylandMarker { marker, .. } | Backend::Semantic(marker) => {
+                marker.set_cursor(image)
+            }
             Backend::System(_) => {
                 Err("custom appearance requires a mouse created with an appearance".into())
             }
@@ -419,6 +488,8 @@ impl Mouse {
                         Err(errors.join("; "))
                     }
                 }
+                #[cfg(target_os = "linux")]
+                Backend::Semantic(marker) => marker.close(),
                 Backend::System(desktop) => {
                     let mut errors = Vec::new();
                     for b in std::mem::take(&mut self.held) {
@@ -460,6 +531,20 @@ fn center(t: &LocatedTarget) -> Point {
     Point {
         x: t.bounds.x + t.bounds.width / 2.,
         y: t.bounds.y + t.bounds.height / 2.,
+    }
+}
+
+pub(crate) fn require_semantic_wayland() -> Result<(), String> {
+    if cfg!(target_os = "linux")
+        && std::env::var("WAYLAND_DISPLAY").is_ok_and(|name| !name.is_empty())
+        && matches!(
+            std::env::var("ZUSE_BACKEND").as_deref(),
+            Err(_) | Ok("" | "wayland")
+        )
+    {
+        Ok(())
+    } else {
+        Err("unsupported_state: semantic mice require a native Linux Wayland session".into())
     }
 }
 

@@ -1,9 +1,10 @@
 use super::plan::{Action, CompiledScript, MouseId, Node, OwnedTarget};
 use crate::{
+    accessibility::ElementAction,
     cursor::CursorImage,
     json,
     motion::Point,
-    mouse::{MotionReceipt, Mouse, MouseMode, MouseOptions},
+    mouse::{MotionReceipt, Mouse, MouseOptions},
     pointer::MovePlan,
     runtime::Options,
     target::{self, LocatedTarget},
@@ -21,6 +22,14 @@ trait Host {
     fn button(&mut self, id: MouseId, button: &str, action: &str) -> Result<(), String>;
     fn scroll(&mut self, id: MouseId, dx: i32, dy: i32) -> Result<(), String>;
     fn appearance(&mut self, id: MouseId, image: &CursorImage) -> Result<(), String>;
+    fn activate(
+        &mut self,
+        _id: MouseId,
+        _target: &ElementAction,
+        _cancel: &mut dyn FnMut() -> bool,
+    ) -> Result<String, String> {
+        Err("semantic action is unavailable on this host".into())
+    }
     fn locate(&mut self, query: &OwnedTarget) -> Result<LocatedTarget, String> {
         target::locate(&query.query())
     }
@@ -66,6 +75,20 @@ impl Host for NativeHost {
     }
     fn appearance(&mut self, id: MouseId, image: &CursorImage) -> Result<(), String> {
         self.mouse(id)?.set_cursor(image)
+    }
+    fn activate(
+        &mut self,
+        id: MouseId,
+        target: &ElementAction,
+        cancel: &mut dyn FnMut() -> bool,
+    ) -> Result<String, String> {
+        self.mouse(id)?.activate_checked(target, None, || {
+            if cancel() {
+                Err("script cancelled".into())
+            } else {
+                Ok(())
+            }
+        })
     }
 }
 
@@ -227,11 +250,7 @@ impl<'a> Task<'a> {
                             ctx.live.insert(*id);
                             let detail = format!(
                                 "{{\"mode\":{},\"native_device_id\":{}}}",
-                                json::quote(if options.mode == MouseMode::Independent {
-                                    "independent"
-                                } else {
-                                    "user"
-                                }),
+                                json::quote(options.mode.name()),
                                 device
                                     .map(|x| x.to_string())
                                     .unwrap_or_else(|| "null".into())
@@ -313,6 +332,11 @@ impl<'a> Task<'a> {
                             Action::Scroll { dx, dy } => {
                                 ctx.host.scroll(*id, *dx, *dy)?;
                                 ctx.event(*id, "scroll", &format!("{{\"x\":{dx},\"y\":{dy}}}"))?;
+                                *self = Self::Done;
+                            }
+                            Action::Activate(target) => {
+                                let result = ctx.host.activate(*id, target, cancel)?;
+                                ctx.event(*id, "activate", &result)?;
                                 *self = Self::Done;
                             }
                             Action::Appearance(image) => {

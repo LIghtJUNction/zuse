@@ -1,6 +1,10 @@
 //! A fully checked script, with lexical ownership resolved before input.
 use crate::{
-    cursor::CursorImage, motion::Point, mouse::MouseOptions, pointer::MoveOptions,
+    accessibility::ElementAction,
+    cursor::CursorImage,
+    motion::Point,
+    mouse::{MouseMode, MouseOptions},
+    pointer::MoveOptions,
     target::TargetQuery,
 };
 
@@ -48,6 +52,7 @@ pub(crate) enum Action {
         dx: i32,
         dy: i32,
     },
+    Activate(ElementAction),
     Appearance(CursorImage),
     Position,
 }
@@ -99,6 +104,9 @@ impl CompiledScript {
         fn visit(node: &Node) -> Result<(), String> {
             match node {
                 Node::Touchpad(command) => command.require_native(),
+                Node::Create { options, .. } if options.mode == MouseMode::Semantic => {
+                    crate::mouse::require_semantic_wayland()
+                }
                 Node::Scope { body, .. } | Node::Parallel(body) => {
                     for child in body {
                         visit(child)?;

@@ -905,6 +905,18 @@ impl WaylandMarker {
         if recreate {
             self.create_layer(name, proxy, margin)?;
         }
+        self.commit_layer(margin, recreate || attach)?;
+        self.roundtrip()?;
+        self.layer
+            .as_ref()
+            .ok_or("marker layer is missing")?
+            .state
+            .require_open()?;
+        self.point = Some(point);
+        Ok(())
+    }
+
+    fn commit_layer(&mut self, margin: (i32, i32), attach: bool) -> Result<()> {
         let layer = self.layer.as_mut().ok_or("marker layer is missing")?;
         layer.state.require_open()?;
         let buffer = self.buffer.as_ref().ok_or("marker image is missing")?;
@@ -923,7 +935,7 @@ impl WaylandMarker {
                 0i32,
                 margin.1,
             );
-            if recreate || attach {
+            if attach {
                 (self.api.marshal)(
                     layer.role,
                     0,
@@ -957,14 +969,90 @@ impl WaylandMarker {
             }
             (self.api.marshal)(layer.surface, 6, ptr::null(), self.surface_version, 0);
         }
-        self.roundtrip()?;
-        self.layer
-            .as_ref()
-            .ok_or("marker layer is missing")?
-            .state
-            .require_open()?;
-        self.point = Some(point);
         Ok(())
+    }
+
+    fn receive_pending(&self) -> Result<()> {
+        const READABLE: i16 = 1;
+        const CONNECTION_ERROR: i16 = 8 | 16 | 32;
+        // Drain queued events first. This connection has a single reader.
+        while unsafe { (self.api.prepare_read)(self.display) } != 0 {
+            if unsafe { (self.api.dispatch_pending)(self.display) } < 0 {
+                return Err("Wayland marker connection closed".into());
+            }
+        }
+        let mut fd = PollFd {
+            fd: unsafe { (self.api.fd)(self.display) },
+            events: READABLE,
+            revents: 0,
+        };
+        let ready = unsafe { poll(&mut fd, 1, 0) };
+        if ready > 0 && fd.revents & READABLE != 0 {
+            if unsafe { (self.api.read_events)(self.display) } < 0 {
+                return Err("Wayland marker read failed".into());
+            }
+        } else {
+            unsafe { (self.api.cancel_read)(self.display) };
+            if fd.revents & CONNECTION_ERROR != 0 {
+                return Err("Wayland marker display disconnected".into());
+            }
+            if ready < 0
+                && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+            {
+                return Err("Wayland marker polling failed".into());
+            }
+        }
+        if unsafe { (self.api.dispatch_pending)(self.display) } < 0 {
+            return Err("Wayland marker connection closed".into());
+        }
+        self.check_registry()
+    }
+
+    /// Update an established overlay without a compositor round trip per frame.
+    /// Output changes use the synchronized layer creation path.
+    pub(crate) fn animate_to(&mut self, x: i32, y: i32) -> Result<()> {
+        if self.display.is_null() {
+            return Err("Wayland marker is closed".into());
+        }
+        self.receive_pending()?;
+        let Some(layer) = self.layer.as_ref() else {
+            return self.move_to(x, y);
+        };
+        layer.state.require_open()?;
+        let geometry = self
+            .outputs
+            .iter()
+            .find(|output| {
+                output.name == layer.output
+                    && self
+                        .state
+                        .outputs
+                        .iter()
+                        .any(|live| live.name == output.name)
+            })
+            .and_then(|output| output.state.logical)
+            .filter(|geometry| geometry.contains(x, y));
+        let Some(geometry) = geometry else {
+            return self.move_to(x, y);
+        };
+        if self.point == Some((x, y)) && layer.state.configure.is_none() {
+            return Ok(());
+        }
+        let buffer = self.buffer.as_ref().ok_or("marker image is missing")?;
+        self.commit_layer(geometry.margins((x, y), buffer.hotspot)?, false)?;
+        if unsafe { (self.api.flush)(self.display) } < 0 {
+            return Err(format!(
+                "Wayland marker animation write: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        self.point = Some((x, y));
+        Ok(())
+    }
+
+    pub(crate) fn position(&self) -> Result<(i32, i32)> {
+        self.point
+            .ok_or_else(|| "Wayland marker has no position".into())
     }
 
     pub(crate) fn move_to(&mut self, x: i32, y: i32) -> Result<()> {

@@ -118,6 +118,8 @@ parallel {
 
 用 `zuse script examples/scoped-mice.zuse --dry-run` 预检，在支持的 X11 会话里执行。块和函数拥有局部鼠标，别名与参数借用已有鼠标。`sequence` 串行执行，`parallel` 的直接子语句各为一个分支；连续操作放入同一分支块。同一鼠标的并行冲突在输入前拒绝。
 
+在 Hyprland 上，`mouse(kind="semantic")` 可以创建多只独立显示的穿透光标。`activate` 按无障碍节点定向触发控件，光标位置独立保存。用法和 GTK 演示见[作用域鼠标说明](docs/scoped-mice.md#wayland-semantic-mice)。
+
 普通 `mouse.*` 动作现在也默认使用独立鼠标。要控制用户鼠标，普通命令先调用 `mouse.use(kind="user", appearance="system")`，作用域脚本使用 `user_mouse(appearance="system")`。这一显式系统模式适用于已有的 Wayland、Windows 和 macOS 后端；独立鼠标或自定义原生光标不受支持时直接报错。普通运行时的 `mouse.position()` 只观察已经选定的鼠标，需要先调用 `mouse.use()` 或执行一个鼠标动作。
 
 作用域退出、运行错误和协作取消都会触发清理，包括释放程序按住的鼠标键。支持的 Linux 构建中，`zuse script` 的 SIGINT/SIGTERM 通过取消标记走正常清理路径；SIGKILL、进程崩溃等无法运行析构函数的终止不保证清理。完整语法、Rust 接口、目标定位、外观格式和平台边界见[作用域鼠标说明](docs/scoped-mice.md)。

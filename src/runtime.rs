@@ -87,6 +87,7 @@ static SPECS: &[Spec] = &[
     spec!("touchpad.pinch",false,["scale":N:true,"fingers":I:false,"duration":I:false,"steps":I:false]),
     spec!("touchpad.rotate",false,["degrees":N:true,"fingers":I:false,"duration":I:false,"steps":I:false]),
     spec!("touchpad.cancel", false, []),
+    spec!("mouse.activate",false,["path":T:true,"pid":I:true,"name":T:true,"action":T:false]),
     spec!("mouse.use",false,["kind":T:false,"appearance":T:false,"color":T:false,"shape":T:false,"size":I:false,"glow":N:false,"name":T:false]),
     spec!("mouse.release", false, []),
     spec!("mouse.position", true, []),
@@ -412,7 +413,8 @@ fn mouse_options(call: &Call<'_>) -> Result<MouseOptions, String> {
     let mode = match text(call, "kind", "independent")?.as_str() {
         "independent" => MouseMode::Independent,
         "user" => MouseMode::User,
-        _ => return Err("mouse.use: kind must be independent or user".into()),
+        "semantic" => MouseMode::Semantic,
+        _ => return Err("mouse.use: kind must be independent, user or semantic".into()),
     };
     let appearance = match text(call, "appearance", "glow")?.as_str() {
         "glow" => Some(CursorStyle {
@@ -443,6 +445,15 @@ fn mouse_options(call: &Call<'_>) -> Result<MouseOptions, String> {
     options.validate()?;
     Ok(options)
 }
+fn mouse_element_action(call: &Call<'_>) -> Result<accessibility::ElementAction, String> {
+    accessibility::ElementAction::new(
+        text(call, "path", "")?,
+        range(call, "pid", 0, 1, i64::from(u32::MAX))? as u32,
+        text(call, "name", "")?,
+        text(call, "action", "click")?,
+    )
+}
+
 fn range(call: &Call<'_>, name: &str, default: i64, min: i64, max: i64) -> Result<i64, String> {
     let value = integer(call, name, default);
     if value < min || value > max {
@@ -829,6 +840,9 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             }
             "mouse.use" => {
                 mouse_options(&call)?;
+            }
+            "mouse.activate" => {
+                mouse_element_action(&call)?;
             }
             "anchor.set" | "anchor.clear" => {
                 drawing::validate_name(&text(&call, "name", "")?)?;
@@ -1802,10 +1816,7 @@ impl Runtime {
                 options.resolved_image()?;
                 self.release_mouse()?;
                 let mouse = Mouse::create(&options)?;
-                let kind = match mouse.mode() {
-                    MouseMode::Independent => "independent",
-                    MouseMode::User => "user",
-                };
+                let kind = mouse.mode().name();
                 let result = format!(
                     "{{\"ok\":true,\"mouse_id\":{},\"kind\":{},\"device_id\":{}}}",
                     mouse.id(),
@@ -1816,6 +1827,13 @@ impl Runtime {
                 );
                 self.mouse = Some(mouse);
                 Ok(result)
+            }
+            "mouse.activate" => {
+                let target = mouse_element_action(c)?;
+                self.mouse
+                    .as_ref()
+                    .ok_or("mouse.activate requires mouse.use(kind=\"semantic\")")?
+                    .activate_checked(&target, Some(&cancellation), || Ok(()))
             }
             "mouse.release" => {
                 self.release_mouse()?;
@@ -1931,6 +1949,7 @@ impl Runtime {
                 let settle = integer(c, "settle", 30) as u32;
                 let options = point_move_options(c)?;
                 let mouse = self.mouse()?;
+                mouse.require_pointer_input()?;
                 let path = coordinate_motion(mouse, point, options)?;
                 let samples = drawing::click_at(mouse, path, settle, &button, &cancellation)?;
                 Ok(format!(
@@ -1986,6 +2005,9 @@ impl Runtime {
                 ))
             }
             "mouse.click" | "mouse.down" | "mouse.up" => {
+                if let Some(mouse) = self.mouse.as_ref() {
+                    mouse.require_pointer_input()?;
+                }
                 let button = text(c, "button", "left")?;
                 let button = match button.as_str() {
                     "1" => "left",

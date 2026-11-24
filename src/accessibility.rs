@@ -2,6 +2,7 @@
 //! Paths are child-index paths from desktop 0. Re-observe after UI changes.
 #[cfg(target_os = "linux")]
 use crate::browser::quote;
+use crate::observation::Cancellation;
 type Result<T> = std::result::Result<T, String>;
 
 /// Read roles, names, text, screen bounds and supported actions.
@@ -154,6 +155,56 @@ pub fn text(max_nodes: usize, max_depth: usize) -> Result<String> {
         Ok(output)
     })
 }
+/// Exact AT-SPI identity and action copied from a recent observation.
+#[derive(Clone, Debug)]
+pub struct ElementAction {
+    path: String,
+    pid: u32,
+    name: String,
+    action: String,
+}
+
+impl ElementAction {
+    pub fn new(path: String, pid: u32, name: String, action: String) -> Result<Self> {
+        validate_path(&path)?;
+        if path.split('/').count() < 3 || pid == 0 {
+            return Err(
+                "semantic action requires a window or descendant path and positive pid".into(),
+            );
+        }
+        if name.is_empty() || name.len() > 16_384 || name.contains('\0') {
+            return Err("semantic action requires the observed nonempty element name".into());
+        }
+        if action.is_empty() || action.len() > 256 || action.contains('\0') {
+            return Err("semantic action name must contain 1..256 non-NUL bytes".into());
+        }
+        Ok(Self {
+            path,
+            pid,
+            name,
+            action,
+        })
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.path.len() + self.name.len() + self.action.len()
+    }
+
+    pub(crate) fn activate(
+        &self,
+        cancellation: Option<&Cancellation>,
+        before_action: impl FnOnce() -> Result<()>,
+    ) -> Result<String> {
+        #[cfg(target_os = "linux")]
+        return native::activate(self, cancellation, before_action);
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (&self.pid, cancellation, before_action);
+            Err("unsupported_state: semantic mouse actions require Linux AT-SPI".into())
+        }
+    }
+}
+
 /// Invoke an action advertised in a fresh snapshot.
 pub fn action(path: &str, index: usize) -> Result<String> {
     validate_path(path)?;
@@ -893,6 +944,69 @@ mod native {
         Ok(true)
     }
 
+    pub(super) fn activate(
+        target: &ElementAction,
+        cancellation: Option<&Cancellation>,
+        before_action: impl FnOnce() -> Result<()>,
+    ) -> Result<String> {
+        let _guard = ACCESS
+            .lock()
+            .map_err(|_| "accessibility state is poisoned")?;
+        let api = load()?;
+        let object = api.resolve(&target.path)?;
+        // SAFETY: the owned object stays alive across the identity check and dispatch.
+        unsafe { (api.clear_cache)(object.ptr) };
+        let mut error = core::ptr::null_mut();
+        let pid = unsafe { (api.process_id)(object.ptr, &mut error) };
+        api.error(error)?;
+        if pid != target.pid || api.get_string(object.ptr, api.name)? != target.name {
+            return Err("stale_target: accessibility element pid or name changed".into());
+        }
+        let interface = api.object(unsafe { (api.action_iface)(object.ptr) })?;
+        let mut error = core::ptr::null_mut();
+        let count = unsafe { (api.actions_count)(interface.ptr, &mut error) };
+        api.error(error)?;
+        if !(1..=64).contains(&count) {
+            return Err(
+                "unsupported_state: element does not advertise a bounded action list".into(),
+            );
+        }
+        let mut selected = None;
+        for index in 0..count {
+            let mut error = core::ptr::null_mut();
+            let raw = unsafe { (api.action_name)(interface.ptr, index, &mut error) };
+            if api.string(raw, error)? == target.action && selected.replace(index).is_some() {
+                return Err("ambiguous accessibility action name".into());
+            }
+        }
+        let index =
+            selected.ok_or("stale_target: element no longer advertises the requested action")?;
+        before_action()?;
+        if let Some(cancellation) = cancellation {
+            cancellation.dispatch(|| invoke_action(api, &interface, index))?;
+        } else {
+            invoke_action(api, &interface, index)?;
+        }
+        Ok(format!(
+            r#"{{"path":{},"pid":{},"name":{},"action":{},"index":{index},"completed":true,"delivery":"atspi"}}"#,
+            quote(&target.path),
+            target.pid,
+            quote(&target.name),
+            quote(&target.action)
+        ))
+    }
+
+    fn invoke_action(api: &Api, interface: &Object<'_>, index: c_int) -> Result<()> {
+        let mut error = core::ptr::null_mut();
+        // SAFETY: the owned action interface stays live for this call.
+        let success = unsafe { (api.do_action)(interface.ptr, index, &mut error) };
+        api.error(error)?;
+        if success == 0 {
+            return Err("application rejected the accessibility action".into());
+        }
+        Ok(())
+    }
+
     pub(super) fn action(path: &str, index: usize) -> Result<String> {
         let _guard = ACCESS
             .lock()
@@ -907,12 +1021,7 @@ mod native {
         if count < 0 || index >= count as usize {
             return Err("accessibility action does not exist".into());
         }
-        let mut error = core::ptr::null_mut();
-        let success = unsafe { (api.do_action)(interface.ptr, index as c_int, &mut error) };
-        api.error(error)?;
-        if success == 0 {
-            return Err("application rejected the accessibility action".into());
-        }
+        invoke_action(api, &interface, index as c_int)?;
         Ok(format!(
             r#"{{"path":{},"action":{index},"completed":true}}"#,
             quote(path)
