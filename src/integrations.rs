@@ -641,7 +641,7 @@ fn parse_arguments(input: &str) -> Result<Vec<String>> {
     }
     Ok(args)
 }
-fn executable(name: &str) -> Option<PathBuf> {
+pub(crate) fn executable(name: &str) -> Option<PathBuf> {
     let path = Path::new(name);
     if path.components().count() > 1 {
         return is_executable(path).then(|| path.to_owned());
@@ -749,6 +749,100 @@ fn utility(program: &Path, args: &[OsString], timeout: Duration) -> Result<Strin
         return Err(format!("{} failed: {}", program.display(), err.trim()));
     }
     Ok(out)
+}
+
+/// Run a desktop helper to completion with bounded binary output and no stdin.
+#[cfg(target_os = "linux")]
+pub(crate) fn desktop_output(
+    mut command: Command,
+    timeout: Duration,
+    max_stdout: usize,
+) -> Result<Vec<u8>> {
+    use std::os::unix::process::CommandExt;
+
+    let program = command.get_program().to_string_lossy().into_owned();
+    let (mut stdout, stdout_writer) = io::pipe().map_err(|e| e.to_string())?;
+    let (mut stderr, stderr_writer) = io::pipe().map_err(|e| e.to_string())?;
+    stdout.prepare().map_err(|e| e.to_string())?;
+    stderr.prepare().map_err(|e| e.to_string())?;
+    let mut child = command
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(stdout_writer)
+        .stderr(stderr_writer)
+        .spawn()
+        .map_err(|e| format!("start {program}: {e}"))?;
+    drop(command);
+    let group = ProcessGroup::new(&child)?;
+    let deadline = Instant::now() + timeout;
+    let mut output = Vec::new();
+    let mut errors = Vec::new();
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+    let result = loop {
+        if Instant::now() >= deadline {
+            break Err(format!(
+                "{program} exceeded {} milliseconds",
+                timeout.as_millis()
+            ));
+        }
+        let previous = output.len() + errors.len();
+        if !stdout_done {
+            match read_desktop_pipe(&mut stdout, &mut output, max_stdout) {
+                Ok(done) => stdout_done = done,
+                Err(error) => break Err(format!("{program} stdout: {error}")),
+            }
+        }
+        if !stderr_done {
+            match read_desktop_pipe(&mut stderr, &mut errors, STREAM_LIMIT) {
+                Ok(done) => stderr_done = done,
+                Err(error) => break Err(format!("{program} stderr: {error}")),
+            }
+        }
+        // Reap only after both pipes close, so a descendant keeping a pipe
+        // open cannot make the wait unbounded or release the group ID early.
+        if stdout_done && stderr_done {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return Ok(output),
+                Ok(Some(status)) => {
+                    let detail = String::from_utf8_lossy(&errors);
+                    return Err(format!("{program} failed ({status}): {}", detail.trim()));
+                }
+                Ok(None) => {}
+                Err(error) => break Err(format!("wait for {program}: {error}")),
+            }
+        }
+        if output.len() + errors.len() == previous {
+            thread::sleep(
+                Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    };
+    group.terminate();
+    let _ = child.wait();
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn read_desktop_pipe(pipe: &mut impl Read, bytes: &mut Vec<u8>, limit: usize) -> Result<bool> {
+    let mut buffer = [0; 8192];
+    match pipe.read(&mut buffer) {
+        Ok(0) => Ok(true),
+        Ok(count) if count <= limit - bytes.len() => {
+            bytes.extend_from_slice(&buffer[..count]);
+            Ok(false)
+        }
+        Ok(_) => Err(format!("output exceeds {limit} bytes")),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 fn run_named(name: &str, args: &[&str]) -> Result<String> {
     let path = executable(name).ok_or_else(|| {
@@ -1161,6 +1255,21 @@ mod tests {
         let begin = Instant::now();
         assert!(utility(&sleep, &["30".into()], Duration::from_millis(50)).is_err());
         assert!(begin.elapsed() < Duration::from_secs(2));
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn desktop_helper_bounds_binary_output_and_inherited_pipes() {
+        let mut oversized = Command::new("sh");
+        oversized.args(["-c", "printf 12345"]);
+        let error = desktop_output(oversized, Duration::from_secs(1), 4).unwrap_err();
+        assert!(error.contains("output exceeds 4 bytes"), "{error}");
+
+        let mut inherited = Command::new("sh");
+        inherited.args(["-c", "sleep 10 & exit 0"]);
+        let start = Instant::now();
+        let error = desktop_output(inherited, Duration::from_millis(100), 1024).unwrap_err();
+        assert!(error.contains("exceeded 100 milliseconds"), "{error}");
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
     #[cfg(unix)]
     #[test]

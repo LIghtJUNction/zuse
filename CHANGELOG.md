@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add native Sway and niri window listing and exact-ID focus with compositor readback. Wayland `doctor` reports window IPC readiness and the capture helper separately.
+- Validate and atomically replace Wayland PNG captures. Window crops carry logical geometry and discard the image if the target changes during capture. Desktop helpers drain both streams with output limits and a deadline.
+- Read Linux `screen.text` without requesting node geometry or actions. Native AT-SPI uses the protocol role for password redaction and edit guards.
 - Use zconv for JSON string output and share the same adapter with native platform responses. Preserve lowercase `\u0008` and `\u000c` escapes and keep the dependency optional under `std`.
 - Keep the persistent shell's SIGINT/SIGTERM handler active while waiting for input and cleaning up its Runtime. Interrupting an idle shell now reaps managed child processes; interrupting active work cancels the command, discards queued input, and exits with status 1 on supported native signal platforms.
 - Add isolated subprocess regressions for both signals with idle input, incomplete lines, active commands and managed-process cleanup; preserve existing idle-timeout and CLI execution behavior.

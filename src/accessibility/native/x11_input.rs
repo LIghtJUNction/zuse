@@ -131,11 +131,7 @@ fn editable(api: &Api, object: Obj, client: Bounds) -> Result<()> {
             "the focused object is not an editable visible control in the X11 window",
         ));
     }
-    if api
-        .get_string(object, api.role)?
-        .to_ascii_lowercase()
-        .contains("password")
-    {
+    if api.password_role(object)? {
         return Err(unsupported("password input requires human assistance"));
     }
     Ok(())

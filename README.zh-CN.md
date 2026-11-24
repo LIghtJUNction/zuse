@@ -168,7 +168,9 @@ browser.close()
 
 浏览器使用原生 CDP 连接和独立临时配置，不依赖 Playwright。截图输出当前视口的 PNG；`browser.viewport` 按 CSS 像素设置视口大小。`browser.fill` 遇到密码输入会返回错误，可使用可见浏览器和 `human.request` 交给本机操作人完成。
 
-Linux 无障碍通过 AT-SPI 读取角色、文本、边界、动作，并支持聚焦、按钮动作和编辑文本。Windows 使用 UI Automation，macOS 使用 Quartz 与 System Events；它们的实机验证范围在平台表中单独列出。
+Linux 无障碍通过 AT-SPI 读取角色、文本、边界、动作，并支持聚焦、按钮动作和编辑文本。`screen.text()` 直接读取文本字段。Windows 使用 UI Automation，macOS 使用 Quartz 与 System Events。
+
+Wayland 的 `window.list()` 和 `window.focus()` 支持 Hyprland、Sway 和 niri。目标 ID 来自窗口列表。Sway 可截取可见窗口的屏幕区域，niri 可使用全屏截图。后端条件和验证范围见[平台支持](docs/platforms.md)。
 
 ## Android 两种模式
 

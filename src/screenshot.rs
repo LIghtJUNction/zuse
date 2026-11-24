@@ -1,4 +1,4 @@
-//! Shared mobile screenshot framing and staged output.
+//! Shared screenshot framing and staged output.
 //!
 //! This checks PNG chunk boundaries and required structure, not pixel decoding
 //! or CRCs. Complete transport output must be validated before replacing a file.

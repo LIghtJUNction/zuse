@@ -1,7 +1,7 @@
 //! Click-through Wayland operation markers, independent of input delivery.
 //!
 //! Protocol layouts follow wayland.xml, xdg-output-unstable-v1.xml and
-//! https://github.com/swaywm/wlr-protocols/blob/master/unstable/wlr-layer-shell-unstable-v1.xml.
+//! <https://github.com/swaywm/wlr-protocols/blob/master/unstable/wlr-layer-shell-unstable-v1.xml>.
 //! Coordinates and image sizes are logical pixels. The compositor handles
 //! output transforms and fractional scaling; this module never creates a seat
 //! or an input device and never changes the user's system cursor.

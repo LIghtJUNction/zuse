@@ -4,69 +4,41 @@ mod evdev;
 mod keyboard;
 #[path = "wayland_keymap.rs"]
 mod keymap;
+#[path = "wayland_windows.rs"]
+mod windows;
 #[path = "wayland_xkb.rs"]
 mod xkb;
 use super::super::{Result, image_metadata, quote, split_chord, validate_text};
+use crate::integrations::{desktop_output, executable};
 use std::{
-    fs::File,
     io::{Read, Write},
-    os::unix::net::UnixStream,
+    os::unix::{fs::FileTypeExt, net::UnixStream},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     time::{Duration, Instant},
 };
 use zmcpio::json::{Document, Kind, Limits, Token};
 
 pub(super) struct Wayland {
     socket: Option<PathBuf>,
+    windows: Result<Option<windows::Windows>>,
     modern: bool,
 }
-fn installed(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
+
+fn run(command: Command) -> Result<()> {
+    desktop_output(command, Duration::from_secs(15), 128 * 1024).map(|_| ())
 }
-fn run(mut command: Command) -> Result<()> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("start native utility: {e}"))?;
-    let begin = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if begin.elapsed() < Duration::from_secs(15) => {
-                std::thread::sleep(Duration::from_millis(10))
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("desktop utility exceeded 15 seconds".into());
-            }
-            Err(e) => return Err(format!("wait for desktop utility: {e}")),
-        }
-    }
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "desktop utility failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
-}
+
 impl Wayland {
     pub fn connect() -> Result<Self> {
         if !std::env::var("WAYLAND_DISPLAY").is_ok_and(|s| !s.is_empty()) {
             return Err("WAYLAND_DISPLAY is unset".into());
         }
-        let socket = std::env::var("HYPRLAND_INSTANCE_SIGNATURE")
+        let mut socket = std::env::var("HYPRLAND_INSTANCE_SIGNATURE")
             .ok()
             .and_then(|sig| {
-                if sig.contains('/') || sig.contains('\0') {
+                if sig.is_empty() || matches!(sig.as_str(), "." | "..") || sig.contains(['/', '\0'])
+                {
                     return None;
                 }
                 let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
@@ -75,10 +47,19 @@ impl Wayland {
                     PathBuf::from("/tmp/hypr").join(sig).join(".socket.sock"),
                 ]
                 .into_iter()
-                .find(|p| p.exists())
+                .find(|p| p.is_absolute() && p.metadata().is_ok_and(|m| m.file_type().is_socket()))
             });
+        let mut windows = windows::Windows::discover();
+        if socket.is_some() && !matches!(&windows, Ok(None)) {
+            socket = None;
+            windows = Err(
+                "ambiguous Wayland window backend: multiple compositor sockets in the environment"
+                    .into(),
+            );
+        }
         let mut this = Self {
             socket,
+            windows,
             modern: false,
         };
         if let Ok(version) = this.request("j/version") {
@@ -105,21 +86,64 @@ impl Wayland {
         Ok(this)
     }
     pub fn capabilities(&self) -> String {
+        let (compositor, windowing) = match &self.windows {
+            _ if self.socket.is_some() => (
+                Some("hyprland"),
+                self.request("j/clients").and_then(|reply| {
+                    crate::json::with_value(&reply, |root| {
+                        if root.kind() == Kind::Array {
+                            Ok(())
+                        } else {
+                            Err("invalid Hyprland window list".into())
+                        }
+                    })
+                }),
+            ),
+            Ok(Some(windows)) => (Some(windows.name()), windows.probe()),
+            Ok(None) => (
+                None,
+                Err("no Hyprland, Sway or niri IPC socket in this session".into()),
+            ),
+            Err(reason) => (None, Err(reason.clone())),
+        };
+        let supports_region = matches!(compositor, Some("hyprland" | "sway"));
+        let compositor = compositor.map_or("null".into(), quote);
+        let windows = windowing.is_ok();
+        let window_reason = windowing
+            .err()
+            .map_or("null".into(), |reason| quote(&reason));
+        let grim = executable("grim").is_some();
+        let window_capture = grim && windows && supports_region;
         format!(
-            "{{\"backend\":\"wayland\",\"compositor\":{},\"pointer\":{},\"windows\":{},\"keyboard\":{},\"capture\":{},\"nativeIpc\":{},\"keyboard_state\":{},\"num_lock\":{},\"operationMarker\":{{\"availability\":\"protocol-dependent\",\"mode\":\"last-operation-point\",\"input\":\"shared-user-pointer\",\"clickThrough\":true,\"independentPointer\":false,\"requires\":[\"wlr-layer-shell\",\"xdg-output\",\"ARGB8888\"]}},\"inputHelper\":\"native Wayland virtual keyboard; pointer buttons/wheel use authorized ydotool daemon\",\"windowCapture\":\"composited visible region\",\"backgroundInput\":\"Hyprland targeted shortcuts\",\"backgroundText\":\"current keymap plain/Shift levels; unavailable characters rejected before input\",\"keyboardState\":\"Hyprland 0.55+: current keyboard checked separately from other devices; no held keys, Caps off, group 0; focused chords preserve verified Num Lock; text and background chords require Num off; sticky/custom modifier state unsupported\"}}",
-            if self.socket.is_some() {
-                "\"hyprland\""
-            } else {
-                "null"
-            },
-            self.socket.is_some() || installed("ydotool"),
-            self.socket.is_some(),
+            concat!(
+                "{{\"backend\":\"wayland\",\"compositor\":{compositor},\"pointer\":{},",
+                "\"windows\":{windows},\"keyboard\":{},\"capture\":{grim},\"nativeIpc\":{},",
+                "\"keyboard_state\":{},\"num_lock\":{},",
+                "\"windowing\":{{\"available\":{windows},\"reason\":{window_reason}}},",
+                "\"captureRoute\":{{\"helper\":\"grim\",\"executable\":{grim},\"readiness\":\"compositor screencopy required\",\"windowRegion\":{window_capture}}},",
+                "\"operationMarker\":{{\"availability\":\"protocol-dependent\",\"mode\":\"last-operation-point\",\"input\":\"shared-user-pointer\",\"clickThrough\":true,\"independentPointer\":false,\"requires\":[\"wlr-layer-shell\",\"xdg-output\",\"ARGB8888\"]}},",
+                "\"inputHelper\":\"native Wayland virtual keyboard; pointer buttons/wheel use authorized ydotool daemon\",\"windowCapture\":\"composited visible region\",",
+                "\"backgroundInput\":\"Hyprland targeted shortcuts\",\"backgroundText\":\"current keymap plain/Shift levels; unavailable characters rejected before input\",",
+                "\"keyboardState\":\"Hyprland 0.55+: current keyboard checked separately from other devices; no held keys, Caps off, group 0; focused chords preserve verified Num Lock; text and background chords require Num off; sticky/custom modifier state unsupported\"}}"
+            ),
+            self.socket.is_some() || executable("ydotool").is_some(),
             self.modern && keyboard::probe().is_ok(),
-            installed("grim"),
-            self.socket.is_some(),
+            windows,
             self.modern,
-            self.modern
+            self.modern,
+            compositor = compositor,
+            windows = windows,
+            window_reason = window_reason,
+            grim = grim,
+            window_capture = window_capture,
         )
+    }
+    fn window_backend(&self) -> Result<&windows::Windows> {
+        self.windows
+            .as_ref()
+            .map_err(Clone::clone)?
+            .as_ref()
+            .ok_or_else(|| "window operations require Hyprland, SWAYSOCK or NIRI_SOCKET".into())
     }
     fn request(&self, command: &str) -> Result<String> {
         self.request_until(command, Instant::now() + Duration::from_secs(5))
@@ -667,6 +691,9 @@ impl Wayland {
         Ok(())
     }
     pub fn windows(&self) -> Result<String> {
+        if self.socket.is_none() {
+            return self.window_backend()?.list();
+        }
         window_rows(
             &self.request("j/clients")?,
             &self.request("j/monitors")?,
@@ -674,6 +701,9 @@ impl Wayland {
         )
     }
     pub fn focus(&mut self, id: &str) -> Result<()> {
+        if self.socket.is_none() {
+            return self.window_backend()?.focus(id);
+        }
         let s = Self::selector(id)?;
         self.dispatch(
             &format!("focuswindow {s}"),
@@ -681,65 +711,109 @@ impl Wayland {
         )
     }
     pub fn screenshot(&self, path: &Path, window: Option<&str>) -> Result<String> {
-        let mut command = Command::new("grim");
-        if let Some(id) = window {
-            Self::selector(id)?;
-            let response = if id == "active" {
-                self.request("j/activewindow")?
-            } else {
-                self.request("j/clients")?
+        use crate::screenshot::{png_dimensions, validate_output_path, write_image};
+
+        validate_output_path(path)?;
+        let grim = executable("grim").ok_or("Wayland capture requires the grim executable")?;
+        let target = window.map(|id| self.capture_region(id)).transpose()?;
+        let mut command = Command::new(grim);
+        if let Some((_, region)) = &target {
+            command.args(["-g", &region.grim_argument()]);
+        }
+        command.arg("-");
+        let bytes = desktop_output(command, Duration::from_secs(15), 32 * 1024 * 1024)?;
+        let (width, height) = png_dimensions(&bytes, 16_384)?;
+        write_image(path, &bytes, || {
+            if let Some(id) = window
+                && self.capture_region(id)?
+                    != *target.as_ref().expect("capture target was resolved")
+            {
+                return Err(
+                    "stale_target: window identity or geometry changed during capture".into(),
+                );
+            }
+            Ok(())
+        })?;
+        let mut metadata = image_metadata(path, width, height, "wayland");
+        metadata.pop();
+        metadata.push_str(",\"captureMode\":\"composited-region\"");
+        if let Some((id, region)) = target {
+            use std::fmt::Write as _;
+            write!(
+                metadata,
+                r#","window":{},"logicalRegion":{{"x":{},"y":{},"width":{},"height":{}}}"#,
+                quote(&id),
+                region.x,
+                region.y,
+                region.width,
+                region.height
+            )
+            .expect("writing metadata to a string");
+        }
+        metadata.push('}');
+        Ok(metadata)
+    }
+
+    fn capture_region(&self, id: &str) -> Result<(String, windows::Region)> {
+        if self.socket.is_none() {
+            return self.window_backend()?.capture_region(id);
+        }
+        Self::selector(id)?;
+        let active = id == "active";
+        let response = self.request(if active {
+            "j/activewindow"
+        } else {
+            "j/clients"
+        })?;
+        crate::json::with_value(&response, |root| {
+            let address = |node: zmcpio::json::Value<'_>| {
+                node.get("address")
+                    .and_then(|value| value.string())
+                    .map(|s| s.chars().collect::<String>())
             };
-            let mut tokens = vec![Token::EMPTY; 32_768];
-            let doc = Document::parse(response.as_bytes(), &mut tokens, Limits::default())
-                .map_err(|e| e.to_string())?;
-            let node = if id == "active" {
-                doc.root()
+            let node = if active {
+                root
             } else {
-                doc.root()
-                    .elements()
-                    .find(|n| {
-                        n.get("address")
-                            .and_then(|v| v.string())
+                root.elements()
+                    .find(|node| {
+                        node.get("address")
+                            .and_then(|value| value.string())
                             .is_some_and(|s| s.matches(id))
                     })
                     .ok_or("Hyprland window not found")?
             };
-            let at = node
-                .get("at")
-                .ok_or("missing window coordinates")?
-                .elements()
-                .collect::<Vec<_>>();
-            let size = node
-                .get("size")
-                .ok_or("missing window dimensions")?
-                .elements()
-                .collect::<Vec<_>>();
-            if at.len() != 2 || size.len() != 2 {
-                return Err("invalid Hyprland window geometry".into());
-            }
-            let x = at[0].integer().map_err(|e| e.to_string())?;
-            let y = at[1].integer().map_err(|e| e.to_string())?;
-            let w = size[0].integer().map_err(|e| e.to_string())?;
-            let h = size[1].integer().map_err(|e| e.to_string())?;
-            if w <= 0 || h <= 0 || w > 16_384 || h > 16_384 {
-                return Err("invalid capture geometry".into());
-            }
-            command.args(["-g", &format!("{x},{y} {w}x{h}")]);
-        }
-        command.arg("--").arg(path);
-        run(command)?;
-        let mut file = File::open(path).map_err(|e| e.to_string())?;
-        let mut header = [0; 24];
-        file.read_exact(&mut header).map_err(|e| e.to_string())?;
-        if header[..8] != *b"\x89PNG\r\n\x1a\n" {
-            return Err("capture utility did not return PNG".into());
-        }
-        let width = u32::from_be_bytes(header[16..20].try_into().map_err(|_| "PNG width")?);
-        let height = u32::from_be_bytes(header[20..24].try_into().map_err(|_| "PNG height")?);
-        let mut metadata = image_metadata(path, width, height, "wayland");
-        metadata.pop();
-        metadata.push_str(",\"captureMode\":\"composited-region\"}");
-        Ok(metadata)
+            let address = address(node)
+                .filter(|address| address != "active")
+                .ok_or("Hyprland active window not found")?;
+            Self::selector(&address)?;
+            let pair = |key| -> Result<[i64; 2]> {
+                let mut values = node
+                    .get(key)
+                    .ok_or("missing Hyprland window geometry")?
+                    .elements();
+                let mut number = || {
+                    values
+                        .next()
+                        .and_then(|value| value.integer().ok())
+                        .ok_or("invalid Hyprland window geometry")
+                };
+                let pair = [number()?, number()?];
+                if values.next().is_some() {
+                    return Err("invalid Hyprland window geometry".into());
+                }
+                Ok(pair)
+            };
+            let [x, y] = pair("at")?;
+            let [width, height] = pair("size")?;
+            let invalid = |_| "invalid Hyprland window geometry";
+            let region = windows::Region::new(
+                i32::try_from(x).map_err(invalid)?,
+                i32::try_from(y).map_err(invalid)?,
+                u32::try_from(width).map_err(invalid)?,
+                u32::try_from(height).map_err(invalid)?,
+            )?;
+            Ok((address, region))
+        })
     }
 }
 
@@ -1257,6 +1331,7 @@ mod state_tests {
             });
             let backend = super::Wayland {
                 socket: Some(path.clone()),
+                windows: Ok(None),
                 modern: true,
             };
             let result = backend.keyboard_state(false);

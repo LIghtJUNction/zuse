@@ -320,7 +320,7 @@ limits, timeouts and cleanup semantics.
 | Area | Interface |
 | --- | --- |
 | Linux X11 / Wine / XWayland | Xlib, XTest, targeted window events, window metadata and PNG capture |
-| Linux Wayland / Omarchy | Hyprland IPC, native Wayland keyboard/keymap handling, compositor metadata and capture utilities |
+| Linux Wayland / Omarchy | Hyprland windows and keyboard, Sway and niri window listing and exact focus, and grim capture |
 | Linux accessibility | Native AT-SPI tree, text, focus, actions, editable text |
 | Windows | Win32 input/window/GDI APIs; UI Automation through the system PowerShell runtime |
 | macOS | Quartz/ApplicationServices; System Events accessibility through the system JXA runtime |

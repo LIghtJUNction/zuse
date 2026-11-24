@@ -44,7 +44,17 @@ Scope cleanup releases held synthetic buttons and removes owned devices. Normal 
 
 Native dynamic-library loading uses the exact Project Z dependency zsys 0.1.1. System-pointer X11 operations need libX11 and libXtst; independent or styled mice also need libXi and libXcursor. Wayland keyboard support needs libwayland-client and libxkbcommon. AT-SPI needs libatspi and a usable accessibility D-Bus session. These libraries are loaded at runtime, with no link-time X11 dependency. Static-musl native dynamic loading is unsupported by this zsys version.
 
-Hyprland metadata, focus and targeted input use its native socket. Screen capture uses grim. Pointer buttons/wheel require an authorized ydotool daemon; pointer positioning can use Hyprland IPC. Text input no longer depends on wtype.
+Hyprland metadata, focus and targeted input use its native socket. Pointer buttons and wheel input require an authorized ydotool daemon. Pointer positioning can use Hyprland IPC.
+
+### Wayland window discovery and capture
+
+`window.list()` and `window.focus(id="…")` also use the native Sway or niri IPC socket. Run Zuse with the target session's `SWAYSOCK` or `NIRI_SOCKET`. Multiple discovered compositor sockets make window selection ambiguous. Select the `sway:<id>` or `niri:<id>` returned by `window.list()`. Zuse reads the compositor's focused state after sending a focus request. Wayland keyboard input uses the Hyprland adapter. Native window hit testing is available on X11.
+
+Wayland capture uses `grim` with the compositor's screencopy protocol. Hyprland and Sway can capture a composited window region. Sway requires the window to be visible. Zuse checks the window ID and region again before replacing the destination. The receipt's `logicalRegion` is in compositor coordinates and `width` and `height` describe PNG pixels. For niri, use `screen.capture(path="…")` to capture the desktop.
+
+`zuse doctor` checks the selected windowing IPC and reports errors in `desktop.windowing.reason`. `desktop.captureRoute.executable` reports whether `grim` is executable. An actual capture requires compositor support and a successful PNG response.
+
+The split between compositor routing, capability checks and bounded screenshot helpers draws on Avi Fenesh's [computer-use-linux](https://github.com/agent-sh/computer-use-linux/tree/31d34d65becd36a5796c5cc13c01fa4fce62c46a).
 
 OCR uses Tesseract, notifications use notify-send, and the graphical password prompt uses Zenity. Omarchy operations call installed Omarchy/Hyprland interfaces; zuse does not install a theme or change system settings during capability discovery.
 

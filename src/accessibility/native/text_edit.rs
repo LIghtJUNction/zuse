@@ -3,8 +3,8 @@
 //! libatspi exposes only a synchronous SetTextContents wrapper. This adapter
 //! uses that method's public D-Bus protocol and the public C layouts in
 //! atspi-object.h / atspi-application.h, without private libatspi entry points.
-//! Sources: https://gitlab.gnome.org/GNOME/at-spi2-core/-/tree/main/atspi
-//! https://dbus.freedesktop.org/doc/api/html/group__DBusConnection.html
+//! Sources: <https://gitlab.gnome.org/GNOME/at-spi2-core/-/tree/main/atspi>
+//! <https://dbus.freedesktop.org/doc/api/html/group__DBusConnection.html>
 use super::*;
 use crate::observation::Cancellation;
 use std::{mem::size_of, ptr};

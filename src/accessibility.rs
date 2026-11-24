@@ -7,9 +7,7 @@ type Result<T> = std::result::Result<T, String>;
 /// Read roles, names, text, screen bounds and supported actions.
 /// Password text is redacted. Partial observations carry truncated/errors.
 pub fn snapshot(max_nodes: usize, max_depth: usize) -> Result<String> {
-    if !(1..=4096).contains(&max_nodes) || max_depth > 32 {
-        return Err("accessibility limits: nodes 1..4096, depth 0..32".into());
-    }
+    validate_limits(max_nodes, max_depth)?;
     native::snapshot(max_nodes, max_depth)
 }
 /// Validate a desktop observation scope without opening the accessibility bus.
@@ -20,9 +18,7 @@ pub fn validate_scope(path: &str) -> Result<()> {
 /// Read only one already selected accessibility subtree.
 pub fn snapshot_scope(path: &str, max_nodes: usize, max_depth: usize) -> Result<String> {
     validate_path(path)?;
-    if !(1..=4096).contains(&max_nodes) || max_depth > 32 {
-        return Err("accessibility limits: nodes 1..4096, depth 0..32".into());
-    }
+    validate_limits(max_nodes, max_depth)?;
     #[cfg(target_os = "linux")]
     {
         native::snapshot_scope(path, max_nodes, max_depth)
@@ -34,6 +30,13 @@ pub fn snapshot_scope(path: &str, max_nodes: usize, max_depth: usize) -> Result<
         }
         snapshot(max_nodes, max_depth)
     }
+}
+
+fn validate_limits(max_nodes: usize, max_depth: usize) -> Result<()> {
+    if !(1..=4096).contains(&max_nodes) || max_depth > 32 {
+        return Err("accessibility limits: nodes 1..4096, depth 0..32".into());
+    }
+    Ok(())
 }
 
 /// Re-read this node only, including its current bounds and process identity.
@@ -115,7 +118,14 @@ impl Watch {
     }
 }
 
-/// Read an accessibility snapshot as plain text.
+/// Read accessibility names and text as plain text.
+#[cfg(target_os = "linux")]
+pub fn text(max_nodes: usize, max_depth: usize) -> Result<String> {
+    validate_limits(max_nodes, max_depth)?;
+    native::text(max_nodes, max_depth)
+}
+
+#[cfg(not(target_os = "linux"))]
 pub fn text(max_nodes: usize, max_depth: usize) -> Result<String> {
     let snapshot = snapshot(max_nodes, max_depth)?;
     crate::browser::with_json(&snapshot, |root| {
@@ -280,6 +290,7 @@ mod native {
         desktop: unsafe extern "C" fn(c_int) -> Obj,
         name: unsafe extern "C" fn(Obj, *mut ErrPtr) -> *mut c_char,
         role: unsafe extern "C" fn(Obj, *mut ErrPtr) -> *mut c_char,
+        role_id: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
         count: unsafe extern "C" fn(Obj, *mut ErrPtr) -> c_int,
         child: unsafe extern "C" fn(Obj, c_int, *mut ErrPtr) -> Obj,
         parent: unsafe extern "C" fn(Obj, *mut ErrPtr) -> Obj,
@@ -331,6 +342,7 @@ mod native {
                     desktop: library.symbol(c"atspi_get_desktop")?,
                     name: library.symbol(c"atspi_accessible_get_name")?,
                     role: library.symbol(c"atspi_accessible_get_role_name")?,
+                    role_id: library.symbol(c"atspi_accessible_get_role")?,
                     count: library.symbol(c"atspi_accessible_get_child_count")?,
                     child: library.symbol(c"atspi_accessible_get_child_at_index")?,
                     parent: library.symbol(c"atspi_accessible_get_parent")?,
@@ -421,6 +433,20 @@ mod native {
             let string = unsafe { getter(object, &mut error) };
             self.string(string, error)
         }
+        fn password_role(&self, object: Obj) -> Result<bool> {
+            const INVALID: c_int = 0;
+            const PASSWORD_TEXT: c_int = 40;
+            const UNKNOWN: c_int = 67;
+            let mut error = core::ptr::null_mut();
+            // SAFETY: the accessible is live and calls are serialized.
+            let role = unsafe { (self.role_id)(object, &mut error) };
+            self.error(error)?;
+            match role {
+                PASSWORD_TEXT => Ok(true),
+                INVALID | UNKNOWN => Err("AT-SPI could not determine the text role".into()),
+                _ => Ok(false),
+            }
+        }
         fn count(&self, object: Obj) -> Result<usize> {
             let mut error = core::ptr::null_mut();
             // SAFETY: object is live and error output is initialized.
@@ -473,7 +499,14 @@ mod native {
             unsafe { (self.api.unref)(self.ptr) };
         }
     }
+    #[derive(Clone, Copy)]
+    enum Projection {
+        Tree,
+        Text,
+    }
+
     struct Scan<'a> {
+        projection: Projection,
         api: &'a Api,
         nodes: Vec<String>,
         errors: usize,
@@ -500,6 +533,9 @@ mod native {
                 return Ok(());
             }
             let pid = inherited_pid.or_else(|| {
+                if matches!(self.projection, Projection::Text) {
+                    return None;
+                }
                 if path == "0" {
                     return None;
                 }
@@ -512,7 +548,6 @@ mod native {
                     None
                 }
             });
-            let pid_json = pid.map_or_else(|| "null".to_owned(), |value| value.to_string());
             let name = self
                 .api
                 .get_string(object.ptr, self.api.name)
@@ -531,98 +566,109 @@ mod native {
                 self.errors += 1;
                 0
             });
-            let (visible, showing) =
-                match self.api.object(unsafe { (self.api.state_set)(object.ptr) }) {
-                    Ok(states) => {
-                        // AtspiStateType: VISIBLE == 30, SHOWING == 25.
-                        let visible = unsafe { (self.api.state_contains)(states.ptr, 30) != 0 };
-                        let showing = unsafe { (self.api.state_contains)(states.ptr, 25) != 0 };
-                        (visible.to_string(), showing.to_string())
+            let text = if let Ok(interface) = self
+                .api
+                .object(unsafe { (self.api.text_iface)(object.ptr) })
+            {
+                match self.api.password_role(object.ptr) {
+                    Ok(false) => self.read_text(interface.ptr).unwrap_or_else(|_| {
+                        self.errors += 1;
+                        String::new()
+                    }),
+                    Ok(true) => "[redacted]".into(),
+                    Err(_) => {
+                        self.errors += 1;
+                        "[redacted]".into()
                     }
-                    Err(_) => ("null".into(), "null".into()),
-                };
-            let password = role.to_ascii_lowercase().contains("password");
-            let mut text = if password {
-                "[redacted]".into()
+                }
             } else {
                 String::new()
             };
-            // All calls below use live owned references and serialized access.
-            if !password
-                && let Ok(interface) = self
-                    .api
-                    .object(unsafe { (self.api.text_iface)(object.ptr) })
-            {
-                let mut error = core::ptr::null_mut();
-                let length = unsafe { (self.api.text_count)(interface.ptr, &mut error) };
-                if self.api.error(error).is_ok() && length > 0 {
-                    let mut error = core::ptr::null_mut();
-                    let pointer =
-                        unsafe { (self.api.text)(interface.ptr, 0, length.min(4096), &mut error) };
-                    match self.api.string(pointer, error) {
-                        Ok(value) => text = value,
-                        Err(_) => self.errors += 1,
+            let node = match self.projection {
+                Projection::Text => {
+                    let mut line = format!("{path} [{role}] {name}");
+                    if !text.is_empty() && text != name {
+                        line.push_str(": ");
+                        line.push_str(&text);
                     }
+                    line.push('\n');
+                    line
                 }
-            }
-            let mut bounds = "null".to_owned();
-            if let Ok(interface) = self
-                .api
-                .object(unsafe { (self.api.component_iface)(object.ptr) })
-            {
-                let mut error = core::ptr::null_mut();
-                // ATSPI_COORD_TYPE_SCREEN == 0.
-                let rect = unsafe { (self.api.extents)(interface.ptr, 0, &mut error) };
-                let valid = self.api.error(error).is_ok();
-                if !rect.is_null() {
-                    // SAFETY: owned rectangle stays valid until g_free.
-                    unsafe {
-                        if valid {
-                            bounds = format!(
-                                r#"{{"x":{},"y":{},"width":{},"height":{}}}"#,
-                                (*rect).x,
-                                (*rect).y,
-                                (*rect).width,
-                                (*rect).height
-                            );
+                Projection::Tree => {
+                    let pid_json = pid.map_or_else(|| "null".to_owned(), |value| value.to_string());
+                    let (visible, showing) = match self
+                        .api
+                        .object(unsafe { (self.api.state_set)(object.ptr) })
+                    {
+                        Ok(states) => {
+                            // AtspiStateType: VISIBLE == 30, SHOWING == 25.
+                            let visible = unsafe { (self.api.state_contains)(states.ptr, 30) != 0 };
+                            let showing = unsafe { (self.api.state_contains)(states.ptr, 25) != 0 };
+                            (visible.to_string(), showing.to_string())
                         }
-                        (self.api.free)(rect.cast());
-                    }
-                }
-            }
-            let mut actions = Vec::new();
-            if let Ok(interface) = self
-                .api
-                .object(unsafe { (self.api.action_iface)(object.ptr) })
-            {
-                let mut error = core::ptr::null_mut();
-                let count = unsafe { (self.api.actions_count)(interface.ptr, &mut error) };
-                if self.api.error(error).is_ok() {
-                    for index in 0..count.clamp(0, 64) {
-                        if Instant::now() >= self.deadline {
-                            self.truncated = true;
-                            break;
-                        }
+                        Err(_) => ("null".into(), "null".into()),
+                    };
+                    let mut bounds = "null".to_owned();
+                    if let Ok(interface) = self
+                        .api
+                        .object(unsafe { (self.api.component_iface)(object.ptr) })
+                    {
                         let mut error = core::ptr::null_mut();
-                        let string =
-                            unsafe { (self.api.action_name)(interface.ptr, index, &mut error) };
-                        if let Ok(name) = self.api.string(string, error) {
-                            actions.push(format!(
-                                r#"{{"index":{index},"name":{}}}"#,
-                                quote(&name.chars().take(256).collect::<String>())
-                            ));
+                        // ATSPI_COORD_TYPE_SCREEN == 0.
+                        let rect = unsafe { (self.api.extents)(interface.ptr, 0, &mut error) };
+                        let valid = self.api.error(error).is_ok();
+                        if !rect.is_null() {
+                            // SAFETY: owned rectangle stays valid until g_free.
+                            unsafe {
+                                if valid {
+                                    bounds = format!(
+                                        r#"{{"x":{},"y":{},"width":{},"height":{}}}"#,
+                                        (*rect).x,
+                                        (*rect).y,
+                                        (*rect).width,
+                                        (*rect).height
+                                    );
+                                }
+                                (self.api.free)(rect.cast());
+                            }
                         }
                     }
+                    let mut actions = Vec::new();
+                    if let Ok(interface) = self
+                        .api
+                        .object(unsafe { (self.api.action_iface)(object.ptr) })
+                    {
+                        let mut error = core::ptr::null_mut();
+                        let count = unsafe { (self.api.actions_count)(interface.ptr, &mut error) };
+                        if self.api.error(error).is_ok() {
+                            for index in 0..count.clamp(0, 64) {
+                                if Instant::now() >= self.deadline {
+                                    self.truncated = true;
+                                    break;
+                                }
+                                let mut error = core::ptr::null_mut();
+                                let string = unsafe {
+                                    (self.api.action_name)(interface.ptr, index, &mut error)
+                                };
+                                if let Ok(name) = self.api.string(string, error) {
+                                    actions.push(format!(
+                                        r#"{{"index":{index},"name":{}}}"#,
+                                        quote(&name.chars().take(256).collect::<String>())
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    format!(
+                        r#"{{"path":{},"pid":{pid_json},"role":{},"name":{},"text":{},"children":{count},"bounds":{bounds},"visible":{visible},"showing":{showing},"actions":[{}]}}"#,
+                        quote(&path),
+                        quote(&role),
+                        quote(&name),
+                        quote(&text),
+                        actions.join(",")
+                    )
                 }
-            }
-            let node = format!(
-                r#"{{"path":{},"pid":{pid_json},"role":{},"name":{},"text":{},"children":{count},"bounds":{bounds},"visible":{visible},"showing":{showing},"actions":[{}]}}"#,
-                quote(&path),
-                quote(&role),
-                quote(&name),
-                quote(&text),
-                actions.join(",")
-            );
+            };
             if self.bytes + node.len() > 2 << 20 {
                 self.exhausted = true;
                 self.truncated = true;
@@ -651,6 +697,18 @@ mod native {
             }
             Ok(())
         }
+        fn read_text(&self, interface: Obj) -> Result<String> {
+            let mut error = core::ptr::null_mut();
+            // SAFETY: the caller owns the interface and holds the AT-SPI lock.
+            let length = unsafe { (self.api.text_count)(interface, &mut error) };
+            self.api.error(error)?;
+            if length <= 0 {
+                return Ok(String::new());
+            }
+            let mut error = core::ptr::null_mut();
+            let pointer = unsafe { (self.api.text)(interface, 0, length.min(4096), &mut error) };
+            self.api.string(pointer, error)
+        }
     }
     pub(super) fn snapshot(max_nodes: usize, max_depth: usize) -> Result<String> {
         let _guard = ACCESS
@@ -661,6 +719,25 @@ mod native {
         scan_root(api, root, "0", max_nodes, max_depth)
     }
 
+    pub(super) fn text(max_nodes: usize, max_depth: usize) -> Result<String> {
+        let _guard = ACCESS
+            .lock()
+            .map_err(|_| "accessibility state is poisoned")?;
+        let api = load()?;
+        let mut scan = scan(
+            api,
+            api.resolve("0")?,
+            "0",
+            max_nodes,
+            max_depth,
+            Projection::Text,
+        )?;
+        if scan.truncated {
+            scan.nodes.push("[observation truncated]\n".into());
+        }
+        Ok(scan.nodes.concat())
+    }
+
     fn scan_root(
         api: &Api,
         root: Object<'_>,
@@ -668,7 +745,24 @@ mod native {
         max_nodes: usize,
         max_depth: usize,
     ) -> Result<String> {
+        let scan = scan(api, root, path, max_nodes, max_depth, Projection::Tree)?;
+        Ok(format!(
+            r#"{{"backend":"atspi","nodes":[{}],"truncated":{},"errors":{}}}"#,
+            scan.nodes.join(","),
+            scan.truncated,
+            scan.errors
+        ))
+    }
+    fn scan<'a>(
+        api: &'a Api,
+        root: Object<'_>,
+        path: &str,
+        max_nodes: usize,
+        max_depth: usize,
+        projection: Projection,
+    ) -> Result<Scan<'a>> {
         let mut scan = Scan {
+            projection,
             api,
             nodes: Vec::new(),
             errors: 0,
@@ -680,12 +774,7 @@ mod native {
             exhausted: false,
         };
         scan.visit(root, path.into(), 0, None)?;
-        Ok(format!(
-            r#"{{"backend":"atspi","nodes":[{}],"truncated":{},"errors":{}}}"#,
-            scan.nodes.join(","),
-            scan.truncated,
-            scan.errors
-        ))
+        Ok(scan)
     }
     pub(super) fn snapshot_scope(path: &str, max_nodes: usize, max_depth: usize) -> Result<String> {
         let _guard = ACCESS
@@ -917,11 +1006,7 @@ mod native {
         if checked {
             unsafe { (api.clear_cache)(object.ptr) };
         }
-        if api
-            .get_string(object.ptr, api.role)?
-            .to_ascii_lowercase()
-            .contains("password")
-        {
+        if api.password_role(object.ptr)? {
             return Err("password input requires human assistance".into());
         }
         let pid = if let Some(expected) = expected_pid {
