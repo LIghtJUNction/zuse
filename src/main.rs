@@ -51,7 +51,8 @@ USAGE
   zuse human assist REQUEST_ID   Open a trusted local approval prompt
   zuse human approve REQUEST_ID  Record the local operator's approval
   zuse human deny REQUEST_ID     Record the local operator's denial
-  zuse mcp --stdio
+  zuse mcp serve --stdio        Run the native MCP server (or use zuse mcp --stdio)
+  zuse mcp install codex|claude|ssmcp [--dry-run]
   zuse mcp --host 127.0.0.1 --port 8377
   zuse mcp --socket /path/to/zuse.sock
 
@@ -506,11 +507,16 @@ fn run() -> Result<i32, String> {
             }
         }
         "mcp" => {
-            exactly(
-                &words,
-                1,
-                "mcp --stdio|--host HOST --port PORT|--socket PATH",
-            )?;
+            match words.as_slice() {
+                ["mcp", "install", client] => {
+                    if stdio || host.is_some() || port.is_some() || socket.is_some() {
+                        return Err("MCP transport options apply to serve, not install".into());
+                    }
+                    return output(mcp::install_client(client, options)?);
+                }
+                ["mcp"] | ["mcp", "serve"] => {}
+                _ => return Err("usage: zuse mcp serve [--stdio|--host HOST --port PORT|--socket PATH] or zuse mcp install codex|claude|ssmcp [--dry-run]".into()),
+            }
             if let Some(socket) = socket {
                 mcp::unix(Path::new(socket), options)?;
             } else if host.is_some() || port.is_some() {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `zuse mcp serve` and `zuse mcp install` for Codex, Claude Code and the SSMCP Zuse manager. Support a dry run and verify installed user registrations.
+
 ## 0.7.0 — 2026-11-24
 
 - Add Wayland semantic mice with independently animated click-through cursors and targeted AT-SPI actions. Reuse the scoped scheduler and keep coordinate input on the existing native pointer paths.

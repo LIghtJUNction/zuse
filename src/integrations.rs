@@ -230,8 +230,13 @@ struct Managed {
 impl Managed {
     fn spawn(program: &OsStr, args: &[OsString], interactive: bool) -> Result<Self> {
         let mut command = Command::new(program);
+        command.args(args);
+        Self::spawn_command(command, interactive)
+    }
+
+    fn spawn_command(mut command: Command, interactive: bool) -> Result<Self> {
+        let program = command.get_program().to_os_string();
         command
-            .args(args)
             .stdin(if interactive {
                 Stdio::piped()
             } else {
@@ -701,8 +706,15 @@ pub fn installed_harnesses() -> String {
         .collect::<Vec<_>>();
     format!("[{}]", entries.join(","))
 }
-fn utility(program: &Path, args: &[OsString], timeout: Duration) -> Result<String> {
-    let mut managed = Managed::spawn(program.as_os_str(), args, false)?;
+pub(crate) fn utility(program: &Path, args: &[OsString], timeout: Duration) -> Result<String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    utility_command(command, timeout)
+}
+
+pub(crate) fn utility_command(command: Command, timeout: Duration) -> Result<String> {
+    let program = PathBuf::from(command.get_program());
+    let mut managed = Managed::spawn_command(command, false)?;
     let deadline = Instant::now() + timeout;
     while managed.status.is_none() {
         managed.refresh()?;

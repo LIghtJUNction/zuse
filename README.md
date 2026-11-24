@@ -208,10 +208,20 @@ The browser adapter speaks Chrome DevTools Protocol over native sockets. Launch 
 ## MCP
 
 ~~~sh
-zuse mcp --stdio
+zuse mcp serve --stdio
 zuse mcp --host 127.0.0.1 --port 8377
 zuse mcp --socket /run/user/1000/zuse.sock
 ~~~
+
+Install the current Zuse executable in a local harness:
+
+~~~sh
+zuse mcp install codex
+zuse mcp install claude
+zuse mcp install ssmcp
+~~~
+
+Use `--dry-run` to preview the commands. Codex and Claude Code register the current executable by its absolute path as a user-level stdio server named `zuse`. The client picks it up in its next session. SSMCP installs the matching official release with its Zuse manager and returns the managed executable path. `zuse mcp --stdio` also starts the server directly.
 
 Use your own runtime directory for the socket path. Unix socket files are created with mode 0600. TCP serves Streamable HTTP at `/mcp`. A non-loopback bind requires a `ZUSE_TOKEN` of at least 32 bytes; clients send it as a Bearer token. HTTP validates Host, Origin, request metadata, framing, and body bounds.
 

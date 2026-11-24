@@ -147,10 +147,12 @@ cargo run --example target_motion
 ## MCP
 
 ~~~sh
-zuse mcp --stdio
+zuse mcp serve --stdio
 zuse mcp --host 127.0.0.1 --port 8377
 zuse mcp --socket /run/user/1000/zuse.sock
 ~~~
+
+使用 `zuse mcp install codex` 或 `zuse mcp install claude`，以当前可执行文件的绝对路径在用户配置中登记名为 `zuse` 的 stdio 服务，新会话会加载它。`zuse mcp install ssmcp` 通过 SSMCP 的 Zuse 管理器安装匹配的正式版本并返回可执行文件路径。加 `--dry-run` 可预览命令。`zuse mcp --stdio` 也可直接启动服务。
 
 socket 路径请换成自己的运行目录。HTTP 入口为 `/mcp`，默认仅本机访问；绑定其他网卡需要配置至少 32 字节的 `ZUSE_TOKEN`。stdio/socket 支持传统初始化流程和当前协议，HTTP 使用 MCP 2026-07-28。
 

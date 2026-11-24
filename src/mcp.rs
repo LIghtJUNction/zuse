@@ -1,4 +1,7 @@
 //! MCP stdio, Unix sockets, and current Streamable HTTP via Project Z zmcpio.
+mod install;
+pub use install::install_client;
+
 use crate::{
     human::Queue,
     json::{self, quote},
