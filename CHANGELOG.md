@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0 — 2026-11-24
+
 - Add Wayland semantic mice with independently animated click-through cursors and targeted AT-SPI actions. Reuse the scoped scheduler and keep coordinate input on the existing native pointer paths.
 
 - Add native Sway and niri window listing and exact-ID focus with compositor readback. Wayland `doctor` reports window IPC readiness and the capture helper separately.
