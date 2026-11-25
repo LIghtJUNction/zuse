@@ -186,6 +186,12 @@ cargo run --example target_motion
 
 Use `MovePlan` to inspect a path or `Runtime::move_to_with` to supply a Rust callback receiving progress, the live start, and the offset-adjusted target. `motion::FunctionalMotion` provides the allocation-free `no_std` sampler. `mouse.circle` also schedules a closed circular trajectory in one call. See [target selection, motion parameters, and Rust examples](docs/target-motion.md).
 
+## Touch workbench
+
+Run `zuse web` and open **http://127.0.0.1:43497/** in Android Chrome. Set start and end points on the canvas and select **执行手势**. The host attaches to that workbench page through the local Chrome debugging socket and dispatches Zuse touch events. The page counts received touch frames and shows the actual paths. Android must allow the process to access the Chrome socket. The executable embeds the UI and needs no Node server.
+
+The release archive also contains `web/zuse-touch.js` and `web/zuse-touch.css`. Import the module and add a `<zuse-touch>` element. Its `transport(request, {signal, onFrame})` property accepts normalized gesture coordinates and returns a completion receipt. An iframe at the SSMCP loopback origin can display the editor and direct users to the parent page’s standalone navigation. Native input stays within the standalone workbench canvas.
+
 ## Background browser
 
 ~~~text

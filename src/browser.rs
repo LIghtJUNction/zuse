@@ -18,6 +18,7 @@ use zmcpio::json::{Document, Limits, Token, Value};
 mod click_watch;
 mod key_hold;
 pub(crate) mod touch;
+pub mod workbench;
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
@@ -1360,10 +1361,16 @@ fn discover_endpoint(input: &str) -> Result<String> {
 }
 
 fn discover_stream(socket: &mut TcpStream, host: &str) -> Result<String> {
+    field_string(
+        &discovery_json(socket, host, "/json/version")?,
+        &["webSocketDebuggerUrl"],
+    )
+}
+fn discovery_json(socket: &mut dyn TimedStream, host: &str, path: &str) -> Result<String> {
     const LIMIT: usize = 65_536;
     let deadline = Instant::now() + Duration::from_secs(5);
     let request = format!(
-        "GET /json/version HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
         host
     );
     write_all_deadline(socket, request.as_bytes(), deadline)?;
@@ -1458,20 +1465,44 @@ fn discover_stream(socket: &mut TcpStream, host: &str) -> Result<String> {
         }
         body
     };
-    let body = String::from_utf8(body).map_err(|_| "invalid HTTP discovery response")?;
-    field_string(&body, &["webSocketDebuggerUrl"])
+    String::from_utf8(body).map_err(|_| "invalid HTTP discovery response".into())
 }
 
+// The Chrome wire protocol is identical over Android abstract sockets and loopback TCP.
+trait TimedStream: Read + Write + Send {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn shutdown(&self, how: std::net::Shutdown) -> std::io::Result<()>;
+}
+macro_rules! timed_stream {
+    ($ty:ty) => {
+        impl TimedStream for $ty {
+            fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+                <$ty>::set_read_timeout(self, timeout)
+            }
+            fn set_write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+                <$ty>::set_write_timeout(self, timeout)
+            }
+            fn shutdown(&self, how: std::net::Shutdown) -> std::io::Result<()> {
+                <$ty>::shutdown(self, how)
+            }
+        }
+    };
+}
+timed_stream!(TcpStream);
+#[cfg(target_os = "android")]
+timed_stream!(std::os::unix::net::UnixStream);
+
 struct WebSocket {
-    stream: TcpStream,
+    stream: Box<dyn TimedStream>,
     incoming: Vec<u8>,
     message: Vec<u8>,
     fragmented: bool,
 }
 impl WebSocket {
-    fn new(stream: TcpStream) -> Self {
+    fn new(stream: impl TimedStream + 'static) -> Self {
         Self {
-            stream,
+            stream: Box::new(stream),
             incoming: Vec::new(),
             message: Vec::new(),
             fragmented: false,
@@ -1484,8 +1515,12 @@ impl WebSocket {
         Self::connect_stream(stream, &endpoint.host, &endpoint.path)
     }
 
-    fn connect_stream(mut stream: TcpStream, host: &str, path: &str) -> Result<Self> {
+    fn connect_stream(stream: TcpStream, host: &str, path: &str) -> Result<Self> {
         stream.set_nodelay(true).map_err(|e| e.to_string())?;
+        Self::handshake(stream, host, path)
+    }
+
+    fn handshake(mut stream: impl TimedStream + 'static, host: &str, path: &str) -> Result<Self> {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(|e| e.to_string())?;
@@ -1566,13 +1601,13 @@ impl WebSocket {
         let mut mask = [0; 4];
         entropy(&mut mask)?;
         header.extend_from_slice(&mask);
-        write_all_deadline(&mut self.stream, &header, deadline)?;
+        write_all_deadline(self.stream.as_mut(), &header, deadline)?;
         let mut buffer = [0; 8192];
         for (block, bytes) in payload.chunks(buffer.len()).enumerate() {
             for (index, byte) in bytes.iter().enumerate() {
                 buffer[index] = byte ^ mask[(block * 8192 + index) % 4];
             }
-            write_all_deadline(&mut self.stream, &buffer[..bytes.len()], deadline)?;
+            write_all_deadline(self.stream.as_mut(), &buffer[..bytes.len()], deadline)?;
         }
         Ok(())
     }
@@ -1734,7 +1769,7 @@ fn remaining(deadline: Instant) -> Result<Duration> {
         .ok_or_else(|| "browser I/O deadline exceeded".into())
 }
 fn read_some_deadline(
-    stream: &mut TcpStream,
+    stream: &mut dyn TimedStream,
     output: &mut [u8],
     deadline: Instant,
 ) -> Result<usize> {
@@ -1757,7 +1792,11 @@ fn read_some_deadline(
         }
     }
 }
-fn read_exact_deadline(stream: &mut TcpStream, output: &mut [u8], deadline: Instant) -> Result<()> {
+fn read_exact_deadline(
+    stream: &mut dyn TimedStream,
+    output: &mut [u8],
+    deadline: Instant,
+) -> Result<()> {
     let mut position = 0;
     while position < output.len() {
         let count = read_some_deadline(stream, &mut output[position..], deadline)?;
@@ -1768,7 +1807,7 @@ fn read_exact_deadline(stream: &mut TcpStream, output: &mut [u8], deadline: Inst
     }
     Ok(())
 }
-fn write_all_deadline(stream: &mut TcpStream, input: &[u8], deadline: Instant) -> Result<()> {
+fn write_all_deadline(stream: &mut dyn TimedStream, input: &[u8], deadline: Instant) -> Result<()> {
     let mut position = 0;
     while position < input.len() {
         stream

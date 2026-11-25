@@ -41,6 +41,7 @@ USAGE
   zuse check FILE               Validate every statement without execution
   zuse shell                    Persistent line-oriented interactive shell
   zuse session help             Persistent externally controlled Runtime sessions
+  zuse web                      Serve the local touch workbench on 127.0.0.1:43497
   zuse doctor                   Inspect available backends and integrations
   zuse update                   Update a tracked user Cargo installation
   zuse update --check           Check the latest stable version without installing
@@ -456,6 +457,10 @@ fn run() -> Result<i32, String> {
                 options,
                 Duration::from_millis(idle_timeout_ms.unwrap_or(DEFAULT_SHELL_IDLE_TIMEOUT_MS)),
             )
+        }
+        "web" => {
+            exactly(&words, 1, "web")?;
+            zuse::browser::workbench::serve().map(|()| 0)
         }
         "doctor" => {
             exactly(&words, 1, "doctor")?;

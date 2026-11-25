@@ -85,6 +85,13 @@ impl TouchGesture {
         })
     }
 
+    pub(super) fn fits(&self, left: f64, top: f64, width: f64, height: f64) -> bool {
+        self.paths
+            .iter()
+            .flatten()
+            .all(|p| p.x >= left && p.y >= top && p.x < left + width && p.y < top + height)
+    }
+
     fn points(&self, step: u32) -> String {
         use std::fmt::Write;
         let mut output = String::new();
@@ -105,23 +112,32 @@ impl Browser {
         gesture: TouchGesture,
         cancellation: &Cancellation,
     ) -> Result<String> {
+        self.touch_checked(gesture, cancellation, None)
+    }
+
+    pub(super) fn touch_checked(
+        &mut self,
+        gesture: TouchGesture,
+        cancellation: &Cancellation,
+        guard: Option<&str>,
+    ) -> Result<String> {
         cancellation.check()?;
         let size = self.evaluate("({width: innerWidth, height: innerHeight})")?;
         let (width, height) = with_json(&size, |v| {
             Ok((number(v.get("width"))?, number(v.get("height"))?))
         })?;
-        if gesture
-            .paths
-            .iter()
-            .flatten()
-            .any(|p| p.x < 0.0 || p.y < 0.0 || p.x >= width || p.y >= height)
-        {
+        if !gesture.fits(0.0, 0.0, width, height) {
             return Err("touch point lies outside the selected page viewport".into());
         }
         let start = Instant::now();
         let duration = Duration::from_millis(gesture.duration_ms);
         let deadline = start + duration + Duration::from_secs(3);
         let mut dispatch = |kind: &str, points: String| {
+            if let Some(guard) = guard
+                && self.evaluate(&format!("({guard})([{points}])"))? != "true"
+            {
+                return Err("The touch workbench changed; the gesture was cancelled.".into());
+            }
             self.request_until(
                 "Input.dispatchTouchEvent",
                 &format!(r#"{{"type":"{kind}","touchPoints":[{points}]}}"#),

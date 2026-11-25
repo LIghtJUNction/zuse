@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-11-26
+
+- Add a native loopback touch workbench, an embeddable Web Component and an Android arm64 release archive.
+- Dispatch 1–10 browser touch contacts with explicit endpoints, bounded jitter, seeded speed variation and cancellation.
 
 - Add `zuse mcp serve` and `zuse mcp install` for Codex, Claude Code and the SSMCP Zuse manager. Support a dry run and verify installed user registrations.
 
