@@ -205,7 +205,7 @@ On the selected page, `browser.touch_gesture` dispatches a complete touch sequen
 browser.touch_gesture(paths="40,100:80,100;180,100:140,100", duration=200, steps=12)
 ~~~
 
-A gesture accepts 1–10 contacts, 1–120 interpolation steps and a duration of 0–10000 ms. Each finger keeps its identifier until release. An out-of-viewport endpoint fails before the first touch. Input is scoped to the selected browser page.
+A gesture accepts 1–10 contacts, 1–120 interpolation steps and a duration of 0–10000 ms. The default path is linear. Select `curve="smooth"`, `"ease-in-out"` or `"bezier"` for acceleration and deceleration. A `jitter` of 0–32 CSS pixels applies bounded variation between the endpoints. Set `speed_variation` from 0 to 1 to vary progress along each finger’s path. Supplying the same integer `seed` repeats the sample coordinates. Each finger keeps its identifier until release. Every planned sample must lie inside the viewport before the first touch. Input is scoped to the selected browser page.
 
 The browser adapter speaks Chrome DevTools Protocol over native sockets. Launch creates an isolated temporary profile. Browser snapshots expose accessibility roles, names, relationships, and DOM identifiers, while omitting input values. `browser.capture` writes a PNG of the current viewport; `browser.viewport` sets its size in CSS pixels.
 

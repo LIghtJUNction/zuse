@@ -130,7 +130,7 @@ static SPECS: &[Spec] = &[
     spec!("browser.snapshot", true, []),
     spec!("browser.text", true, []),
     spec!("browser.evaluate",false,["expression":T:true]),
-    spec!("browser.touch_gesture",false,["paths":T:true,"duration":I:false,"steps":I:false]),
+    spec!("browser.touch_gesture",false,["paths":T:true,"duration":I:false,"steps":I:false,"curve":T:false,"jitter":N:false,"seed":I:false,"speed_variation":N:false]),
     spec!("browser.click",false,["selector":T:true]),
     spec!("browser.fill",false,["selector":T:true,"text":T:true]),
     spec!("browser.key",false,["key":T:true]),
@@ -337,6 +337,10 @@ fn touch_gesture(c: &Call<'_>) -> Result<crate::browser::touch::TouchGesture, St
         &text(c, "paths", "")?,
         range(c, "duration", 200, 0, 10000)? as u64,
         range(c, "steps", 12, 1, 120)? as u32,
+        Curve::parse(&text(c, "curve", "linear")?).ok_or("unknown motion curve")?,
+        number(c, "jitter", 0.0),
+        integer(c, "seed", 1) as u64,
+        number(c, "speed_variation", 0.0),
     )
 }
 
