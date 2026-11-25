@@ -34,7 +34,7 @@ The entire source is parsed and validated before any effect. Fixed durations cou
 | window / screen | list, focus, capture, text |
 | wine | windows |
 | accessibility | tree, focus, action, set_text |
-| browser | launch, connect, tabs, select, navigate, snapshot, text, evaluate, click, fill, key, viewport, capture, close |
+| browser | launch, connect, tabs, select, navigate, snapshot, text, evaluate, click, touch_gesture, fill, key, viewport, capture, close |
 | android | devices, connect, status, snapshot, capture, tap, swipe, key, type, start |
 | human | request, pending |
 | process / harness | start, list/read, write/send, stop |

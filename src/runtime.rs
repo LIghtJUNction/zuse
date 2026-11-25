@@ -130,6 +130,7 @@ static SPECS: &[Spec] = &[
     spec!("browser.snapshot", true, []),
     spec!("browser.text", true, []),
     spec!("browser.evaluate",false,["expression":T:true]),
+    spec!("browser.touch_gesture",false,["paths":T:true,"duration":I:false,"steps":I:false]),
     spec!("browser.click",false,["selector":T:true]),
     spec!("browser.fill",false,["selector":T:true,"text":T:true]),
     spec!("browser.key",false,["key":T:true]),
@@ -331,6 +332,14 @@ fn image_match_options(call: &Call<'_>) -> Result<crate::vision::MatchOptions, S
     }
     Ok(options)
 }
+fn touch_gesture(c: &Call<'_>) -> Result<crate::browser::touch::TouchGesture, String> {
+    crate::browser::touch::TouchGesture::parse(
+        &text(c, "paths", "")?,
+        range(c, "duration", 200, 0, 10000)? as u64,
+        range(c, "steps", 12, 1, 120)? as u32,
+    )
+}
+
 fn circle_options(c: &Call<'_>) -> Result<(f64, f64, f64, PathOptions), String> {
     let x = integer(c, "x", 0) as f64;
     let y = integer(c, "y", 0) as f64;
@@ -1148,6 +1157,9 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             }
             "keyboard.key" => {
                 crate::platform::split_chord(&text(&call, "key", "")?)?;
+            }
+            "browser.touch_gesture" => {
+                wait_budget = wait_budget.saturating_add(touch_gesture(&call)?.duration_ms);
             }
             "keyboard.hold" | "browser.hold" => {
                 if call.name == "keyboard.hold" {
@@ -2184,6 +2196,9 @@ impl Runtime {
             "browser.snapshot" => self.browser()?.snapshot(),
             "browser.text" => self.browser()?.text(),
             "browser.evaluate" => self.browser()?.evaluate(&text(c, "expression", "")?),
+            "browser.touch_gesture" => self
+                .browser()?
+                .touch_gesture(touch_gesture(c)?, &cancellation),
             "browser.click" => self.browser()?.click(&text(c, "selector", "")?),
             "browser.fill" => self
                 .browser()?

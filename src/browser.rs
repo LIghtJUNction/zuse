@@ -17,6 +17,7 @@ use zmcpio::json::{Document, Limits, Token, Value};
 
 mod click_watch;
 mod key_hold;
+pub(crate) mod touch;
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;

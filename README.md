@@ -199,6 +199,14 @@ browser.capture(path="browser.png")
 browser.close()
 ~~~
 
+On the selected page, `browser.touch_gesture` dispatches a complete touch sequence. Each contact uses CSS viewport pixels. Separate its start and end with a colon and separate simultaneous contacts with a semicolon. A single point stays still. This example moves two fingers towards each other on an Android Chrome page opened with `browser.connect_android`.
+
+~~~text
+browser.touch_gesture(paths="40,100:80,100;180,100:140,100", duration=200, steps=12)
+~~~
+
+A gesture accepts 1–10 contacts, 1–120 interpolation steps and a duration of 0–10000 ms. Each finger keeps its identifier until release. An out-of-viewport endpoint fails before the first touch. Input is scoped to the selected browser page.
+
 The browser adapter speaks Chrome DevTools Protocol over native sockets. Launch creates an isolated temporary profile. Browser snapshots expose accessibility roles, names, relationships, and DOM identifiers, while omitting input values. `browser.capture` writes a PNG of the current viewport; `browser.viewport` sets its size in CSS pixels.
 
 `browser.fill` rejects password inputs. Use a visible browser and `human.request` for a local operator to complete those steps. Explicit `browser.evaluate` executes JavaScript with access to the page.
