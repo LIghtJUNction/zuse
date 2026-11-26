@@ -116,7 +116,6 @@ pub enum Action {
     CalibrationCapture(CalibrationStep),
     Disconnect,
     Reset,
-    AutoBounds,
     Park { x: f64, y: f64, up: f64 },
     Jog { axis: char, delta: f64 },
     SetPenUp,
@@ -154,16 +153,8 @@ pub struct MachineBounds {
 pub enum MountAction {
     Status,
     MoveZ(f64),
-    Jog {
-        axis: char,
-        delta: f64,
-    },
+    Jog { axis: char, delta: f64 },
     ApplyBounds(MachineBounds),
-    TestInk {
-        bounds: MachineBounds,
-        up: f64,
-        down: f64,
-    },
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MountReceipt {
@@ -178,7 +169,7 @@ const MOUNT_STATUS: &str = "plotter.status(work=true,offset=true,timeout=6000)";
 impl MountAction {
     fn program(self, reference: Option<[f64; 3]>, generation: Option<u64>) -> Result<String> {
         match self {
-            Self::Status | Self::TestInk { .. } => Ok(MOUNT_STATUS.into()),
+            Self::Status => Ok(MOUNT_STATUS.into()),
             Self::MoveZ(z) if (-10000.0..=10000.0).contains(&z) => {
                 Ok(format!("plotter.pen(z={z},feed=40,timeout=300000)"))
             }
@@ -284,7 +275,6 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
         | Action::SetPenDown => WORK_STATUS.into(),
         Action::Disconnect => "plotter.disconnect()".into(),
         Action::Reset => "plotter.reset()".into(),
-        Action::AutoBounds => "plotter.auto_bounds()".into(),
         Action::Park { x, y, up } => format!("plotter.park(x={x},y={y},z={up},feed=300)"),
         Action::Jog { axis, delta } => {
             let a = axis.to_ascii_lowercase();
@@ -305,7 +295,10 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
             }
             format!("plotter.pen(z={z},feed=40)")
         }
-        Action::Send => format!("plotter.send(program={},timeout=300000)", quote(program)),
+        Action::Send => format!(
+            "plotter.send(program={},require_bounds=true,timeout=300000)",
+            quote(program)
+        ),
         Action::Check => format!("plotter.check(program={},timeout=300000)", quote(program)),
         _ => return Err("操作没有会话脚本".into()),
     };
@@ -968,44 +961,6 @@ impl MountObservation {
     }
 }
 
-fn ink_test(
-    bounds: MachineBounds,
-    work: [f64; 3],
-    up: f64,
-    down: f64,
-) -> Result<(String, [f64; 3])> {
-    if ![up, down]
-        .into_iter()
-        .all(|z| (bounds.min[2]..=bounds.max[2]).contains(&z))
-        || !(0..3).all(|i| (bounds.min[i]..=bounds.max[i]).contains(&work[i]))
-        || (up - work[2]).abs().min((down - work[2]).abs()) > 0.001
-    {
-        return Err("试写前请核对当前坐标和笔高".into());
-    }
-    let (axis, direction) = [(0, 1.), (0, -1.), (1, 1.), (1, -1.)]
-        .into_iter()
-        .find(|&(axis, direction)| {
-            (bounds.min[axis]..=bounds.max[axis]).contains(&(work[axis] + 5. * direction))
-        })
-        .ok_or("试写需要从当前笔尖位置起至少 5 mm 的纸面")?;
-    let point = |distance| {
-        let mut xy = [work[0], work[1]];
-        xy[axis] += direction * distance;
-        (xy[0], xy[1])
-    };
-    let program = zuse::plotter::gcode(
-        &[vec![point(0.), point(2.)], vec![point(3.), point(5.)]],
-        up,
-        down,
-        120.,
-    )?;
-    let (x, y) = point(5.);
-    Ok((
-        format!("plotter.send(program={},timeout=30000)", quote(&program)),
-        [x, y, up],
-    ))
-}
-
 fn mount_job(
     action: &Action,
     snapshot: Option<&Snapshot>,
@@ -1049,13 +1004,7 @@ fn mount_job(
         }
         _ => {}
     }
-    let program = if let MountAction::TestInk { bounds, up, down } = *kind {
-        let (trial, end) = ink_test(bounds, before.work, up, down)?;
-        target = end;
-        trial
-    } else {
-        kind.program(*reference, before.reference_generation)?
-    };
+    let program = kind.program(*reference, before.reference_generation)?;
     // Only submit()'s read-only observation can fall back on a legacy daemon.
     let (receipt, after) = run(action, &program, &before.snapshot)?;
     let after = after.ok_or("命令已结束，结果被其他操作取代，请核对写字机")?;
@@ -1095,6 +1044,7 @@ pub struct Controller {
     screen_running: bool,
     screen_job: Option<Snapshot>,
     pub form: Form,
+    pub paper: Option<crate::workspace_profile::WorkspaceProfile>,
     pub strokes: Strokes,
     pub gcode: String,
     pub status: String,
@@ -1130,6 +1080,7 @@ impl Default for Controller {
             screen_running: false,
             screen_job: None,
             form: Form::default(),
+            paper: None,
             strokes: vec![],
             gcode: String::new(),
             status: "就绪".into(),
@@ -1212,6 +1163,31 @@ impl Controller {
         }
         self.link.as_ref()?.id.as_deref()
     }
+    pub(crate) fn apply_paper_profile(
+        &mut self,
+        profile: crate::workspace_profile::WorkspaceProfile,
+    ) -> Result<()> {
+        let [x, y] = profile.corner_a;
+        let [right, bottom] = profile.corner_b;
+        let swap = self.form.swap_xy;
+        let (flip_x, flip_y) = if swap {
+            (right > x, bottom < y)
+        } else {
+            (right < x, bottom > y)
+        };
+        self.set_paper_axes([swap, flip_x, flip_y], false)?;
+        let dx = (right - x).abs();
+        let dy = (bottom - y).abs();
+        [self.form.x, self.form.y] = [x, y];
+        self.form.reference_units = 1.;
+        self.form.reference_distance = 1.;
+        [self.form.area_width, self.form.area_height] = if swap { [dy, dx] } else { [dx, dy] };
+        self.form.pen_up = profile.pen_up_z;
+        self.form.pen_down = profile.pen_down_z;
+        self.paper = Some(profile);
+        Ok(())
+    }
+
     pub(crate) fn set_paper_direction(&mut self, reverse: bool, persist: bool) -> Result<()> {
         let (x, y) = if self.form.swap_xy {
             (reverse, self.form.flip_y)
@@ -1270,16 +1246,6 @@ impl Controller {
             self.link.as_ref().and_then(|d| d.offset),
         )
     }
-    pub fn test_calibration_ink(
-        &mut self,
-        bounds: MachineBounds,
-        up: f64,
-        down: f64,
-        offset: [f64; 3],
-    ) -> Option<u64> {
-        self.dispatch_mount(MountAction::TestInk { bounds, up, down }, Some(offset))
-    }
-
     pub fn apply_calibration_bounds_at(&mut self, b: MachineBounds, wco: [f64; 3]) -> Option<u64> {
         self.dispatch_mount(MountAction::ApplyBounds(b), Some(wco))
     }
@@ -1301,6 +1267,7 @@ impl Controller {
         self.calibration_epoch = self.calibration_epoch.wrapping_add(1);
         self.calibration = None;
         self.mount = None;
+        self.paper = None;
     }
     pub fn calibration_receipt(&self) -> Option<&CalibrationReceipt> {
         if self.needs_device_status || self.busy() {
@@ -1382,7 +1349,6 @@ impl Controller {
                 | Action::PenUp
                 | Action::PenDown
                 | Action::Reset
-                | Action::AutoBounds
                 | Action::Park { .. }
                 | Action::Send
                 | Action::Check
@@ -1427,6 +1393,12 @@ impl Controller {
             }
         };
         if matches!(action, Action::Send) {
+            if !self.paper.as_ref().is_some_and(|p| {
+                p.pen_up_z == self.form.pen_up && p.pen_down_z == self.form.pen_down
+            }) {
+                self.status = "请先保存或载入纸面与装笔校准，并使用已校准的笔高。".into();
+                return;
+            }
             self.sent = true
         }
         let stop = Arc::new(AtomicBool::new(false));
@@ -1605,11 +1577,6 @@ impl Controller {
                 self.wpos = coords(payload, "work_position")?;
                 self.work_offset = coords(payload, "work_offset")?;
                 Ok("已抬笔并回到纸张左上角。".into())
-            }
-            Action::AutoBounds => {
-                self.mark_device_stale();
-                self.invalidate_plan();
-                Ok("已归零并应用机台边界。请继续校准纸面和装笔高度。".into())
             }
             Action::Reset => {
                 self.mark_device_stale();
@@ -1982,6 +1949,23 @@ mod tests {
     const PROGRAM: &str = "G21 G17 G90 G94\nG0 Z3.000\nG0 X10.000 Y20.000\nG1 Z0.000 F300.000\nG1 X12.500 Y18.500\nG0 Z3.000\nM2\n";
 
     #[test]
+    fn applying_paper_profile_sets_origin_orientation_dimensions_and_heights_together() {
+        use crate::workspace_profile::WorkspaceProfile;
+        let profile = WorkspaceProfile::new([30., 10.], [10., 40.], 0., 5., Some(5.), 5.).unwrap();
+        let mut controller = Controller::default();
+        controller.apply_paper_profile(profile).unwrap();
+        let form = &controller.form;
+        assert_eq!(
+            [form.x, form.y, form.area_width, form.area_height],
+            [30., 10., 20., 30.]
+        );
+        assert_eq!([form.flip_x, form.flip_y], [true, true]);
+        assert_eq!([form.pen_up, form.pen_down], [0., 5.]);
+        controller.invalidate_calibration();
+        assert!(controller.paper.is_none());
+    }
+
+    #[test]
     fn full_writer_form_generates_preview_at_controlled_feed() {
         let form = Form::default();
         let command = source(&Action::Preview, &form, "").unwrap();
@@ -2000,21 +1984,6 @@ mod tests {
         assert!(!program.contains("G0"));
         assert!(program.contains("F300.000"));
         assert!(!preview_paths(&program, form.pen_up).unwrap().is_empty());
-    }
-
-    #[test]
-    fn ink_test_uses_two_dashes_and_ends_with_the_pen_up_inside_bounds() {
-        let bounds = MachineBounds {
-            min: [0., 0., -2.],
-            max: [5., 5., 2.],
-        };
-        let (trial, target) = ink_test(bounds, [5., 2., 1.], -1., 1.).unwrap();
-        assert_eq!(target, [0., 2., -1.]);
-        assert!(trial.contains("G1 X3.000 Y2.000"));
-        assert!(trial.contains("G0 X2.000 Y2.000"));
-        assert!(trial.contains("G0 Z-1.000"));
-        assert!(ink_test(bounds, [2., 2., 1.], -1., 1.).is_err());
-        assert!(ink_test(bounds, [5., 2., 0.], -1., 1.).is_err());
     }
 
     #[test]

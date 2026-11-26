@@ -219,7 +219,7 @@ static SPECS: &[Spec] = &[
     spec!("plotter.auto_bounds", false, ["timeout":I:false]),
     spec!("plotter.jog",false,["axis":T:true,"delta":N:true,"feed":N:false,"timeout":I:false]),
     spec!("plotter.pen",false,["z":N:true,"feed":N:false,"timeout":I:false]),
-    spec!("plotter.send",false,["program":T:true,"timeout":I:false]),
+    spec!("plotter.send",false,["program":T:true,"require_bounds":B:false,"timeout":I:false]),
     spec!("plotter.check",false,["program":T:true,"timeout":I:false]),
     spec!("serial.ports", true, []),
     spec!("serial.open",false,["path":T:true,"baud":I:false]),

@@ -242,6 +242,10 @@ impl WriterView {
         self.workspace = None;
         self.alignment = None;
         self.scroll_y = 0.;
+        self.mapping[2] = c.form.reference_units.to_string();
+        self.mapping[3] = c.form.reference_distance.to_string();
+        self.mapping[4] = c.form.area_width.to_string();
+        self.mapping[5] = c.form.area_height.to_string();
         self.geometry[3] = c.form.x.to_string();
         self.geometry[4] = c.form.y.to_string();
         self.geometry[6] = c.form.pen_up.to_string();
@@ -369,7 +373,7 @@ impl WriterView {
         let machine_height = if self.screen_mode {
             445.
         } else {
-            device_extra + if aligning { 370. } else { 657. }
+            device_extra + if aligning { 370. } else { 749. }
         };
         let (rx, right) = if wide {
             (pad + left + gap, width - left - gap)
@@ -741,25 +745,6 @@ impl WriterView {
             return;
         }
         f.heading("手动调节", x, y + 369.);
-        if f.button(
-            705,
-            Rect::new(x + w - 136., y + 361., 136., 32.),
-            "回到左上角",
-            false,
-            enabled,
-        ) {
-            let target = || -> Result<Action, String> {
-                Ok(Action::Park {
-                    x: number(&self.geometry[3], LABELS[3])?,
-                    y: number(&self.geometry[4], LABELS[4])?,
-                    up: number(&self.geometry[6], LABELS[6])?,
-                })
-            };
-            match target() {
-                Ok(action) => self.act(c, action),
-                Err(error) => self.notice = error,
-            }
-        }
         f.field(
             6,
             x,
@@ -821,24 +806,58 @@ impl WriterView {
                 );
             }
         }
-        for (i, label) in ["移至抬笔位", "移至落笔位"].into_iter().enumerate() {
-            if f.button(
-                23 + i as u64,
-                Rect::new(x + i as f32 * (half + 8.), y + 603., half, 34.),
-                label,
-                false,
-                enabled,
-            ) {
-                if let Ok(z) = number(&self.geometry[6 + i], LABELS[6 + i]) {
-                    if i == 0 {
-                        c.form.pen_up = z;
-                        self.act(c, Action::PenUp);
-                    } else {
-                        c.form.pen_down = z;
-                        self.act(c, Action::PenDown);
-                    }
-                } else {
-                    self.notice = "笔位需为有限的 Z 坐标。".into();
+        let paper_ready = enabled && c.paper.is_some();
+        {
+            let [a, b] = c
+                .paper
+                .as_ref()
+                .map_or([[0.; 2]; 2], |paper| [paper.corner_a, paper.corner_b]);
+            let up = c.paper.as_ref().map_or(0., |paper| paper.pen_up_z);
+            let down = c.paper.as_ref().map_or(0., |paper| paper.pen_down_z);
+            let positions = [
+                ("回到左上角", a),
+                ("回到右下角", b),
+                (
+                    "回到中心",
+                    std::array::from_fn(|i| f64::midpoint(a[i], b[i])),
+                ),
+            ];
+            for (index, (label, [target_x, target_y])) in positions.into_iter().enumerate() {
+                if f.button(
+                    705 + index as u64,
+                    Rect::new(x + index as f32 * (bw + 8.), y + 650., bw, 34.),
+                    label,
+                    false,
+                    paper_ready,
+                ) {
+                    self.act(
+                        c,
+                        Action::Park {
+                            x: target_x,
+                            y: target_y,
+                            up,
+                        },
+                    );
+                }
+            }
+            for (index, label) in ["抬笔", "落笔"].into_iter().enumerate() {
+                if f.button(
+                    23 + index as u64,
+                    Rect::new(x + index as f32 * (half + 8.), y + 695., half, 34.),
+                    label,
+                    false,
+                    paper_ready,
+                ) {
+                    c.form.pen_up = up;
+                    c.form.pen_down = down;
+                    self.act(
+                        c,
+                        if index == 0 {
+                            Action::PenUp
+                        } else {
+                            Action::PenDown
+                        },
+                    );
                 }
             }
         }
@@ -1226,7 +1245,7 @@ impl WriterView {
             Rect::new(x + third + 8., y + 548., third, 39.),
             "发送到写字机",
             true,
-            editing && c.connected() && !c.gcode.is_empty(),
+            editing && c.connected() && c.paper.is_some() && !c.gcode.is_empty(),
         ) {
             self.act(c, Action::Send);
         }

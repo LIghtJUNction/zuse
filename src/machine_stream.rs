@@ -1153,9 +1153,9 @@ pub(crate) fn park_connected<P: Port>(
     cancel: &Cancellation,
 ) -> Result<String> {
     bounds.require_generation(port.generation())?;
-    let [x, y, z] = target.map(|value| (value * 1000.).round() / 1000.);
+    let [x, y, z] = target;
     let program = plotter_lines(&format!(
-        "G21 G90 G94\nG1 Z{z:.3} F{feed:.3}\nG1 X{x:.3} Y{y:.3} F{feed:.3}\n"
+        "G21 G90 G94\nG1 Z{z:.9} F{feed:.3}\nG1 X{x:.9} Y{y:.9} F{feed:.3}\n"
     ))?;
     let tolerance = {
         let mut connection = Connection {
@@ -1177,7 +1177,14 @@ pub(crate) fn park_connected<P: Port>(
         }
         tolerance
     };
-    transmit(port, &program, end, cancel, Some(bounds))?;
+    transmit_inner(
+        port,
+        &program,
+        end,
+        cancel,
+        Some(bounds),
+        Some((z, tolerance[2])),
+    )?;
     let mut connection = Connection {
         port,
         end,
@@ -1262,6 +1269,17 @@ fn transmit<P: Port>(
     cancel: &Cancellation,
     bounds: Option<&Workspace>,
 ) -> Result<usize> {
+    transmit_inner(port, lines, end, cancel, bounds, None)
+}
+
+fn transmit_inner<P: Port>(
+    port: &mut P,
+    lines: &[String],
+    end: Instant,
+    cancel: &Cancellation,
+    bounds: Option<&Workspace>,
+    verify_lift_before_xy: Option<(f64, f64)>,
+) -> Result<usize> {
     let mut c = Connection {
         port,
         end,
@@ -1281,6 +1299,18 @@ fn transmit<P: Port>(
     let stream = (|| {
         for (i, line) in lines.iter().enumerate() {
             cancel.check()?;
+            if i == 2
+                && let Some((expected, tolerance)) = verify_lift_before_xy
+            {
+                c.idle(false)?;
+                let pose = c.idle_pose(true)?;
+                if (pose.work[2] - expected).abs() > tolerance {
+                    return Err("pen lift could not be verified; XY move was not sent".into());
+                }
+                if let Some(guard) = bounds {
+                    guard.verify(&id, &pose)?;
+                }
+            }
             if let Some(guard) = bounds {
                 guard.require_generation(c.port.generation())?;
             }
@@ -1455,14 +1485,14 @@ mod tests {
         mock.expect("$I\n", &[GRBL_ID]);
         mock.expect("$$\n", &["$13=0\nok\n"]);
         mock.expect("?", &[ORIGIN]);
-        for line in [
-            "G94\n",
-            "G21G90G94\n",
-            "G1Z3.000F300.000\n",
-            "G1X4.004Y2.000F300.000\n",
-        ] {
+        for line in ["G94\n", "G21G90G94\n", "G1Z3.000000000F300.000\n"] {
             mock.expect(line, &["ok\n"]);
         }
+        let lifted = "<Idle|MPos:1,1,3|WCO:0,0,0>\n";
+        mock.expect("?", &[lifted]);
+        mock.expect("$$\n", &["$13=0\nok\n"]);
+        mock.expect("?", &[lifted]);
+        mock.expect("G1X4.004000000Y2.000000000F300.000\n", &["ok\n"]);
         let arrived = "<Idle|MPos:4,2,3|WCO:0,0,0>\n";
         mock.expect("?", &[arrived]);
         mock.expect("$$\n", &["$13=0\nok\n"]);

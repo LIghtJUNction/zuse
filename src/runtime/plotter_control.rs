@@ -52,6 +52,7 @@ enum Action {
     Program {
         lines: Vec<String>,
         check: bool,
+        require_bounds: bool,
     },
 }
 
@@ -172,6 +173,7 @@ impl Command {
                     Action::Program {
                         lines,
                         check: call.name == "plotter.check",
+                        require_bounds: boolean(call, "require_bounds", false),
                     },
                     30000,
                 )
@@ -363,7 +365,14 @@ pub(super) fn execute(
             )?;
             format!(r#"{{"state":"Idle","z_mm":{z},"feed_mm_min":{feed}}}"#)
         }
-        Action::Program { lines, check } => {
+        Action::Program {
+            lines,
+            check,
+            require_bounds,
+        } => {
+            if require_bounds && device.bounds.is_none() {
+                return Err("writing requires installed paper bounds; no motion sent".into());
+            }
             let count = machine_stream::program_connected(
                 &mut device.port,
                 &lines,

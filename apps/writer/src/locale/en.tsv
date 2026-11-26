@@ -138,3 +138,16 @@
 记录右下角	Record bottom right
 分别记录纸张左上角、右下角的 XY，以及 Z 上下端。	Record the top-left and bottom-right XY coordinates, then the two Z endpoints.
 已根据左上角和右下角预选方向，可按纸面校对。	The corners determine the axis direction. Check it against the paper.
+
+纸面与装笔校准	Paper and pen calibration
+1 / 3  记录左上角	1 / 3  Record top left
+2 / 3  记录右下角	2 / 3  Record bottom right
+3 / 3  装笔	3 / 3  Fit the pen
+载入已保存的校准	Load saved calibration
+重新记录左上角	Record top left again
+确认原点，使用档案	Confirm origin and use calibration
+已装笔，保存校准	Pen fitted · Save calibration
+回到右下角	Bottom right
+回到中心	Center
+抬笔	Raise pen
+落笔	Lower pen
