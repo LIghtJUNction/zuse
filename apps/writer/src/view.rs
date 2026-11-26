@@ -219,7 +219,19 @@ impl WriterView {
     pub fn needs_tick(&self) -> bool {
         (self.screen_mode && self.screen_output.needs_tick())
             || self.fonts.as_ref().is_some_and(FontPicker::pending)
+            || self
+                .workspace
+                .as_ref()
+                .is_some_and(WorkspaceWizard::holding)
     }
+    pub fn calibration_pointer(&mut self, event: &Event, c: &Controller) {
+        if self.alignment.is_none()
+            && let Some(workspace) = &mut self.workspace
+        {
+            workspace.pointer(event, c.connected() && !c.busy() && !workspace.pending());
+        }
+    }
+
     pub fn screen(&self) -> (bool, bool, bool) {
         (
             self.workspace.is_some(),

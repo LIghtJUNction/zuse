@@ -1,6 +1,7 @@
 use crate::controller::{Controller, MachineBounds, MountAction};
 use crate::workspace_profile::{Binding, WorkspaceProfile, load_profile, save_profile};
-use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
+use std::time::{Duration, Instant};
+use zgpui::native::{ButtonStyle, Canvas, Event, Rect, Ui};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Step {
@@ -23,6 +24,20 @@ enum Request {
     Applied { restore: bool },
 }
 
+#[derive(Clone, Copy)]
+struct JogButton {
+    area: Rect,
+    axis: char,
+    sign: f64,
+}
+
+struct Hold {
+    button: JogButton,
+    armed_at: Instant,
+    repeated: bool,
+    stopped: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct WorkspaceWizard {
     step: Step,
@@ -33,6 +48,10 @@ pub(crate) struct WorkspaceWizard {
     plan: Option<WorkspaceProfile>,
     pending: Option<(u64, Request)>,
     jog_index: usize,
+    jog_feed: Option<String>,
+    jog_buttons: Vec<JogButton>,
+    hold: Option<Hold>,
+    suppress_click: bool,
     notice: String,
 }
 
@@ -57,11 +76,88 @@ fn fitted(plan: &WorkspaceProfile, work: [f64; 3]) -> bool {
 
 impl WorkspaceWizard {
     pub(crate) fn height(&self, _width: f32) -> f32 {
-        530.
+        565.
     }
 
     pub(crate) fn pending(&self) -> bool {
         self.pending.is_some()
+    }
+
+    pub(crate) fn holding(&self) -> bool {
+        self.hold.as_ref().is_some_and(|hold| !hold.stopped)
+    }
+
+    pub(crate) fn pointer(&mut self, event: &Event, ready: bool) {
+        match *event {
+            Event::Down(x, y) if ready => {
+                self.hold = self
+                    .jog_buttons
+                    .iter()
+                    .find(|button| button.area.contains(x, y))
+                    .map(|button| Hold {
+                        button: *button,
+                        armed_at: Instant::now(),
+                        repeated: false,
+                        stopped: false,
+                    });
+            }
+            Event::Up(..) => {
+                self.suppress_click = self
+                    .hold
+                    .take()
+                    .is_some_and(|hold| hold.repeated || hold.stopped);
+            }
+            Event::Move(x, y) => {
+                if let Some(hold) = &mut self.hold
+                    && !hold.button.area.contains(x, y)
+                {
+                    hold.stopped = true;
+                }
+            }
+            Event::Scroll(_) | Event::Resize | Event::Close => {
+                if let Some(hold) = &mut self.hold {
+                    hold.stopped = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn jog_feed(&self) -> Result<f64, String> {
+        self.jog_feed
+            .as_deref()
+            .unwrap_or("300")
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|speed| (40. ..=500.).contains(speed))
+            .ok_or_else(|| "XY 点动速度需为 40–500 mm/min。".into())
+    }
+
+    fn repeat_jog(&mut self, ready: bool, c: &mut Controller) {
+        let speed = self.jog_feed();
+        let Some(hold) = &mut self.hold else { return };
+        let elapsed = hold.armed_at.elapsed();
+        if elapsed >= Duration::from_secs(12) {
+            hold.stopped = true;
+        }
+        if !ready || hold.stopped || elapsed < Duration::from_millis(280) {
+            return;
+        }
+        hold.repeated = true;
+        let feed = match speed {
+            Ok(feed) => feed,
+            Err(error) => {
+                hold.stopped = true;
+                self.notice = error;
+                return;
+            }
+        };
+        let token = c.jog_calibration(hold.button.axis, hold.button.sign * 2., feed);
+        if token.is_none() {
+            hold.stopped = true;
+        }
+        self.request(token, Request::Jog, c);
     }
 
     fn request(&mut self, token: Option<u64>, request: Request, c: &Controller) {
@@ -211,7 +307,12 @@ impl WorkspaceWizard {
         {
             match self.receive(token, request, c) {
                 Ok(done) => return done,
-                Err(error) => self.notice = error,
+                Err(error) => {
+                    if let Some(hold) = &mut self.hold {
+                        hold.stopped = true;
+                    }
+                    self.notice = error;
+                }
             }
         }
         None
@@ -292,7 +393,14 @@ impl WorkspaceWizard {
         if let Some(message) = self.poll(c) {
             return Outcome::Done(message);
         }
+        let corner = matches!(self.step, Step::TopLeft | Step::BottomRight);
+        self.jog_buttons.clear();
         let ready = !closing && c.connected() && !c.busy() && !self.pending();
+        if corner {
+            self.repeat_jog(ready, c);
+        }
+        let ready = ready && !self.pending();
+        let suppress_click = std::mem::take(&mut self.suppress_click);
         let mut panel = Panel { canvas, ui, area };
         panel.text("纸面与装笔校准", 0., 23, true);
         let title = match self.step {
@@ -328,22 +436,37 @@ impl WorkspaceWizard {
                     for (row, sign) in [1., -1.].into_iter().enumerate() {
                         let delta = sign * STEPS[self.jog_index];
                         let label = format!("{axis} {}", if sign > 0. { "+" } else { "−" });
-                        if panel.pair(
-                            1020 + (index * 2 + row) as u64,
-                            211. + row as f32 * 46.,
-                            index,
-                            &label,
-                            false,
-                            ready,
-                        ) {
-                            let token = c.jog_calibration(axis, delta);
-                            self.request(token, Request::Jog, c);
+                        let area = panel.cell(211. + row as f32 * 46., index, 2, 38.);
+                        self.jog_buttons.push(JogButton { area, axis, sign });
+                        if panel.button(1020 + (index * 2 + row) as u64, area, &label, false, ready)
+                            && !suppress_click
+                        {
+                            match self.jog_feed() {
+                                Ok(feed) => {
+                                    let token = c.jog_calibration(axis, delta, feed);
+                                    self.request(token, Request::Jog, c);
+                                }
+                                Err(error) => self.notice = error,
+                            }
                         }
                     }
                 }
+                panel.report("按住方向键连续点动，松开或移出按钮即停止续发。", 304.);
+                panel.text("XY 点动速度 · mm/min", 334., 14, false);
+                let speed_rect = panel.cell(355., 0, 2, 34.);
+                panel.ui.input(
+                    panel.canvas,
+                    1044,
+                    speed_rect,
+                    self.jog_feed.get_or_insert_with(|| "300".into()),
+                    "40–500",
+                    false,
+                    ready,
+                );
+
                 if panel.pair(
                     1041,
-                    321.,
+                    405.,
                     1,
                     if first {
                         "记录左上角"
@@ -356,13 +479,13 @@ impl WorkspaceWizard {
                     self.read(Request::Corner(usize::from(!first)), c);
                 }
                 if first {
-                    if panel.pair(1040, 321., 0, "载入已保存的校准", false, ready) {
+                    if panel.pair(1040, 405., 0, "载入已保存的校准", false, ready) {
                         self.read(Request::Load, c);
                     }
-                    if panel.pair(1042, 369., 0, "单独对笔", false, ready) {
+                    if panel.pair(1042, 451., 0, "单独对笔", false, ready) {
                         return Outcome::Secondary;
                     }
-                } else if panel.pair(1043, 321., 0, "重新记录左上角", false, ready) {
+                } else if panel.pair(1043, 405., 0, "重新记录左上角", false, ready) {
                     *self = Self::default();
                 }
             }
@@ -414,8 +537,34 @@ impl WorkspaceWizard {
             } else {
                 &self.notice
             },
-            419.,
+            510.,
         );
         Outcome::Stay
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hold_is_disarmed_on_pointer_exit_and_release_does_not_add_a_click() {
+        let mut wizard = WorkspaceWizard {
+            jog_buttons: vec![JogButton {
+                area: Rect::new(0., 0., 40., 30.),
+                axis: 'X',
+                sign: 1.,
+            }],
+            ..WorkspaceWizard::default()
+        };
+        wizard.pointer(&Event::Down(5., 5.), true);
+        assert!(wizard.holding());
+        wizard.pointer(&Event::Move(42., 5.), false);
+        assert!(!wizard.holding());
+        wizard.pointer(&Event::Up(5., 5.), true);
+        assert!(wizard.suppress_click);
+        wizard.pointer(&Event::Down(5., 5.), true);
+        wizard.pointer(&Event::Up(5., 5.), true);
+        assert!(!wizard.suppress_click);
     }
 }

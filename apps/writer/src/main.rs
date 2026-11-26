@@ -106,6 +106,7 @@ fn main() -> Result<(), String> {
                 )
             || status != controller.status;
         if let Some(input) = event.as_ref() {
+            view.calibration_pointer(input, &controller);
             let (_, height) = window.size();
             if view.article_input(input, &mut ui, height) {
                 event = None;

@@ -153,7 +153,7 @@ pub struct MachineBounds {
 pub enum MountAction {
     Status,
     MoveZ(f64),
-    Jog { axis: char, delta: f64 },
+    Jog { axis: char, delta: f64, feed: f64 },
     ApplyBounds(MachineBounds),
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -174,7 +174,7 @@ impl MountAction {
                 Ok(format!("plotter.pen(z={z},feed=40,timeout=300000)"))
             }
             Self::MoveZ(_) => Err("安装高度必须是有效的毫米工作坐标".into()),
-            Self::Jog { axis, delta } => {
+            Self::Jog { axis, delta, feed } => {
                 let axis = axis.to_ascii_lowercase();
                 let limit = match axis {
                     'x' | 'y' => 10.,
@@ -184,8 +184,11 @@ impl MountAction {
                 if !delta.is_finite() || !(0.001..=limit).contains(&delta.abs()) {
                     return Err(format!("该轴每次点动限 0.001–{limit} mm"));
                 }
+                if !(40. ..=500.).contains(&feed) || (axis == 'z' && feed != 40.) {
+                    return Err("点动速度需为 40–500 mm/min".into());
+                }
                 Ok(format!(
-                    "plotter.jog(axis=\"{axis}\",delta={delta},feed=40,timeout=20000)"
+                    "plotter.jog(axis=\"{axis}\",delta={delta},feed={feed},timeout=20000)"
                 ))
             }
             Self::ApplyBounds(bounds) => {
@@ -993,7 +996,7 @@ fn mount_job(
             }
             target[2] = z;
         }
-        MountAction::Jog { axis, delta } => {
+        MountAction::Jog { axis, delta, .. } => {
             let i = match axis.to_ascii_uppercase() {
                 'X' => 0,
                 'Y' => 1,
@@ -1237,11 +1240,12 @@ impl Controller {
             self.link.as_ref().and_then(|d| d.offset),
         )
     }
-    pub fn jog_calibration(&mut self, axis: char, delta: f64) -> Option<u64> {
+    pub fn jog_calibration(&mut self, axis: char, delta: f64, feed: f64) -> Option<u64> {
         self.dispatch_mount(
             MountAction::Jog {
                 axis: axis.to_ascii_uppercase(),
                 delta,
+                feed,
             },
             self.link.as_ref().and_then(|d| d.offset),
         )
@@ -2385,12 +2389,20 @@ mod tests {
     #[test]
     fn teaching_jogs_use_one_linear_axis_and_the_calibration_feed() {
         for (axis, delta) in [('x', -10.), ('Y', 0.001), ('z', 0.5)] {
-            let p = MountAction::Jog { axis, delta }
+            let feed = if axis.eq_ignore_ascii_case(&'z') {
+                40.
+            } else {
+                300.
+            };
+            let p = MountAction::Jog { axis, delta, feed }
                 .program(None, None)
                 .unwrap();
             assert!(
-                p.contains("feed=40")
-                    && p.contains(&format!("axis=\"{}\"", axis.to_ascii_lowercase()))
+                p.contains(if axis.eq_ignore_ascii_case(&'z') {
+                    "feed=40"
+                } else {
+                    "feed=300"
+                }) && p.contains(&format!("axis=\"{}\"", axis.to_ascii_lowercase()))
             );
         }
         for (axis, delta) in [
@@ -2401,9 +2413,13 @@ mod tests {
             ('z', 0.),
         ] {
             assert!(
-                MountAction::Jog { axis, delta }
-                    .program(None, None)
-                    .is_err()
+                MountAction::Jog {
+                    axis,
+                    delta,
+                    feed: 40.
+                }
+                .program(None, None)
+                .is_err()
             );
         }
         assert!(
