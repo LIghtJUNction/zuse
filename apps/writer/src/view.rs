@@ -1,8 +1,8 @@
 use crate::alignment::Alignment;
-use crate::article::Article;
+use crate::article::{Article, ArticleAction};
 use crate::controller::{Action, Controller, Form};
 use crate::devices::{self, DeviceCandidate};
-use crate::font_picker::FontPicker;
+use crate::font_picker::{FontNames, FontPicker};
 use crate::kuixiang_selector::{Choice, Menu};
 use crate::screen_output::ScreenOutput;
 use crate::workspace_wizard::{Outcome, WorkspaceWizard};
@@ -30,6 +30,7 @@ pub struct WriterView {
     mapping: [String; 12],
     advanced: bool,
     fonts: Option<FontPicker>,
+    font_names: FontNames,
     article: Option<Article>,
     choose_direction: bool,
     dark: bool,
@@ -182,6 +183,7 @@ impl WriterView {
             .map(|v| v.to_string()),
             advanced: false,
             fonts: None,
+            font_names: FontNames::current(),
             article: None,
             choose_direction: false,
             dark: false,
@@ -377,10 +379,14 @@ impl WriterView {
             let width = (w - 32.).min(940.);
             let area = Rect::new((w - width) / 2., 24., width, h - 32.);
             canvas.rect(area.inset(-8.), 12., colors::SURFACE);
-            if article.draw(canvas, ui, area) {
-                c.form.text = self.article.take().expect("open article").finish();
-                self.dirty(c);
-                self.screen_output.deactivate();
+            match article.draw(canvas, ui, area) {
+                Some(ArticleAction::Apply) => {
+                    c.form.text = self.article.take().expect("open article").finish();
+                    self.dirty(c);
+                    self.screen_output.deactivate();
+                }
+                Some(ArticleAction::Discard) => self.article = None,
+                None => {}
             }
             return;
         }
@@ -391,6 +397,7 @@ impl WriterView {
             frame.canvas.rect(area.inset(-8.), 12., colors::SURFACE);
             let previous = c.form.font.clone();
             if picker.draw(&mut frame, area, &mut c.form) {
+                self.font_names = std::mem::take(&mut picker.names);
                 self.fonts = None;
             }
             if previous != c.form.font {
@@ -1295,13 +1302,9 @@ impl WriterView {
             );
         } else {
             f.caption("字体", font_x, font_y);
-            let font_label = if c.form.font == "builtin" {
-                crate::locale::text("内置字体")
-            } else {
-                &c.form.font
-            };
+            let font_label = self.font_names.stack(&c.form.font);
             f.canvas.ellipsis(
-                font_label,
+                &font_label,
                 font_x,
                 font_y + 29.,
                 (font_w - library_w - 8.).max(0.),

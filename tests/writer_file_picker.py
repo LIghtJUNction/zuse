@@ -81,7 +81,7 @@ def click_label(label):
     try:pt=wait(lambda:search_label(label),timeout=20)
     except AssertionError as e:raise AssertionError(f"Could not find {label!r} in Writer: {last_ocr}") from e
     click(*pt)
-def article_toolbar(apply=False):
+def article_toolbar(apply=False, discard=False):
     # Derive the editor toolbar from the actual native
     # window geometry and the same responsive maximum (940 logical px) as WriterView::draw.
     # A native dialog title/result or the application-applied text independently verifies every click.
@@ -90,7 +90,14 @@ def article_toolbar(apply=False):
     bx=left+panel_width-122 if apply else left
     by=22 if apply else 68
     bw=122 if apply else 128
-    img=dest/("article-apply-button.png" if apply else "article-open-button.png")
+    action="apply" if apply else "open"
+    if discard:
+        action="discard"
+        # This quiet button ends at the right of the Open row on small windows,
+        # or 8px to the left of Apply on the regular action row.
+        edge=left+panel_width-(0 if panel_width<470 else 130)
+        bw=128;bx=edge-bw;by=68 if panel_width<470 else 22
+    img=dest/f"article-{action}-button.png"
     cmd("import","-window",wid,"-crop",f"{bw}x34+{bx}+{by}",img)
     proc=subprocess.Popen(["convert",str(img),"-resize","350%","-colorspace","Gray","png:-"],stdout=subprocess.PIPE)
     try:
@@ -130,6 +137,10 @@ try:
     click_label("Choose font file");choose_file("Choose font file",font)
     click_label("Import custom font");wait(lambda:len(listing())==3)
     assert name+"-2" in listing() and (d/"fonts"/(name+".zfont")).read_bytes()==original
+    for alias, expected in [(name, "样本-行楷"), (name+"-2", "样本-行楷（2）")]:
+        metadata = d/"fonts"/".writer-names"/alias
+        wait(lambda: metadata.is_file() and metadata.read_text(encoding="utf-8").splitlines()[-1] == expected)
+    proof("writer-font-names.png")
     stamp(dict(alias=name,duplicate=name+"-2",original_sha256=hashlib.sha256(original).hexdigest()))
     click_label("Workspace");click_label("Edit article")
     article_toolbar();choose_file("Open a UTF-8 text file",article)
@@ -141,7 +152,13 @@ try:
     click_label("Edit article")
     assert copied_draft()=="A\nA\n", "re-opening the form did not restore the applied text"
     proof("writer-article-applied.png")
-    stamp("article: real picker, exact multiline UTF-8, Apply, workspace return and re-open verified")
+    key("ctrl+a");x("type","--clearmodifiers","--delay","20","do-not-save")
+    assert copied_draft()=="do-not-save", "the discarded draft was never edited"
+    article_toolbar(discard=True)
+    wait(lambda:search_label("Choose font"),timeout=16)
+    click_label("Edit article")
+    assert copied_draft()=="A\nA\n", "discarding the new draft altered the applied article"
+    stamp("article: real picker, application and explicit discard verified by reopening the actual form")
 except BaseException:
     if "wid" in globals():proof("failure.png")
     cmd("import","-window","root",dest/"failure-desktop.png")

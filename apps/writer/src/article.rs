@@ -5,6 +5,11 @@ use zgpui::native::{ButtonStyle, Canvas, Event, Rect, Ui, colors};
 
 const MAX_BYTES: usize = 1024 * 1024;
 
+pub(crate) enum ArticleAction {
+    Apply,
+    Discard,
+}
+
 pub(crate) struct Article {
     draft: String,
     cursor: usize,
@@ -188,7 +193,12 @@ impl Article {
             .count()
     }
 
-    pub(crate) fn draw(&mut self, canvas: &mut Canvas<'_>, ui: &mut Ui, area: Rect) -> bool {
+    pub(crate) fn draw(
+        &mut self,
+        canvas: &mut Canvas<'_>,
+        ui: &mut Ui,
+        area: Rect,
+    ) -> Option<ArticleAction> {
         let Rect { x, y, w, h } = area;
         canvas.text(text("编辑文章"), x, y, 25, true, colors::TEXT);
         self.poll_file();
@@ -204,11 +214,17 @@ impl Article {
             self.dialog = Some(FileDialog::open(FileKind::Text, "选择 UTF-8 文本文件"));
             self.notice.clear();
         }
+        let compact = w < 470.;
+        let (notice_x, notice_y, notice_width) = if compact {
+            (x, y + h - 16., w)
+        } else {
+            (x + 140., y + 51., (w - 140.).max(1.))
+        };
         canvas.ellipsis(
             &self.notice,
-            x + 140.,
-            y + 51.,
-            (w - 140.).max(1.),
+            notice_x,
+            notice_y,
+            notice_width,
             13,
             false,
             colors::MUTED,
@@ -249,14 +265,25 @@ impl Article {
             }
         }
         canvas.unclip();
-        ui.button(
+        if ui.button(
             canvas,
             710,
             Rect::new(x + w - 122., y - 2., 122., 34.),
             text("应用文章"),
             ButtonStyle::Primary,
             !self.pending(),
-        )
+        ) {
+            return Some(ArticleAction::Apply);
+        }
+        let label = text("放弃更改");
+        let width = (canvas.measure(label, 15, false) + 24.).min(w - 140.);
+        let discard = if compact {
+            Rect::new(x + w - width, y + 44., width, 34.)
+        } else {
+            Rect::new(x + w - 130. - width, y - 2., width, 34.)
+        };
+        ui.button(canvas, 712, discard, label, ButtonStyle::Quiet, true)
+            .then_some(ArticleAction::Discard)
     }
 
     pub(crate) fn reveal_cursor(&mut self, height: f32) {

@@ -1,7 +1,10 @@
+mod names;
+
 use crate::controller::Form;
 use crate::file_dialog::{FileDialog, FileKind};
 use crate::view::Frame;
-use std::path::Path;
+pub(crate) use names::FontNames;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use zgpui::native::Rect;
 
@@ -9,7 +12,25 @@ const PER_PAGE: usize = 8;
 
 enum Installed {
     Official,
-    Local(String),
+    Local {
+        alias: String,
+        display: Result<String, String>,
+    },
+}
+
+fn catalog() -> Result<(PathBuf, Vec<String>), String> {
+    let listing = zuse::font_store::cli(&["list"])?;
+    let dir = zuse::json::field(&listing, "directory")?;
+    let fonts = super::view::choices(&listing, "fonts")?;
+    Ok((PathBuf::from(dir), fonts))
+}
+
+impl FontNames {
+    pub(crate) fn current() -> Self {
+        catalog()
+            .map(|(dir, fonts)| Self::from_dir(&dir, &fonts))
+            .unwrap_or_default()
+    }
 }
 
 fn is_gfont(path: &str) -> bool {
@@ -85,11 +106,16 @@ fn import_local(name: String, path: String, text: Option<String>) -> Result<Inst
     } else {
         zuse::font_store::cli(&["add", &name, &path])?;
     }
-    Ok(Installed::Local(name))
+    let display = catalog().and_then(|(dir, _)| names::save(&dir, &name, Path::new(&path)));
+    Ok(Installed::Local {
+        alias: name,
+        display,
+    })
 }
 
 pub(crate) struct FontPicker {
     fonts: Vec<String>,
+    pub(crate) names: FontNames,
     page: usize,
     path: String,
     name: String,
@@ -108,6 +134,7 @@ impl FontPicker {
     pub(crate) fn new(current: &str) -> Self {
         let mut picker = Self {
             fonts: Vec::new(),
+            names: FontNames::default(),
             page: 0,
             path: String::new(),
             name: String::new(),
@@ -126,10 +153,9 @@ impl FontPicker {
     }
 
     fn refresh(&mut self) {
-        match zuse::font_store::cli(&["list"])
-            .and_then(|value| super::view::choices(&value, "fonts"))
-        {
-            Ok(fonts) => {
+        match catalog() {
+            Ok((dir, fonts)) => {
+                self.names = FontNames::from_dir(&dir, &fonts);
                 self.fonts = fonts;
                 self.page = self.page.min(self.pages() - 1);
             }
@@ -174,21 +200,22 @@ impl FontPicker {
         };
         self.notice = match receiver.try_recv() {
             Ok(Ok(Installed::Official)) => "官方字体集已就绪。".into(),
-            Ok(Ok(Installed::Local(name))) => {
-                form.font.clone_from(&name);
-                format!(
-                    "已导入 {} · {name}",
-                    Path::new(&self.path)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                )
+            Ok(Ok(Installed::Local { alias, display })) => {
+                form.font.clone_from(&alias);
+                match display {
+                    Ok(name) => format!("已导入 {name}"),
+                    Err(error) => format!("字体已安装为 {alias}，显示名称未保存：{error}"),
+                }
             }
             Ok(Err(error)) => {
                 self.refresh();
                 if self.fonts.contains(&self.name) && !self.path.is_empty() {
                     self.name = suggest_alias(&self.path, &self.fonts);
-                    format!("名称已使用。可用「{}」导入，已有字体会保留。", self.name)
+                    if self.manual {
+                        format!("名称已使用。可用「{}」导入，已有字体会保留。", self.name)
+                    } else {
+                        "原字体已保留。再次点击导入可添加另一份。".into()
+                    }
                 } else {
                     format!("导入失败，请检查文件格式、名称及读取权限。{error}")
                 }
@@ -208,11 +235,12 @@ impl FontPicker {
         let pager_top = 162. + 36. * self.fonts.len().min(PER_PAGE) as f32;
         let input_top = pager_top + 50.;
         let name_top = input_top + if self.manual { 100. } else { 42. };
+        let import_top = name_top + if self.manual { 21. } else { 0. };
         let gfont = is_gfont(self.path.trim());
         let notice_top = if self.path.is_empty() && !self.manual {
             input_top + 42.
         } else {
-            name_top + if gfont { 118. } else { 72. }
+            import_top + if gfont { 90. } else { 47. }
         };
         self.max_scroll = (notice_top + 30. - h).max(0.);
         self.scroll_y = if std::mem::take(&mut self.reveal_selection) {
@@ -280,7 +308,12 @@ impl FontPicker {
                     .truncate(form.font.find(',').unwrap_or(form.font.len()));
             }
         }
-        frame.note(&format!("当前字体  {}", form.font), x, y + 130., w);
+        frame.note(
+            &format!("当前字体  {}", self.names.stack(&form.font)),
+            x,
+            y + 130.,
+            w,
+        );
         for (i, name) in self
             .fonts
             .iter()
@@ -291,10 +324,11 @@ impl FontPicker {
             let selected = form.font.split(',').any(|entry| entry.trim() == name);
             let id = 610 + i as u64;
             let row = Rect::new(x, y + 159. + i as f32 * 36., w, 32.);
+            let display = self.names.label(name);
             let clicked = if selected {
-                frame.button(id, row, &format!("✓  {name}"), false, true)
+                frame.button(id, row, &format!("✓  {display}"), false, true)
             } else {
-                frame.quiet_button(id, row, name, true)
+                frame.quiet_button(id, row, display, true)
             };
             if clicked {
                 if !self.mixed {
@@ -383,19 +417,26 @@ impl FontPicker {
             return false;
         }
         let import_width = frame.button_width("导入自定义字体").max(128.).min(w - 48.);
-        frame.field(
-            631,
-            x,
-            y + name_top,
-            (w - import_width - 8.).max(24.),
-            "保存名称（自动生成）",
-            &mut self.name,
-            "local-font",
-            can_import,
-        );
+        if self.manual {
+            frame.field(
+                631,
+                x,
+                y + name_top,
+                (w - import_width - 8.).max(24.),
+                "保存名称（自动生成）",
+                &mut self.name,
+                "local-font",
+                can_import,
+            );
+        }
         if frame.button(
             632,
-            Rect::new(x + w - import_width, y + name_top + 21., import_width, 34.),
+            Rect::new(
+                if self.manual { x + w - import_width } else { x },
+                y + import_top,
+                import_width,
+                34.,
+            ),
             "导入自定义字体",
             false,
             !self.pending() && !self.name.trim().is_empty() && !self.path.trim().is_empty(),
@@ -415,7 +456,7 @@ impl FontPicker {
         if gfont
             && frame.button(
                 633,
-                Rect::new(x, y + name_top + 68., subset_width, 32.),
+                Rect::new(x, y + import_top + 43., subset_width, 32.),
                 "仅导入当前文章用字",
                 self.article_only,
                 !self.pending() && !form.text.trim().is_empty(),
