@@ -30,6 +30,7 @@ pub struct Form {
     pub y: f64,
     pub area_width: f64,
     pub area_height: f64,
+    pub margins: [f64; 4],
     pub offset_x: f64,
     pub offset_y: f64,
     pub tilt_degrees: f64,
@@ -57,8 +58,9 @@ impl Default for Form {
             line_height: 15.,
             x: 0.,
             y: 0.,
-            area_width: 0.,
-            area_height: 0.,
+            area_width: 150.,
+            area_height: 200.,
+            margins: [5.; 4],
             offset_x: 3.5,
             offset_y: 3.5,
             tilt_degrees: 3.,
@@ -242,7 +244,7 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
     let text = match action {
         Action::Screen(screen) => screen.source.clone(),
         Action::Preview => format!(
-            "write.gcode(text={},font={},size={},advance={},line_height={},area_width={},area_height={},x={},y={},offset_x_ratio={},offset_y_ratio={},tilt_degrees={},size_ratio={},reference_units={},reference_distance={},swap_xy={},flip_x={},flip_y={},seed={},pen_up={},pen_down={},feed={})",
+            "write.gcode(text={},font={},size={},advance={},line_height={},area_width={},area_height={},margin_left={},margin_top={},margin_right={},margin_bottom={},x={},y={},offset_x_ratio={},offset_y_ratio={},tilt_degrees={},size_ratio={},reference_units={},reference_distance={},swap_xy={},flip_x={},flip_y={},seed={},pen_up={},pen_down={},feed={feed},travel_feed={feed},lift_feed={feed})",
             quote(&f.text),
             quote(&f.font),
             f.size,
@@ -250,6 +252,10 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
             f.line_height,
             f.area_width,
             f.area_height,
+            f.margins[0],
+            f.margins[1],
+            f.margins[2],
+            f.margins[3],
             f.x,
             f.y,
             f.offset_x / 100.,
@@ -264,7 +270,7 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
             f.seed,
             f.pen_up,
             f.pen_down,
-            f.feed
+            feed = f.feed
         ),
         Action::Connect => format!("plotter.connect(port={},baud={})", quote(&f.port), f.baud),
         Action::Refresh => "plotter.status()".into(),
@@ -309,26 +315,35 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
 
 // Consume only output from write.gcode. Render the exact rounded machine vertices
 // from the immutable export, even if the source font is subsequently edited.
-fn preview_paths(program: &str) -> Result<Strokes> {
+fn preview_paths(program: &str, pen_up: f64) -> Result<Strokes> {
+    let pen_up = format!("{pen_up:.3}")
+        .parse::<f64>()
+        .map_err(|_| "抬笔高度无效")?;
     let mut strokes = Vec::new();
     let mut next = None;
     let mut drawing = false;
     for line in program.lines() {
-        if line.starts_with("G0 Z") {
-            drawing = false;
-            continue;
-        }
-        if line.starts_with("G1 Z") {
-            let start = next.take().ok_or("落笔前缺少 XY 起点")?;
-            strokes.push(vec![start]);
-            drawing = true;
+        if let Some(z) = line
+            .strip_prefix("G0 Z")
+            .or_else(|| line.strip_prefix("G1 Z"))
+        {
+            let target = z
+                .split_ascii_whitespace()
+                .next()
+                .and_then(|v| v.parse::<f64>().ok())
+                .ok_or("笔高无效")?;
+            drawing = target != pen_up;
+            if drawing {
+                let start = next.take().ok_or("落笔前缺少 XY 起点")?;
+                strokes.push(vec![start]);
+            }
             continue;
         }
         if matches!(line, "G21 G17 G90 G94" | "M2") {
             continue;
         }
         let words: Vec<_> = line.split_ascii_whitespace().collect();
-        if let [motion, x, y] = words.as_slice() {
+        if let [motion, x, y, ..] = words.as_slice() {
             let xy = |s: &str, axis| {
                 s.strip_prefix(axis)
                     .and_then(|v| v.parse::<f64>().ok())
@@ -337,7 +352,7 @@ fn preview_paths(program: &str) -> Result<Strokes> {
             };
             let pt = (xy(x, 'X')?, xy(y, 'Y')?);
             match *motion {
-                "G0" if !drawing => {
+                "G0" | "G1" if !drawing => {
                     next = Some(pt);
                     continue;
                 }
@@ -1557,7 +1572,7 @@ impl Controller {
                     return Err("预览期间参数已变化，请重新生成".into());
                 }
                 let code = json::field(payload, "gcode")?;
-                let paths = preview_paths(&code)?;
+                let paths = preview_paths(&code, f.pen_up)?;
                 let msg = format!("预览 · {} 笔 · seed {}", paths.len(), f.seed);
                 self.plan = Some((f.clone(), code.clone()));
                 self.gcode = code;
@@ -1764,7 +1779,13 @@ impl Controller {
                             if !matches!(action, Action::Preview | Action::Export(_)) {
                                 self.mark_device_stale();
                             }
-                            if (e.contains("unknown") || e.contains("unsupported"))
+                            if e.contains("controller stopped in Hold") {
+                                "机器已停稳。控制器仍有未执行指令，复位并重新对笔后再写。".into()
+                            } else if e.contains("controller stop could not be verified") {
+                                "未能确认机器停稳，请在机器旁立即停止。".into()
+                            } else if e.contains("controller is Idle") && cancelled {
+                                "已取消，控制器回报空闲。".into()
+                            } else if (e.contains("unknown") || e.contains("unsupported"))
                                 && e.contains("plotter.")
                             {
                                 format!("{e} · 请将 ZUSE_BIN 指向包含 plotter.* 的新版 zuse")
@@ -1926,10 +1947,10 @@ mod tests {
     #[test]
     fn preview_uses_exported_machine_coordinates() {
         assert_eq!(
-            preview_paths(PROGRAM).unwrap(),
+            preview_paths(PROGRAM, 3.).unwrap(),
             vec![vec![(10., 20.), (12.5, 18.5)]]
         );
-        assert!(preview_paths("G1 X0 Y0\n").is_err());
+        assert!(preview_paths("G1 X0 Y0\n", 3.).is_err());
         let f = Form {
             seed: 91,
             ..Form::default()

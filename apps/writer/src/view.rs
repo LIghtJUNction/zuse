@@ -1,6 +1,7 @@
 use crate::alignment::Alignment;
-use crate::controller::{Action, Controller};
+use crate::controller::{Action, Controller, Form};
 use crate::devices::{self, DeviceCandidate};
+use crate::font_picker::FontPicker;
 use crate::screen_output::ScreenOutput;
 use crate::workspace_wizard::{Outcome, WorkspaceWizard};
 use std::io::Read;
@@ -21,8 +22,9 @@ pub struct WriterView {
     alignment: Option<Alignment>,
     picker: DevicePicker,
     geometry: [String; 8],
-    mapping: [String; 8],
+    mapping: [String; 12],
     advanced: bool,
+    fonts: Option<FontPicker>,
     confirm_cancel: Option<(u64, u64, u64)>,
     file_path: String,
     baud: String,
@@ -89,7 +91,7 @@ impl DevicePicker {
     }
 }
 
-const MAP_LABELS: [&str; 8] = [
+const MAP_LABELS: [&str; 12] = [
     "左右偏移 ±%",
     "上下偏移 ±%",
     "校准参考长度",
@@ -98,6 +100,10 @@ const MAP_LABELS: [&str; 8] = [
     "书写高度（0 不限）",
     "逐字倾斜 ±°",
     "字号变化 ±%",
+    "左边距",
+    "上边距",
+    "右边距",
+    "下边距",
 ];
 
 const LABELS: [&str; 8] = [
@@ -159,9 +165,14 @@ impl WriterView {
                 f.area_height,
                 f.tilt_degrees,
                 f.size_percent,
+                f.margins[0],
+                f.margins[1],
+                f.margins[2],
+                f.margins[3],
             ]
             .map(|v| v.to_string()),
             advanced: false,
+            fonts: None,
             confirm_cancel: None,
             file_path: String::new(),
             baud: f.baud.to_string(),
@@ -176,7 +187,8 @@ impl WriterView {
         self.workspace.is_some()
     }
     pub fn needs_tick(&self) -> bool {
-        self.screen_mode && self.screen_output.needs_tick()
+        (self.screen_mode && self.screen_output.needs_tick())
+            || self.fonts.as_ref().is_some_and(FontPicker::pending)
     }
     pub fn screen(&self) -> (bool, bool, bool) {
         (
@@ -233,7 +245,7 @@ impl WriterView {
             .trim()
             .parse::<u64>()
             .map_err(|_| "随机种子需为非负整数")?;
-        let mut mapping = [0.; 8];
+        let mut mapping = [0.; 12];
         for (i, v) in mapping.iter_mut().enumerate() {
             *v = number(&self.mapping[i], MAP_LABELS[i])?;
         }
@@ -247,6 +259,10 @@ impl WriterView {
             f.area_height,
             f.tilt_degrees,
             f.size_percent,
+            f.margins[0],
+            f.margins[1],
+            f.margins[2],
+            f.margins[3],
         ] = mapping;
         [
             f.size,
@@ -276,6 +292,20 @@ impl WriterView {
         h: f32,
         closing: bool,
     ) {
+        if let Some(picker) = &mut self.fonts {
+            let width = (w - 32.).min(740.);
+            let mut frame = Frame { canvas, ui };
+            let area = Rect::new((w - width) / 2., 24., width, h - 24.);
+            let previous = c.form.font.clone();
+            if picker.draw(&mut frame, area, &mut c.form) {
+                self.fonts = None;
+            }
+            if previous != c.form.font {
+                self.dirty(c);
+                self.screen_output.deactivate();
+            }
+            return;
+        }
         let wide = w >= 830.0;
         let pad = if wide { 38.0 } else { 16.0 };
         let gap = if wide { 38.0 } else { 18.0 };
@@ -313,7 +343,7 @@ impl WriterView {
                 if self.screen_mode {
                     self.screen_output.height(right)
                 } else {
-                    if self.advanced { 763. } else { 708. }
+                    if self.advanced { 981. } else { 860. }
                 }
             });
         // A connected narrow window opens directly on the calibration controls.
@@ -816,18 +846,11 @@ impl WriterView {
         if f.button(
             32,
             Rect::new(x + w - 80., font_y + 21., 80., 34.),
-            "下一字体",
+            "字体库",
             false,
             editing,
         ) {
-            match zuse::font_store::cli(&["list"]).and_then(|s| choices(&s, "fonts")) {
-                Ok(fonts) if !fonts.is_empty() => {
-                    c.form.font = next(&fonts, &c.form.font);
-                    changed = true;
-                }
-                Ok(_) => {}
-                Err(e) => self.notice = e,
-            }
+            self.fonts = Some(FontPicker::new(&c.form.font));
         }
         changed
     }
@@ -885,7 +908,7 @@ impl WriterView {
         let size = number(&self.geometry[0], LABELS[0])?;
         let advance = number(&self.geometry[1], LABELS[1])?;
         let line = number(&self.geometry[2], LABELS[2])?;
-        let mut variation = [0.; 8];
+        let mut variation = [0.; 12];
         for (i, value) in variation.iter_mut().enumerate() {
             *value = number(&self.mapping[i], MAP_LABELS[i])?;
         }
@@ -905,6 +928,10 @@ impl WriterView {
             f.area_height,
             f.tilt_degrees,
             f.size_percent,
+            f.margins[0],
+            f.margins[1],
+            f.margins[2],
+            f.margins[3],
         ] = variation;
         Ok(())
     }
@@ -925,7 +952,7 @@ impl WriterView {
             if self.advanced {
                 "书写参数"
             } else {
-                "校准参数"
+                "纸张与字迹"
             },
             false,
             editing,
@@ -937,7 +964,7 @@ impl WriterView {
         if self.advanced {
             for (i, label) in MAP_LABELS.iter().enumerate() {
                 changed |= f.field(
-                    70 + i as u64,
+                    200 + i as u64,
                     x + (i % 3) as f32 * (pw + 8.),
                     y + 114. + (i / 3) as f32 * 66.,
                     pw,
@@ -957,8 +984,8 @@ impl WriterView {
             {
                 let label = format!("{label} · {}", if *value { "开" } else { "关" });
                 if f.button(
-                    90 + i as u64,
-                    Rect::new(x + i as f32 * (pw + 8.), y + 314., pw, 34.),
+                    220 + i as u64,
+                    Rect::new(x + i as f32 * (pw + 8.), y + 380., pw, 34.),
                     &label,
                     *value,
                     editing,
@@ -1005,7 +1032,7 @@ impl WriterView {
                 MUTED,
             );
         }
-        let y = y + if self.advanced { 55. } else { 0. };
+        let y = y + if self.advanced { 121. } else { 0. };
         f.heading("笔迹预览", x, y + 331.);
         if f.button(
             50,
@@ -1022,8 +1049,9 @@ impl WriterView {
                 }
             }
         }
-        let area = Rect::new(x, y + 377., w, 152.);
-        paint_strokes(f.canvas, area, &c.strokes);
+        let area = Rect::new(x, y + 377., w, 304.);
+        paint_page(f.canvas, area, &c.form, &c.strokes);
+        let y = y + 152.;
         let third = (w - 16.) / 3.;
         if f.button(
             53,
@@ -1136,33 +1164,28 @@ fn position(v: Option<[f64; 3]>) -> String {
         .unwrap_or_else(|| "X —     Y —     Z —".into())
 }
 
-fn choices(json: &str, key: &str) -> Result<Vec<String>, String> {
+pub(crate) fn choices(json: &str, key: &str) -> Result<Vec<String>, String> {
     zuse::json::with_value(json, |v| {
         let list = v.get(key).ok_or("名称列表缺失")?;
         list.elements().map(zuse::json::text).collect()
     })
 }
-fn next(list: &[String], current: &str) -> String {
-    let i = list
-        .iter()
-        .position(|s| s == current)
-        .map_or(0, |i| (i + 1) % list.len());
-    list[i].clone()
-}
-
-struct Frame<'a, 'b> {
+pub(crate) struct Frame<'a, 'b> {
     canvas: &'a mut Canvas<'b>,
     ui: &'a mut Ui,
 }
 impl Frame<'_, '_> {
-    fn heading(&mut self, s: &str, x: f32, y: f32) {
+    pub(crate) fn heading(&mut self, s: &str, x: f32, y: f32) {
         self.canvas.text(s, x, y, 21, true, INK);
+    }
+    pub(crate) fn note(&mut self, s: &str, x: f32, y: f32, w: f32) {
+        self.canvas.ellipsis(s, x, y, w, 13, false, MUTED);
     }
     fn caption(&mut self, s: &str, x: f32, y: f32) {
         self.canvas.text(s, x, y, 13, false, MUTED);
     }
     #[allow(clippy::too_many_arguments)]
-    fn field(
+    pub(crate) fn field(
         &mut self,
         id: u64,
         x: f32,
@@ -1184,7 +1207,14 @@ impl Frame<'_, '_> {
             enabled,
         )
     }
-    fn button(&mut self, id: u64, r: Rect, label: &str, primary: bool, enabled: bool) -> bool {
+    pub(crate) fn button(
+        &mut self,
+        id: u64,
+        r: Rect,
+        label: &str,
+        primary: bool,
+        enabled: bool,
+    ) -> bool {
         self.ui.button(
             self.canvas,
             id,
@@ -1198,6 +1228,75 @@ impl Frame<'_, '_> {
             enabled,
         )
     }
+}
+
+fn paint_page(canvas: &mut Canvas<'_>, area: Rect, form: &Form, strokes: &[Vec<(f64, f64)>]) {
+    let (width, height) = (form.area_width as f32, form.area_height as f32);
+    let scale = form.reference_distance / form.reference_units;
+    if width <= 0.0 || height <= 0.0 || !scale.is_finite() || scale <= 0.0 {
+        paint_strokes(canvas, area, strokes);
+        return;
+    }
+    canvas.rect(area, 8., 0xeeeeebff);
+    let zoom = ((area.w - 42.) / width).min((area.h - 48.) / height);
+    let page = Rect::new(
+        area.x + (area.w - width * zoom) / 2.,
+        area.y + 18.,
+        width * zoom,
+        height * zoom,
+    );
+    canvas.rect(
+        Rect::new(page.x + 3., page.y + 3., page.w, page.h),
+        2.,
+        0xdededdff,
+    );
+    canvas.rect(page, 2., 0xfffdf7ff);
+    let [left, top, right, bottom] = form.margins.map(|n| n as f32 * zoom);
+    let (x0, y0, x1, y1) = (
+        page.x + left,
+        page.y + top,
+        page.x + page.w - right,
+        page.y + page.h - bottom,
+    );
+    for (a, b) in [
+        ((x0, y0), (x1, y0)),
+        ((x1, y0), (x1, y1)),
+        ((x1, y1), (x0, y1)),
+        ((x0, y1), (x0, y0)),
+    ] {
+        canvas.line(a, b, 0.7, RULE);
+    }
+    let point = |(x, y): (f64, f64)| {
+        let dx = (x - form.x) * if form.flip_x { -1. } else { 1. };
+        let dy = (y - form.y) * if form.flip_y { -1. } else { 1. };
+        let (dx, dy) = if form.swap_xy { (dy, dx) } else { (dx, dy) };
+        (
+            page.x + (dx / scale) as f32 * zoom,
+            page.y - (dy / scale) as f32 * zoom,
+        )
+    };
+    canvas.clip(page);
+    for stroke in strokes {
+        for segment in stroke.windows(2) {
+            canvas.line(point(segment[0]), point(segment[1]), 1.3, INK);
+        }
+    }
+    canvas.unclip();
+    let caption = format!(
+        "{:.1} × {:.1} mm  ·  {} 笔",
+        f64::from(width) * scale,
+        f64::from(height) * scale,
+        strokes.len()
+    );
+    canvas.ellipsis(
+        &caption,
+        area.x + 14.,
+        area.y + area.h - 22.,
+        area.w - 28.,
+        12,
+        false,
+        MUTED,
+    );
 }
 
 fn paint_strokes(canvas: &mut Canvas<'_>, area: Rect, strokes: &[Vec<(f64, f64)>]) {

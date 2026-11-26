@@ -91,13 +91,31 @@ impl Writing {
             offset_y,
             seed,
         };
-        let font = font_store::load(&text(call, "font", "builtin")?)?;
+        let [left, top, right, bottom] =
+            ["margin_left", "margin_top", "margin_right", "margin_bottom"]
+                .map(|key| number(call, key, 0.0));
+        let inner = |dimension: f64, start: f64, end: f64| -> Result<f64, String> {
+            if !(0.0..=MAX_COORDINATE).contains(&dimension)
+                || !(0.0..=MAX_COORDINATE).contains(&start)
+                || !(0.0..=MAX_COORDINATE).contains(&end)
+                || (end > 0.0 && dimension == 0.0)
+                || (dimension > 0.0 && start + end >= dimension)
+            {
+                return Err("page margins must fit within the configured writing area".into());
+            }
+            Ok(if dimension == 0.0 {
+                0.0
+            } else {
+                dimension - start - end
+            })
+        };
+        let font = font_store::load_stack(&text(call, "font", "builtin")?)?;
         let mut strokes = handwriting::strokes_in_area(
             &font,
             &text(call, "text", "")?,
             &layout,
-            number(call, "area_width", 0.0),
-            number(call, "area_height", 0.0),
+            inner(number(call, "area_width", 0.0), left, right)?,
+            inner(number(call, "area_height", 0.0), top, bottom)?,
             variation,
         )?;
         let origin = (number(call, "x", 0.0), number(call, "y", 0.0));
@@ -115,8 +133,8 @@ impl Writing {
             1.0
         };
         for (x, y) in strokes.iter_mut().flatten() {
-            let dx = *x * scale;
-            let dy = *y * if machine { -scale } else { scale };
+            let dx = (*x + left) * scale;
+            let dy = (*y + top) * if machine { -scale } else { scale };
             let (dx, dy) = if swap { (dy, dx) } else { (dx, dy) };
             *x = origin.0 + dx * sign_x;
             *y = origin.1 + dy * sign_y;
@@ -138,11 +156,15 @@ impl Writing {
         let action = match call.name {
             "write.preview" => Action::Preview(strokes),
             "write.gcode" | "write.export" => {
-                let program = plotter::gcode(
+                let program = plotter::gcode_with_feeds(
                     &strokes,
                     number(call, "pen_up", 3.0),
                     number(call, "pen_down", 0.0),
                     number(call, "feed", 300.0),
+                    call.get("travel_feed")
+                        .map(|_| number(call, "travel_feed", 0.0)),
+                    call.get("lift_feed")
+                        .map(|_| number(call, "lift_feed", 0.0)),
                 )?;
                 let path = if call.name == "write.export" {
                     let name = text(call, "path", "")?;

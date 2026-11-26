@@ -1128,6 +1128,33 @@ fn state(line: &str) -> Option<&str> {
         })
         .then_some(state)
 }
+// Sending additional trajectory blocks through the cancelled token is forbidden.
+// Feed hold is a cleanup command on the same port and never resumes the queue.
+fn hold_incomplete_motion<P: Port>(port: &mut P) -> Result<&'static str> {
+    let cleanup = Cancellation::default();
+    let mut c = Connection {
+        port,
+        end: Instant::now() + Duration::from_secs(4),
+        cancel: &cleanup,
+        pending: Vec::new(),
+    };
+    c.send(b"!")?;
+    loop {
+        c.send(b"?")?;
+        let cutoff = Instant::now() + QUERY_INTERVAL;
+        while let Some(line) = c.next(cutoff)? {
+            match state(&line) {
+                Some("Hold:0") => {
+                    return Ok("controller stopped in Hold; queued motion must not be resumed");
+                }
+                Some("Idle") => return Ok("controller is Idle"),
+                Some("Alarm") => return Ok("controller is stopped in Alarm"),
+                _ => {}
+            }
+        }
+    }
+}
+
 fn transmit<P: Port>(
     port: &mut P,
     lines: &[String],
@@ -1150,23 +1177,45 @@ fn transmit<P: Port>(
     c.send(b"G94\n")
         .and_then(|()| c.ack(false))
         .map_err(|e| format!("feed mode before motion: {e}"))?;
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(guard) = bounds {
-            guard.require_generation(c.port.generation())?;
+    let mut attempted_motion = false;
+    let stream = (|| {
+        for (i, line) in lines.iter().enumerate() {
+            cancel.check()?;
+            if let Some(guard) = bounds {
+                guard.require_generation(c.port.generation())?;
+            }
+            attempted_motion |= words(line).any(|(letter, _)| matches!(letter, b'X' | b'Y' | b'Z'));
+            let block = format!("{line}\n");
+            c.send(block.as_bytes())
+                .and_then(|()| c.ack(false))
+                .map_err(|error| {
+                    format!(
+                        "{i} previous program lines acknowledged; line {}: {error}",
+                        i + 1
+                    )
+                })?;
         }
-        let block = format!("{line}\n");
-        c.send(block.as_bytes()).and_then(|()| c.ack(false)).map_err(|e|
-            format!("{i} previous program lines acknowledged; line {}: {e}; execution incomplete, inspect before retry",i+1))?;
+        c.idle(false).map_err(|error| {
+            format!(
+                "all {} lines acknowledged; final motion state unverified: {error}",
+                lines.len()
+            )
+        })
+    })();
+    if let Err(error) = stream {
+        if attempted_motion && cancel.is_cancelled() {
+            let stop = hold_incomplete_motion(c.port).unwrap_or_else(
+                |_| "controller stop could not be verified; stop the machine locally",
+            );
+            return Err(format!("{error}; {stop}"));
+        }
+        return Err(format!(
+            "{error}; execution incomplete, inspect before retry"
+        ));
     }
-    c.idle(false).map_err(|e| {
-        format!(
-            "all {} lines acknowledged; final motion state unverified: {e}",
-            lines.len()
-        )
-    })?;
     if let Some(guard) = bounds {
-        guard.require_generation(c.port.generation()).map_err(|e| {
-            format!("program sent; final travel reference unverified; do not replay: {e}")
+        guard.require_generation(c.port.generation()).map_err(|error| {
+            format!("program sent; final travel reference unverified; do not replay: {error}")
         })?;
     }
     Ok(lines.len())
@@ -1181,6 +1230,7 @@ mod tests {
         writes: Vec<String>,
         replies: VecDeque<Vec<u8>>,
         commands: VecDeque<(String, Vec<Vec<u8>>)>,
+        cancel_on_motion: Option<Cancellation>,
     }
     impl Mock {
         fn expect(&mut self, command: &str, reply: &[&str]) {
@@ -1201,6 +1251,11 @@ mod tests {
             let (q, a) = self.commands.pop_front().expect("unexpected send");
             assert_eq!(q.as_bytes(), bytes);
             self.replies.extend(a);
+            if bytes.starts_with(b"G1X")
+                && let Some(cancel) = &self.cancel_on_motion
+            {
+                cancel.request_cancel();
+            }
             Ok(bytes.len())
         }
         fn read(&mut self, _: u32) -> Result<ReadResult> {
@@ -1211,6 +1266,35 @@ mod tests {
             })
         }
     }
+    #[test]
+    fn cancelled_stream_sends_feed_hold_and_reports_stopped_state() {
+        let cancel = Cancellation::default();
+        let mut port = Mock {
+            cancel_on_motion: Some(cancel.clone()),
+            ..Mock::default()
+        };
+        port.ready();
+        port.expect("G21G90\n", &["ok\n"]);
+        port.expect("G1X2F60\n", &["ok\n"]);
+        port.expect("!", &[]);
+        port.expect("?", &["<Hold:1|MPos:0,0,0>\n", "<Hold:0|MPos:1,0,0>\n"]);
+        let lines = plotter_lines("G21 G90\nG1 X2 F60\nG1 X4\nM2\n").unwrap();
+        let result = transmit(
+            &mut port,
+            &lines,
+            Instant::now() + Duration::from_secs(2),
+            &cancel,
+            None,
+        );
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("cancelled") && error.contains("controller stopped in Hold"),
+            "{error}"
+        );
+        assert!(port.commands.is_empty());
+        assert!(!port.writes.iter().any(|line| line.contains("X4")));
+    }
+
     const GRBL_ID: &str = "[VER:1.1h.2019:]\nok\n";
     const ORIGIN: &str = "<Idle|MPos:1,1,1|WCO:0,0,0>\n";
     fn sample(id: &str, frame: &str) -> Mock {

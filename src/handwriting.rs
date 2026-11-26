@@ -6,6 +6,9 @@ use crate::{
     motion::{MAX_COORDINATE, Rng},
 };
 
+pub(crate) const MAX_FONT_BYTES: usize = 12 * 1024 * 1024;
+const MAX_FONT_POINTS: usize = 900_000;
+
 type Stroke = Vec<(f64, f64)>;
 
 #[derive(Debug)]
@@ -35,12 +38,18 @@ impl Font {
         font
     }
 
+    pub(crate) fn add_fallback(&mut self, fallback: Self) {
+        for (character, strokes) in fallback.glyphs {
+            self.glyphs.entry(character).or_insert(strokes);
+        }
+    }
+
     /// One glyph per line: a literal scalar or U+hex, then whitespace-separated
     /// x,y pairs in [0,1]. A vertical bar lifts the pen. Blank lines and lines
     /// beginning with # are ignored. Use U+0023 for a literal number sign.
     pub fn parse(source: &str) -> Result<Self, String> {
-        if source.len() > 1024 * 1024 {
-            return Err("handwriting font exceeds 1 MiB".into());
+        if source.len() > MAX_FONT_BYTES {
+            return Err("handwriting font exceeds 12 MiB".into());
         }
         let mut glyphs = BTreeMap::new();
         let mut total = 0;
@@ -71,7 +80,7 @@ impl Font {
             for path in paths.split('|') {
                 let mut stroke = Vec::new();
                 for pair in path.split_whitespace() {
-                    if stroke.len() == MAX_POINTS || total == MAX_PROGRAM_POINTS {
+                    if stroke.len() == MAX_POINTS || total == MAX_FONT_POINTS {
                         return Err(error("font exceeds the point limit"));
                     }
                     let (x, y) = pair.split_once(',').ok_or_else(|| error("expected x,y"))?;

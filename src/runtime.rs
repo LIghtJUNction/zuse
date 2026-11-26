@@ -73,6 +73,7 @@ macro_rules! write_spec {
             "line_height":N:false,"offset_x":N:false,"offset_y":N:false,"seed":I:false,
             "reference_units":N:false,"reference_distance":N:false,"x":N:false,"y":N:false,
             "area_width":N:false,"area_height":N:false,
+            "margin_left":N:false,"margin_top":N:false,"margin_right":N:false,"margin_bottom":N:false,
             "offset_x_ratio":N:false,"offset_y_ratio":N:false,"tilt_degrees":N:false,"size_ratio":N:false,
             $($arg:$ty:$required),*])
     };
@@ -83,8 +84,8 @@ static SPECS: &[Spec] = &[
     write_spec!("write.mouse", false, ["interval":I:false]),
     write_spec!("write.touchpad", false, ["width":I:true,"height":I:true,"interval":I:false]),
     write_spec!("write.touchscreen", false, ["width":I:true,"height":I:true,"interval":I:false]),
-    write_spec!("write.gcode", true, ["pen_up":N:false,"pen_down":N:false,"feed":N:false,"swap_xy":B:false,"flip_x":B:false,"flip_y":B:false]),
-    write_spec!("write.export", false, ["path":T:true,"pen_up":N:false,"pen_down":N:false,"feed":N:false,"swap_xy":B:false,"flip_x":B:false,"flip_y":B:false]),
+    write_spec!("write.gcode", true, ["pen_up":N:false,"pen_down":N:false,"feed":N:false,"travel_feed":N:false,"lift_feed":N:false,"swap_xy":B:false,"flip_x":B:false,"flip_y":B:false]),
+    write_spec!("write.export", false, ["path":T:true,"pen_up":N:false,"pen_down":N:false,"feed":N:false,"travel_feed":N:false,"lift_feed":N:false,"swap_xy":B:false,"flip_x":B:false,"flip_y":B:false]),
     spec!("functions", true, ["namespace":T:false]),
     spec!("timer.start", true, []),
     spec!("timer.reset", true, []),

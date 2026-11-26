@@ -110,7 +110,7 @@ impl Plan {
             Some((dimension(&fields.width)?, dimension(&fields.height)?))
         };
         let arguments = format!(
-            "text={},font={},size={},advance={},line_height={},area_width={},area_height={},offset_x_ratio={},offset_y_ratio={},tilt_degrees={},size_ratio={},seed={},x={x},y={y},reference_units=1,reference_distance={scale}",
+            "text={},font={},size={},advance={},line_height={},area_width={},area_height={},margin_left={},margin_top={},margin_right={},margin_bottom={},offset_x_ratio={},offset_y_ratio={},tilt_degrees={},size_ratio={},seed={},x={x},y={y},reference_units=1,reference_distance={scale}",
             json::quote(&f.text),
             json::quote(&f.font),
             f.size,
@@ -118,6 +118,10 @@ impl Plan {
             f.line_height,
             f.area_width,
             f.area_height,
+            f.margins[0],
+            f.margins[1],
+            f.margins[2],
+            f.margins[3],
             f.offset_x / 100.,
             f.offset_y / 100.,
             f.tilt_degrees,

@@ -25,7 +25,23 @@ pub fn gcode(
     pen_down: f64,
     feed: f64,
 ) -> Result<String, String> {
-    if !coordinate(pen_up) || !coordinate(pen_down) || !feed_rate(feed) {
+    gcode_with_feeds(strokes, pen_up, pen_down, feed, None, None)
+}
+
+pub(crate) fn gcode_with_feeds(
+    strokes: &[Vec<(f64, f64)>],
+    pen_up: f64,
+    pen_down: f64,
+    feed: f64,
+    travel_feed: Option<f64>,
+    lift_feed: Option<f64>,
+) -> Result<String, String> {
+    if !coordinate(pen_up)
+        || !coordinate(pen_down)
+        || !feed_rate(feed)
+        || travel_feed.is_some_and(|f| !feed_rate(f))
+        || lift_feed.is_some_and(|f| !feed_rate(f))
+    {
         return Err("pen heights or feed outside plotter limits".into());
     }
     let up = format!("{pen_up:.3}");
@@ -53,15 +69,28 @@ pub fn gcode(
         remaining -= stroke.len();
     }
 
-    let mut output = format!("G21 G17 G90 G94\nG0 Z{up}\n");
+    let raise = lift_feed.map_or_else(
+        || format!("G0 Z{up}"),
+        |speed| format!("G1 Z{up} F{speed:.3}"),
+    );
+    let lower = lift_feed.unwrap_or(feed);
+    let mut output = format!("G21 G17 G90 G94\n{raise}\n");
     for stroke in strokes {
         let (x, y) = stroke[0];
-        writeln!(output, "G0 X{x:.3} Y{y:.3}").unwrap();
-        writeln!(output, "G1 Z{down} F{feed:.3}").unwrap();
-        for &(x, y) in &stroke[1..] {
-            writeln!(output, "G1 X{x:.3} Y{y:.3}").unwrap();
+        if let Some(speed) = travel_feed {
+            writeln!(output, "G1 X{x:.3} Y{y:.3} F{speed:.3}").unwrap();
+        } else {
+            writeln!(output, "G0 X{x:.3} Y{y:.3}").unwrap();
         }
-        writeln!(output, "G0 Z{up}").unwrap();
+        writeln!(output, "G1 Z{down} F{lower:.3}").unwrap();
+        for (i, &(x, y)) in stroke[1..].iter().enumerate() {
+            if i == 0 && lift_feed.is_some() {
+                writeln!(output, "G1 X{x:.3} Y{y:.3} F{feed:.3}").unwrap();
+            } else {
+                writeln!(output, "G1 X{x:.3} Y{y:.3}").unwrap();
+            }
+        }
+        writeln!(output, "{raise}").unwrap();
     }
     output.push_str("M2\n");
     Ok(output)

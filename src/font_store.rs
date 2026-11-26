@@ -1,5 +1,8 @@
 //! User-installed single-line fonts. See `zuse font help` for the storage paths.
-use crate::{handwriting::Font, json::quote};
+use crate::{
+    handwriting::{Font, MAX_FONT_BYTES},
+    json::quote,
+};
 use std::{
     env,
     ffi::OsString,
@@ -9,13 +12,15 @@ use std::{
 };
 
 const BUILTIN: &str = "builtin";
-const MAX_BYTES: u64 = 1024 * 1024;
+const MAX_BYTES: u64 = MAX_FONT_BYTES as u64;
+const RELEASE: &str = "https://github.com/LIghtJUNction/zuse/releases/download/fonts";
+pub const OFFICIAL_FONTS: &[&str] = &["hanzi-kaiti", "latin-script", "latin-cursive"];
 const EXT: &str = "zfont";
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 static NEXT: AtomicU64 = AtomicU64::new(0);
-const HELP: &str = "zuse font list | add NAME FILE | remove NAME | help\nFonts are UTF-8 single-line stroke definitions (up to 1 MiB per file). The name builtin is reserved. Use a lowercase ASCII letter followed by lowercase letters, digits, '-' or '_' (up to 64 characters). Set ZUSE_FONT_DIR to an absolute directory to override storage. Defaults to $XDG_DATA_HOME/zuse/fonts, %LOCALAPPDATA%/zuse/fonts on Windows, or $HOME/.local/share/zuse/fonts. Fonts are stored as NAME.zfont. Remove a font explicitly before replacing it.";
+const HELP: &str = "zuse font list | available | install [NAME|all] | add NAME FILE | remove NAME | help\nFonts are UTF-8 single-line stroke definitions (up to 12 MiB per file). The name builtin is reserved. Use a lowercase ASCII letter followed by lowercase letters, digits, '-' or '_' (up to 64 characters). Set ZUSE_FONT_DIR to an absolute directory to override storage. Defaults to $XDG_DATA_HOME/zuse/fonts, %LOCALAPPDATA%/zuse/fonts on Windows, or $HOME/.local/share/zuse/fonts. Fonts are stored as NAME.zfont. Remove a font explicitly before replacing it.";
 
 fn directory() -> Result<PathBuf, String> {
     fn value(name: &str) -> Option<OsString> {
@@ -75,7 +80,7 @@ fn read_font(path: &Path) -> Result<String, String> {
     let metadata = fs::metadata(path).map_err(report)?;
     if !metadata.is_file() || metadata.len() > MAX_BYTES {
         return Err(format!(
-            "{}: expected a regular font file up to 1 MiB",
+            "{}: expected a regular font file up to 12 MiB",
             path.display()
         ));
     }
@@ -86,7 +91,7 @@ fn read_font(path: &Path) -> Result<String, String> {
         .read_to_string(&mut text)
         .map_err(report)?;
     if text.len() as u64 > MAX_BYTES {
-        return Err(format!("{}: font exceeds 1 MiB", path.display()));
+        return Err(format!("{}: font exceeds 12 MiB", path.display()));
     }
     Ok(text)
 }
@@ -97,6 +102,96 @@ pub fn load(name: &str) -> Result<Font, String> {
     }
     let path = font_path(&directory()?, name)?;
     Font::parse(&read_font(&path)?).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+pub(crate) fn load_stack(spec: &str) -> Result<Font, String> {
+    let names: Vec<_> = spec.split(',').map(str::trim).collect();
+    if names.len() > 4 || names.iter().any(|name| name.is_empty()) {
+        return Err("provide one to four comma-separated font names".into());
+    }
+    let mut fonts = names.into_iter();
+    let mut font = load(fonts.next().ok_or("missing font name")?)?;
+    for name in fonts {
+        font.add_fallback(load(name)?);
+    }
+    Ok(font)
+}
+
+fn install(dir: &Path, name: &str) -> Result<String, String> {
+    let names = if name == "all" {
+        OFFICIAL_FONTS
+    } else {
+        &OFFICIAL_FONTS[OFFICIAL_FONTS
+            .iter()
+            .position(|entry| *entry == name)
+            .ok_or_else(|| format!("unknown official font {name:?}; run zuse font available"))?..]
+            [..1]
+    };
+    let mut installed = Vec::new();
+    let mut unchanged = Vec::new();
+    for &name in names {
+        let destination = font_path(dir, name)?;
+        if destination.is_file() {
+            unchanged.push(quote(name));
+            continue;
+        }
+        let url = format!("{RELEASE}/{name}.zfont");
+        let mut child = std::process::Command::new("curl")
+            .args([
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--max-redirs",
+                "3",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--connect-timeout",
+                "8",
+                "--max-time",
+                "30",
+                "--max-filesize",
+                &MAX_BYTES.to_string(),
+                "--",
+                &url,
+            ])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("start curl for {name}: {error}"))?;
+        let mut bytes = Vec::new();
+        let read = child
+            .stdout
+            .take()
+            .expect("piped stdout")
+            .take(MAX_BYTES + 1)
+            .read_to_end(&mut bytes);
+        if read.is_err() || bytes.len() > MAX_FONT_BYTES {
+            let _ = child.kill();
+        }
+        let status = child
+            .wait()
+            .map_err(|error| format!("wait for {name}: {error}"))?;
+        read.map_err(|error| format!("download {name}: {error}"))?;
+        if !status.success() || bytes.len() > MAX_FONT_BYTES {
+            return Err(format!("download {name} failed (curl {status})"));
+        }
+        let text = std::str::from_utf8(&bytes).map_err(|error| format!("{name}: {error}"))?;
+        Font::parse(text).map_err(|error| format!("{name}: {error}"))?;
+        match publish(dir, &destination, &bytes) {
+            Ok(()) => installed.push(quote(name)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && destination.is_file() => {
+                unchanged.push(quote(name));
+            }
+            Err(error) => return Err(format!("{}: {error}", destination.display())),
+        }
+    }
+    Ok(format!(
+        r#"{{"installed":[{}],"already_present":[{}]}}"#,
+        installed.join(","),
+        unchanged.join(",")
+    ))
 }
 
 fn publish(dir: &Path, destination: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -137,6 +232,16 @@ fn list(dir: &Path) -> Result<String, String> {
 fn command(dir: &Path, args: &[&str]) -> Result<String, String> {
     match *args {
         ["list"] => list(dir),
+        ["available"] => Ok(format!(
+            r#"{{"fonts":[{}]}}"#,
+            OFFICIAL_FONTS
+                .iter()
+                .map(|name| quote(name))
+                .collect::<Vec<_>>()
+                .join(",")
+        )),
+        ["install"] => install(dir, "all"),
+        ["install", name] => install(dir, name),
         ["add", name, source] => {
             let dest = font_path(dir, name)?;
             let text = read_font(Path::new(source))?;

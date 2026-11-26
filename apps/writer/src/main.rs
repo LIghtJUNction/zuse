@@ -1,6 +1,7 @@
 mod alignment;
 mod controller;
 mod devices;
+mod font_picker;
 mod screen_output;
 mod view;
 mod workspace_profile;
