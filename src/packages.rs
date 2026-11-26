@@ -2,6 +2,7 @@
 //! network access and publication belong to the `zuse pkg` commands.
 use crate::{json, script::syntax};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -512,6 +513,20 @@ pub fn project_root(base: &Path) -> Result<PathBuf> {
     Err("no zuse.json project found; run zuse pkg init".into())
 }
 
+// Keep the source spelling in the manifest, lockfile and configured origin.
+// Git for Windows otherwise parses the colon in a verbatim drive path as SSH.
+fn fetch_remote(source: &str) -> Cow<'_, str> {
+    if let Some(path) = source.strip_prefix(r"\\?\") {
+        if let Some(share) = path.strip_prefix(r"UNC\") {
+            return Cow::Owned(format!("//{}", share.replace('\\', "/")));
+        }
+        if matches!(path.as_bytes(), [drive, b':', b'\\', ..] if drive.is_ascii_alphabetic()) {
+            return Cow::Owned(path.replace('\\', "/"));
+        }
+    }
+    Cow::Borrowed("origin")
+}
+
 fn git_output(root: &Path, args: &[&str]) -> Result<Output> {
     let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
     let network_settings = matches!(args.first(), Some(&"fetch" | &"push"))
@@ -946,7 +961,7 @@ impl<'a> Resolver<'a> {
                 "--quiet",
                 "--no-tags",
                 "--depth=1",
-                "origin",
+                &fetch_remote(&source.git),
                 selector,
             ],
         )?;
@@ -1333,4 +1348,30 @@ pub fn run_at(base: &Path, args: &[&str]) -> Result<String> {
 
 pub fn run(args: &[&str]) -> Result<String> {
     run_at(&std::env::current_dir().map_err(|e| e.to_string())?, args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fetch_remote;
+
+    #[test]
+    fn git_fetch_recognizes_verbatim_windows_local_sources() {
+        assert_eq!(
+            fetch_remote(r"\\?\C:\Users\A B\source"),
+            "C:/Users/A B/source"
+        );
+        assert_eq!(
+            fetch_remote(r"\\?\UNC\host\share\source"),
+            "//host/share/source"
+        );
+        for source in [
+            "/tmp/package",
+            "file:///tmp/pkg",
+            "https://example.org/repo",
+            "git@example.org:repo",
+            r"C:\pkg",
+        ] {
+            assert_eq!(fetch_remote(source), "origin");
+        }
+    }
 }

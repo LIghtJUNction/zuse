@@ -121,7 +121,19 @@ impl Fixture {
         assert_eq!(field(&ready, "state"), "idle");
         assert_eq!(field(&ready, "session"), NAME);
         let socket = PathBuf::from(field(&ready, "socket"));
-        assert!(socket.starts_with(&self.root));
+        let root = self.root.canonicalize().unwrap_or_else(|e| {
+            panic!(
+                "could not resolve fixture root {}: {e}",
+                self.root.display()
+            )
+        });
+        assert!(
+            socket.starts_with(&root),
+            "reported socket {} is outside fixture root {} (resolved from {})",
+            socket.display(),
+            root.display(),
+            self.root.display()
+        );
         assert!(
             fs::symlink_metadata(socket)
                 .unwrap()
