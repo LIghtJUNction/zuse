@@ -71,3 +71,13 @@ zuse session result writer JOB_ID
 
 可在底部文件栏输入 UTF-8 文章的路径，点「读文本」保留原有段落。
 AI 可在相同的 `write.gcode` 和 `write.export` 操作中传入 `area_width`、`area_height`、`advance`、`line_height`、`offset_x_ratio`、`offset_y_ratio`、`tilt_degrees`、`size_ratio` 和 `seed` 来复现排版。
+
+## 字体、文章与纸张
+
+点「字体库」浏览已安装的字体，或从 [Zuse 字体 Release](https://github.com/LIghtJUNction/zuse/releases/tag/fonts) 一键安装中文楷体和两款英文单线字体。本地字体使用 UTF-8 `.zfont` 笔画文件，在同一页填写名称和路径即可导入。混排按所选字体的顺序补齐缺字。例如先选择 `hanzi-kaiti`，再选择 `latin-script`。使用 `zuse font available` 枚举官方字体，`zuse font install` 安装，`zuse font list` 检查本地字体。
+
+「编辑文章」支持多行输入和粘贴，也可以在底部导入 UTF-8 文本。预览显示纸张、页边距和最终笔迹。宽度决定自动换行，超出可写高度时提示行号。默认纸张 150 × 200，四边各留 5 个单位。使用无界宽高时，可将该方向的末端边距设为 0。
+
+GUI 使用同一个进给值控制走笔、空移和抬落笔。通过 AI 接口可传入 `travel_feed`、`lift_feed` 自行设置移动速度。点击停止时，应用请求固件使运动停稳，并区分已停、空闲和无法确认。若固件进入 Hold，需清除旧队列后重新校准，不要恢复旧作业。
+
+「复位控制器」需要再次点击确认。固件启动块不可验证时，程序拒绝发出复位。复位会使先前的坐标标定失效。普通手动点动没有固定步长上限，已示教行程与作业时间限制仍然有效。

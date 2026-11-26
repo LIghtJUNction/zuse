@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
 use zuse::{json, pen_input};
 
-const INK: u32 = 0x222222ff;
-const MUTED: u32 = 0x696965ff;
+const INK: u32 = 0x202124ff;
+const MUTED: u32 = 0x5f6368ff;
 const PAPER: u32 = 0xf6f6f3ff;
 const DELAY: Duration = Duration::from_secs(3);
 type Strokes = Vec<Vec<(f64, f64)>>;

@@ -1,16 +1,17 @@
 use crate::alignment::Alignment;
+use crate::article::Article;
 use crate::controller::{Action, Controller, Form};
 use crate::devices::{self, DeviceCandidate};
 use crate::font_picker::FontPicker;
 use crate::screen_output::ScreenOutput;
 use crate::workspace_wizard::{Outcome, WorkspaceWizard};
 use std::io::Read;
-use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
+use zgpui::native::{ButtonStyle, Canvas, Event, Rect, Ui};
 
-const INK: u32 = 0x222222ff;
-const MUTED: u32 = 0x696965ff;
-const RULE: u32 = 0xdededdff;
-const PAPER: u32 = 0xf6f6f3ff;
+const INK: u32 = 0x202124ff;
+const MUTED: u32 = 0x5f6368ff;
+const RULE: u32 = 0xe8eaedff;
+const PAPER: u32 = 0xf1f3f4ff;
 
 // Keep partially typed numbers in the editor. Validate and transfer them as
 // a group when building a plan, never on each digit of a keyboard event.
@@ -25,6 +26,10 @@ pub struct WriterView {
     mapping: [String; 12],
     advanced: bool,
     fonts: Option<FontPicker>,
+    article: Option<Article>,
+    dark: bool,
+    english: bool,
+    confirm_reset: bool,
     confirm_cancel: Option<(u64, u64, u64)>,
     file_path: String,
     baud: String,
@@ -173,6 +178,10 @@ impl WriterView {
             .map(|v| v.to_string()),
             advanced: false,
             fonts: None,
+            article: None,
+            dark: false,
+            english: false,
+            confirm_reset: false,
             confirm_cancel: None,
             file_path: String::new(),
             baud: f.baud.to_string(),
@@ -182,6 +191,25 @@ impl WriterView {
             scroll_y: 0.0,
             max_scroll: 0.0,
         }
+    }
+    pub fn article_input(&mut self, event: &Event, ui: &mut Ui, height: f32) -> bool {
+        let Some(article) = self.article.as_mut() else {
+            return false;
+        };
+        if matches!(event, Event::Key { code: 27, .. }) {
+            self.article = None;
+            return true;
+        }
+        if article.input(event, ui) {
+            if matches!(event, Event::Key { .. } | Event::Text(_)) {
+                article.reveal_cursor(height - 32.);
+            }
+            return true;
+        }
+        false
+    }
+    pub fn dark(&self) -> bool {
+        self.dark
     }
     pub fn aligning(&self) -> bool {
         self.workspace.is_some()
@@ -292,6 +320,15 @@ impl WriterView {
         h: f32,
         closing: bool,
     ) {
+        if let Some(article) = self.article.as_mut() {
+            let width = (w - 32.).min(940.);
+            if article.draw(canvas, ui, Rect::new((w - width) / 2., 24., width, h - 32.)) {
+                c.form.text = self.article.take().expect("open article").finish();
+                self.dirty(c);
+                self.screen_output.deactivate();
+            }
+            return;
+        }
         if let Some(picker) = &mut self.fonts {
             let width = (w - 32.).min(740.);
             let mut frame = Frame { canvas, ui };
@@ -375,7 +412,8 @@ impl WriterView {
         } else {
             "未连接"
         };
-        let session = format!("共享会话  {}", c.session_name());
+        let state = crate::locale::text(state);
+        let session = format!("{}  {}", crate::locale::text("共享会话"), c.session_name());
         let job = c
             .active_job()
             .map(|id| format!("{state}  #{id}"))
@@ -536,6 +574,31 @@ impl WriterView {
         closing: bool,
     ) {
         f.heading("设备", x, y);
+        let appearance = if self.dark { "浅色" } else { "深色" };
+        if f.button(
+            702,
+            Rect::new(x + w - 140., y, 66., 28.),
+            appearance,
+            false,
+            !closing,
+        ) {
+            self.dark = !self.dark;
+        }
+        let language = if self.english {
+            "简体中文"
+        } else {
+            "English"
+        };
+        if f.button(
+            703,
+            Rect::new(x + w - 70., y, 70., 28.),
+            language,
+            false,
+            !closing,
+        ) {
+            self.english = !self.english;
+            crate::locale::set_english(self.english);
+        }
         let linked = c.connected_device().is_some();
         let editing = !c.busy() && !linked && !closing;
         let height = self.device_list(f, c, x, y + 40., w, closing);
@@ -600,14 +663,37 @@ impl WriterView {
         f.caption("机器坐标 · mm", x, y + 253.);
         f.canvas
             .ellipsis(&position(c.mpos), x, y + 277., w, 15, false, INK);
+        let reset_width = (w * 0.40).max(85.);
         if f.button(
             5,
-            Rect::new(x, y + 309., w, 33.),
+            Rect::new(x, y + 309., w - reset_width - 8., 33.),
             "刷新状态与坐标",
             false,
             !c.busy() && !closing,
         ) {
+            self.confirm_reset = false;
             self.act(c, Action::Refresh);
+        }
+        let reset = if self.confirm_reset {
+            "确认复位"
+        } else {
+            "复位控制器"
+        };
+        if f.button(
+            704,
+            Rect::new(x + w - reset_width, y + 309., reset_width, 33.),
+            reset,
+            self.confirm_reset,
+            enabled,
+        ) {
+            if self.confirm_reset {
+                self.confirm_reset = false;
+                self.act(c, Action::Reset);
+            } else {
+                self.confirm_reset = true;
+                self.notice =
+                    crate::locale::text("复位会清除队列并使旧校准失效。再次点击确认。").into();
+            }
         }
         if self.aligning() {
             f.canvas
@@ -827,12 +913,26 @@ impl WriterView {
             30,
             x,
             y + 41.,
-            if stacked { w } else { text_w - 8. },
+            if stacked { w - 90. } else { text_w - 98. },
             "文字",
             &mut c.form.text,
             "输入要书写的文字",
             editing,
         );
+        if f.button(
+            33,
+            Rect::new(
+                x + if stacked { w } else { text_w - 8. } - 82.,
+                y + 62.,
+                82.,
+                34.,
+            ),
+            "编辑文章",
+            false,
+            editing,
+        ) {
+            self.article = Some(Article::new(&c.form.text));
+        }
         changed |= f.field(
             31,
             font_x,
@@ -1176,13 +1276,16 @@ pub(crate) struct Frame<'a, 'b> {
 }
 impl Frame<'_, '_> {
     pub(crate) fn heading(&mut self, s: &str, x: f32, y: f32) {
-        self.canvas.text(s, x, y, 21, true, INK);
+        self.canvas
+            .text(crate::locale::text(s), x, y, 21, true, INK);
     }
     pub(crate) fn note(&mut self, s: &str, x: f32, y: f32, w: f32) {
-        self.canvas.ellipsis(s, x, y, w, 13, false, MUTED);
+        self.canvas
+            .ellipsis(crate::locale::text(s), x, y, w, 13, false, MUTED);
     }
     fn caption(&mut self, s: &str, x: f32, y: f32) {
-        self.canvas.text(s, x, y, 13, false, MUTED);
+        self.canvas
+            .text(crate::locale::text(s), x, y, 13, false, MUTED);
     }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn field(
@@ -1202,7 +1305,7 @@ impl Frame<'_, '_> {
             id,
             Rect::new(x, y + 21., w, 34.),
             value,
-            hint,
+            crate::locale::text(hint),
             false,
             enabled,
         )
@@ -1219,7 +1322,7 @@ impl Frame<'_, '_> {
             self.canvas,
             id,
             r,
-            label,
+            crate::locale::text(label),
             if primary {
                 ButtonStyle::Primary
             } else {
@@ -1237,7 +1340,7 @@ fn paint_page(canvas: &mut Canvas<'_>, area: Rect, form: &Form, strokes: &[Vec<(
         paint_strokes(canvas, area, strokes);
         return;
     }
-    canvas.rect(area, 8., 0xeeeeebff);
+    canvas.rect(area, 8., 0xf1f3f4ff);
     let zoom = ((area.w - 42.) / width).min((area.h - 48.) / height);
     let page = Rect::new(
         area.x + (area.w - width * zoom) / 2.,
@@ -1248,9 +1351,9 @@ fn paint_page(canvas: &mut Canvas<'_>, area: Rect, form: &Form, strokes: &[Vec<(
     canvas.rect(
         Rect::new(page.x + 3., page.y + 3., page.w, page.h),
         2.,
-        0xdededdff,
+        0xe8eaedff,
     );
-    canvas.rect(page, 2., 0xfffdf7ff);
+    canvas.rect(page, 2., 0xffffffff);
     let [left, top, right, bottom] = form.margins.map(|n| n as f32 * zoom);
     let (x0, y0, x1, y1) = (
         page.x + left,

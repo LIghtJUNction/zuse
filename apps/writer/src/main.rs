@@ -1,7 +1,9 @@
 mod alignment;
+mod article;
 mod controller;
 mod devices;
 mod font_picker;
+mod locale;
 mod screen_output;
 mod view;
 mod workspace_profile;
@@ -24,16 +26,6 @@ fn main() -> Result<(), String> {
         _ => return Err(HELP.into()),
     };
     let mut window = Window::new("Zuse Writer · 写字机", 1120, 820)?;
-    let mut palette = Palette::for_theme(Theme::Light);
-    palette.accent = 0x252525ff;
-    palette.accent_hover = 0x444444ff;
-    palette.accent_soft = 0xececeaff;
-    palette.hover = 0xf4f4f2ff;
-    palette.line = 0xdededdff;
-    palette.text = 0x222222ff;
-    palette.muted = 0x686865ff;
-    window.set_palette(palette);
-
     let mut controller = Controller::default();
     let mut view = WriterView::new(&mut controller, align);
     let mut ui = Ui::default();
@@ -81,6 +73,13 @@ fn main() -> Result<(), String> {
                     controller.cancel_target(),
                 )
             || status != controller.status;
+        if let Some(input) = event.as_ref() {
+            let (_, height) = window.size();
+            if view.article_input(input, &mut ui, height) {
+                event = None;
+                redraw = true;
+            }
+        }
         match event {
             Some(Event::Key { code: 27, .. })
                 if view.aligning() && view.can_navigate() && !controller.busy() =>
@@ -98,6 +97,11 @@ fn main() -> Result<(), String> {
             let had_input = event.is_some();
             let previous_screen = view.screen();
             ui.begin(event.take());
+            window.set_palette(Palette::for_theme(if view.dark() {
+                Theme::Dark
+            } else {
+                Theme::Light
+            }));
             let mut canvas = window.begin(0xffffffff);
             view.draw(&mut canvas, &mut ui, &mut controller, w, h, closing);
             ui.end();

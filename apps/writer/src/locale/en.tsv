@@ -1,0 +1,118 @@
+设备	Device
+深色	Dark
+浅色	Light
+共享会话	Shared session
+正在取消并关闭	Stopping and closing
+本机作业中	Local job
+共享作业中	Shared job
+已连接	Connected
+未连接	Disconnected
+屏幕输入	Screen
+输出到	Output
+写字机	Plotter
+返回向导	Wizard
+返回书写	Workspace
+对笔	Calibrate
+串口路径	Serial port
+手动输入端口	Enter port manually
+波特率	Baud rate
+连接	Connect
+断开	Disconnect
+扫描	Scan
+工作坐标 · mm	Work position · mm
+机器坐标 · mm	Machine position · mm
+刷新状态与坐标	Refresh position
+复位控制器	Reset
+确认复位	Confirm reset
+复位会清除队列并使旧校准失效。再次点击确认。	Reset clears queued motion and invalidates calibration. Click again to confirm.
+手动调节	Jog controls
+点动步长 mm	Jog distance · mm
+记录抬笔 Z	Record pen up
+记录落笔 Z	Record pen down
+移至抬笔位	Raise pen
+移至落笔位	Lower pen
+书写内容	Writing
+书写参数	Writing settings
+纸张与字迹	Page & handwriting
+文字	Text
+输入要书写的文字	Text to write
+单线字体	Stroke font
+字体库	Font library
+字高	Glyph height
+字距	Character spacing
+行距	Line spacing
+起点 X mm	X origin · mm
+起点 Y mm	Y origin · mm
+进给 mm/min	Feed · mm/min
+抬笔 Z mm	Pen up Z · mm
+落笔 Z mm	Pen down Z · mm
+随机种子	Random seed
+左右偏移 ±%	Horizontal jitter ±%
+上下偏移 ±%	Vertical jitter ±%
+校准参考长度	Reference length
+实测距离 mm	Measured distance · mm
+书写宽度（0 不限）	Page width (0 = unlimited)
+书写高度（0 不限）	Page height (0 = unlimited)
+逐字倾斜 ±°	Tilt per glyph ±°
+字号变化 ±%	Size variation ±%
+左边距	Left margin
+上边距	Top margin
+右边距	Right margin
+下边距	Bottom margin
+笔迹预览	Page preview
+更新预览	Update preview
+校验程序	Check program
+发送到写字机	Start writing
+取消作业	Stop job
+取消共享作业	Stop shared job
+确认取消共享作业	Confirm stop
+文本或 G-code 文件	Text or G-code file
+输入文件路径	Enter file path
+读文本	Import text
+导出	Export
+一键安装官方字体集	Install official fonts
+混排 · 开	Font mix · On
+混排 · 关	Font mix · Off
+上一页	Previous
+下一页	Next
+本地 .zfont 文件	Local .zfont file
+字体名称	Font name
+导入自定义字体	Import custom font
+行程与装笔	Travel and pen setup
+单独对笔	Pen only
+手动对笔	Manual alignment
+接触探针	Contact probe
+读取工作 Z	Read work Z
+当前工作 Z	Work Z
+单次点动步长	Jog distance
+记录落笔位置	Record contact position
+记录抬笔位置	Record lift position
+已接触纸面，记录落笔	Record pen contact
+已离开纸面，记录抬笔	Record pen clearance
+完成对笔	Finish alignment
+1 / 5   示教机台行程	1 / 5   Teach travel limits
+2 / 5   核对行程与装笔高度	2 / 5   Verify travel and pen height
+3 / 5   空笔夹定位	3 / 5   Position the empty holder
+4 / 5   贴纸装笔	4 / 5   Fit pen against paper
+5 / 5   检查试写	5 / 5   Verify ink test
+试写两段短线	Draw two test dashes
+出墨正常 · 保存	Ink test passed · Save
+返回装笔	Refit pen
+载入已存行程	Load saved limits
+核对行程 →	Verify limits →
+笔尖已贴纸并锁紧 · 应用行程	Pen fitted and secured · Apply
+返回示教	Teach again
+重新保存档案	Save profile again
+仅本次使用	This session only
+操作已暂停	Operation stopped
+已应用行程。确认笔尖周围是空白纸面，再试写。	Limits applied. Check that the paper is clear around the pen before testing.
+试写已结束，笔已抬高。请观察纸面。	The test completed with the pen raised. Inspect the paper.
+笔尖附近留出至少 5 mm 空白纸面。程序将试写两段短线，中间抬笔。	Leave 5 mm of blank paper around the tip. The test draws two dashes with a pen lift in between.
+两段都出墨且中间无拖痕才保存。没出墨或有拖痕时，松开笔夹，再返回装笔。	Save only if both dashes have ink and the gap is clean. Otherwise loosen the holder and refit the pen.
+请先松开或取下笔，再定位空笔夹。	Loosen or remove the pen, then position the empty holder.
+先取下笔或松开笔夹。观察机台，逐点移动至可安全使用的边界。	Remove the pen or loosen its holder. Jog carefully to each usable limit.
+在两个对角位置分别记录 XY，在两个 Z 端点分别记录高度。	Record XY at opposite corners and Z at the upper and lower limits.
+将笔放入笔夹，让笔尖轻轻接触纸面，再锁紧笔夹。	Insert the pen, let its tip just touch the paper, then tighten the holder.
+保持当前 XY，只沿 Z 轴低速定位。	Keep the current XY position and move only along Z at low speed.
+编辑文章	Edit article
+应用文章	Apply text

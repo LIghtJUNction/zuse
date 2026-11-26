@@ -115,6 +115,7 @@ pub enum Action {
     Mount(MountAction, Option<[f64; 3]>),
     CalibrationCapture(CalibrationStep),
     Disconnect,
+    Reset,
     Jog { axis: char, delta: f64 },
     SetPenUp,
     SetPenDown,
@@ -280,17 +281,14 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
         | Action::SetPenUp
         | Action::SetPenDown => WORK_STATUS.into(),
         Action::Disconnect => "plotter.disconnect()".into(),
+        Action::Reset => "plotter.reset()".into(),
         Action::Jog { axis, delta } => {
             let a = axis.to_ascii_lowercase();
-            if !matches!(a, 'x' | 'y' | 'z')
-                || !delta.is_finite()
-                || delta.abs() < 0.001
-                || delta.abs() > 10.
-            {
-                return Err("点动每次限单轴 0.001–10 mm".into());
+            if !matches!(a, 'x' | 'y' | 'z') || !delta.is_finite() || *delta == 0. {
+                return Err("请输入非零的单轴点动距离".into());
             }
-            // A 10 mm move at F40 needs 15 s before the final status query.
-            format!("plotter.jog(axis=\"{a}\",delta={delta},feed=40,timeout=20000)")
+            let feed = if a == 'z' { 40. } else { 300. };
+            format!("plotter.jog(axis=\"{a}\",delta={delta},feed={feed})")
         }
         Action::PenUp | Action::PenDown => {
             let z = if matches!(action, Action::PenUp) {
@@ -1047,15 +1045,14 @@ fn mount_job(
         }
         _ => {}
     }
-    let trial;
     let program = if let MountAction::TestInk { bounds, up, down } = *kind {
-        (trial, target) = ink_test(bounds, before.work, up, down)?;
-        &trial
+        let (trial, end) = ink_test(bounds, before.work, up, down)?;
+        target = end;
+        trial
     } else {
-        program
+        kind.program(*reference, before.reference_generation)?
     };
     // Only submit()'s read-only observation can fall back on a legacy daemon.
-    let program = kind.program(*reference, before.reference_generation)?;
     let (receipt, after) = run(action, &program, &before.snapshot)?;
     let after = after.ok_or("命令已结束，结果被其他操作取代，请核对写字机")?;
     if !device_envelope(&receipt, device) {
@@ -1362,6 +1359,7 @@ impl Controller {
             Action::Jog { .. }
                 | Action::PenUp
                 | Action::PenDown
+                | Action::Reset
                 | Action::Send
                 | Action::Check
                 | Action::CalibrationCapture(_)
@@ -1566,6 +1564,14 @@ impl Controller {
                     "屏幕书写已完成"
                 }
                 .into())
+            }
+            Action::Reset => {
+                self.mark_device_stale();
+                self.invalidate_plan();
+                Ok(format!(
+                    "控制器已复位 · {} · 请重新核对工作原点和笔高",
+                    field(payload, "state").unwrap_or_default()
+                ))
             }
             Action::Preview => {
                 if f != &self.form {
@@ -1988,7 +1994,7 @@ mod tests {
                 &f,
                 ""
             )
-            .is_err()
+            .is_ok()
         );
     }
 

@@ -34,6 +34,7 @@ enum Action {
     },
     ClearBounds,
     Disconnect,
+    Reset,
     Jog {
         axis: char,
         delta: f64,
@@ -108,6 +109,7 @@ impl Command {
                     8000,
                 )
             }
+            "plotter.reset" => (Action::Reset, 8000),
             "plotter.disconnect" => {
                 return Ok(Self {
                     action: Action::Disconnect,
@@ -122,8 +124,8 @@ impl Command {
                     _ => return Err("plotter.jog axis must be x, y or z".into()),
                 };
                 let delta = number(call, "delta", 0.);
-                if !delta.is_finite() || delta == 0. || delta.abs() > 10. {
-                    return Err("plotter.jog delta must be nonzero and within ±10 mm".into());
+                if !delta.is_finite() || delta == 0. {
+                    return Err("plotter.jog delta must be finite and nonzero".into());
                 }
                 let feed = feed(call)?;
                 let travel_ms = (delta.abs() * 60_000.0 / feed).ceil();
@@ -295,6 +297,10 @@ pub(super) fn execute(
             device.bounds = Some(bounds);
             receipt
         }
+        Action::Reset => {
+            device.probe = machine_stream::ProbeEvidence::default();
+            machine_stream::reset_connected(&mut device.port, end, cancel)?
+        }
         Action::Status { work, offset } => machine_stream::inspect_connected(
             &mut device.port,
             end,
@@ -416,7 +422,7 @@ mod tests {
         };
         assert!(check("plotter.jog(axis=\"x\",delta=2,feed=200)", dry).is_ok());
         assert!(check("plotter.send(program=\"M3\")", dry).is_err());
-        assert!(check("plotter.jog(axis=\"y\",delta=12)", dry).is_err());
+        assert!(check("plotter.jog(axis=\"y\",delta=12)", dry).is_ok());
         assert!(check("plotter.pen(z=0,feed=502)", dry).is_err());
         assert!(
             check(

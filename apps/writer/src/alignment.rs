@@ -2,9 +2,9 @@
 use crate::controller::{Action, CalibrationStep, Controller};
 use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
 
-const INK: u32 = 0x222222ff;
-const MUTED: u32 = 0x696965ff;
-const RULE: u32 = 0xdededdff;
+const INK: u32 = 0x202124ff;
+const MUTED: u32 = 0x5f6368ff;
+const RULE: u32 = 0xe8eaedff;
 const STEPS: [f64; 3] = [0.10, 0.25, 0.50];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

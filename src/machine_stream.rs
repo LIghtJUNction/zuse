@@ -1010,7 +1010,7 @@ fn jog_on_port<P: Port>(
         'Z' => 2,
         _ => return Err("invalid jog axis".into()),
     };
-    if !(delta.is_finite() && delta != 0. && delta.abs() <= 10. && feed > 0. && feed <= 500.) {
+    if !(delta.is_finite() && delta != 0. && feed > 0. && feed <= 500.) {
         return Err("invalid bounded plotter jog".into());
     }
     let mut c = Connection {
@@ -1130,6 +1130,37 @@ fn state(line: &str) -> Option<&str> {
 }
 // Sending additional trajectory blocks through the cancelled token is forbidden.
 // Feed hold is a cleanup command on the same port and never resumes the queue.
+pub(crate) fn reset_connected<P: Port>(
+    port: &mut P,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<String> {
+    let mut c = Connection {
+        port,
+        end,
+        cancel,
+        pending: Vec::new(),
+    };
+    let report = c.query_status(true)?;
+    if !matches!(state(&report), Some("Idle" | "Hold:0" | "Alarm")) {
+        return Err("wait until the controller has stopped before resetting".into());
+    }
+    c.identify()?;
+    c.check_startup_blocks()
+        .map_err(|error| format!("reset not sent; startup blocks are unverified: {error}"))?;
+    c.port.expect_reset();
+    c.send(&[0x18])
+        .map_err(|error| format!("reset result unknown: {error}"))?;
+    let frame = c
+        .query_status(true)
+        .map_err(|error| format!("reset sent; final state unknown: {error}"))?;
+    let state = state(&frame).ok_or("reset sent; status unreadable")?;
+    Ok(format!(
+        r#"{{"state":{},"reset_sent":true,"calibration_required":true}}"#,
+        quote(state)
+    ))
+}
+
 fn hold_incomplete_motion<P: Port>(port: &mut P) -> Result<&'static str> {
     let cleanup = Cancellation::default();
     let mut c = Connection {
@@ -1214,9 +1245,11 @@ fn transmit<P: Port>(
         ));
     }
     if let Some(guard) = bounds {
-        guard.require_generation(c.port.generation()).map_err(|error| {
-            format!("program sent; final travel reference unverified; do not replay: {error}")
-        })?;
+        guard
+            .require_generation(c.port.generation())
+            .map_err(|error| {
+                format!("program sent; final travel reference unverified; do not replay: {error}")
+            })?;
     }
     Ok(lines.len())
 }

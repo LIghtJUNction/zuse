@@ -353,9 +353,9 @@ impl WorkspaceWizard {
     }
 }
 
-const INK: u32 = 0x242424ff;
-const MUTED: u32 = 0x646460ff;
-const RULE: u32 = 0xdededdff;
+const INK: u32 = 0x202124ff;
+const MUTED: u32 = 0x5f6368ff;
+const RULE: u32 = 0xe8eaedff;
 const STEPS: [f64; 3] = [0.1, 0.25, 0.5];
 
 struct Panel<'a, 'b> {
@@ -367,7 +367,7 @@ struct Panel<'a, 'b> {
 impl Panel<'_, '_> {
     fn text(&mut self, s: &str, y: f32, size: i32, bold: bool) {
         self.canvas.ellipsis(
-            s,
+            crate::locale::text(s),
             self.area.x,
             self.area.y + y,
             self.area.w,
@@ -385,7 +385,7 @@ impl Panel<'_, '_> {
             self.canvas,
             id,
             r,
-            s,
+            crate::locale::text(s),
             if primary {
                 ButtonStyle::Primary
             } else {
@@ -400,7 +400,7 @@ impl Panel<'_, '_> {
     fn report(&mut self, s: &str, y: f32) {
         let mut line = String::new();
         let mut row = 0;
-        for ch in s.chars() {
+        for ch in crate::locale::text(s).chars() {
             line.push(ch);
             if self.canvas.measure(&line, 14, false) > self.area.w - 4. {
                 line.pop();
