@@ -27,6 +27,7 @@ pub struct WriterView {
     advanced: bool,
     fonts: Option<FontPicker>,
     article: Option<Article>,
+    choose_direction: bool,
     dark: bool,
     english: bool,
     confirm_reset: bool,
@@ -179,6 +180,7 @@ impl WriterView {
             advanced: false,
             fonts: None,
             article: None,
+            choose_direction: false,
             dark: false,
             english: false,
             confirm_reset: false,
@@ -229,6 +231,7 @@ impl WriterView {
         self.workspace.as_ref().is_none_or(|w| !w.pending())
     }
     pub fn back(&mut self) {
+        self.choose_direction = false;
         if self.alignment.take().is_none() {
             self.workspace = None;
         }
@@ -239,6 +242,8 @@ impl WriterView {
         self.workspace = None;
         self.alignment = None;
         self.scroll_y = 0.;
+        self.geometry[3] = c.form.x.to_string();
+        self.geometry[4] = c.form.y.to_string();
         self.geometry[6] = c.form.pen_up.to_string();
         self.geometry[7] = c.form.pen_down.to_string();
         self.dirty(c);
@@ -528,6 +533,43 @@ impl WriterView {
             return;
         }
         self.machine(&mut frame, c, pad, y + my, left, closing);
+        if self.choose_direction {
+            let y = y + ry;
+            frame.heading("纸面方向", rx, y);
+            frame.note(
+                "以正常阅读纸张的方向为准。如果字上下镜像，就选反转纸面上下。",
+                rx,
+                y + 44.,
+                right,
+            );
+            let width = (right - 8.) / 2.;
+            for (index, (reverse, label)) in [(false, "保留纸面上下"), (true, "反转纸面上下")]
+                .into_iter()
+                .enumerate()
+            {
+                if frame.button(
+                    706 + index as u64,
+                    Rect::new(rx + index as f32 * (width + 8.), y + 82., width, 37.),
+                    label,
+                    false,
+                    !closing && !c.busy(),
+                ) {
+                    match c.set_paper_direction(reverse, true) {
+                        Ok(()) => {
+                            self.choose_direction = false;
+                            self.finish_alignment(
+                                c,
+                                "对笔与纸面方向已应用。请重新生成预览。".into(),
+                            );
+                        }
+                        Err(error) => self.notice = error,
+                    }
+                    return;
+                }
+            }
+            frame.note(&self.notice, rx, y + 136., right);
+            return;
+        }
         if let Some(alignment) = &mut self.alignment {
             if alignment.draw(
                 frame.canvas,
@@ -536,11 +578,9 @@ impl WriterView {
                 Rect::new(rx, y + ry, right, panel_height),
                 closing,
             ) {
-                let message = format!(
-                    "已应用对笔结果，抬笔 {:.3} mm，落笔 {:.3} mm。请更新预览。",
-                    c.form.pen_up, c.form.pen_down
-                );
-                self.finish_alignment(c, message);
+                self.choose_direction = true;
+                self.notice.clear();
+                self.scroll_y = 0.;
             }
         } else if let Some(workspace) = &mut self.workspace {
             match workspace.draw(
@@ -1142,7 +1182,7 @@ impl WriterView {
         }
         if self.show_origin_hint && !self.advanced {
             f.canvas.ellipsis(
-                "起点 X/Y 请留在纸面内，默认轴向从 X 最小、Y 最大处向内留边。",
+                "书写起点 X/Y 对应纸张左上角。",
                 x,
                 y + 306.,
                 w,

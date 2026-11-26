@@ -1212,6 +1212,24 @@ impl Controller {
         }
         self.link.as_ref()?.id.as_deref()
     }
+    pub(crate) fn set_paper_direction(&mut self, reverse: bool, persist: bool) -> Result<()> {
+        let (x, y) = if self.form.swap_xy {
+            (reverse, self.form.flip_y)
+        } else {
+            (self.form.flip_x, reverse)
+        };
+        self.set_paper_axes([self.form.swap_xy, x, y], persist)
+    }
+
+    pub(crate) fn set_paper_axes(&mut self, axes: [bool; 3], persist: bool) -> Result<()> {
+        if persist && let Some(id) = self.hardware_id() {
+            crate::workspace_profile::save_axes(id, axes)?;
+        }
+        [self.form.swap_xy, self.form.flip_x, self.form.flip_y] = axes;
+        self.invalidate_plan();
+        Ok(())
+    }
+
     pub fn controller_identity(&self) -> Option<(&str, &str)> {
         if self.needs_device_status || !self.connected() {
             return None;
@@ -1524,6 +1542,15 @@ impl Controller {
         let model = model.or_else(|| previous.and_then(|d| d.model.clone()));
         let firmware = firmware.or_else(|| previous.and_then(|d| d.firmware.clone()));
         let offset = xyz.offset.or_else(|| previous.and_then(|d| d.offset));
+        if let Some(new_id) = id.as_deref()
+            && self.link.as_ref().and_then(|device| device.id.as_deref()) != Some(new_id)
+            && let Ok(Some([swap, x, y])) = crate::workspace_profile::load_axes(new_id)
+        {
+            self.form.swap_xy = swap;
+            self.form.flip_x = x;
+            self.form.flip_y = y;
+            self.invalidate_plan();
+        }
         self.link = Some(Device {
             reference_generation,
             id,

@@ -11,6 +11,7 @@ enum Stage {
     Move,
     Fix,
     Test,
+    Orient,
     Save,
     Stopped,
 }
@@ -61,6 +62,7 @@ pub(crate) struct WorkspaceWizard {
     tested: bool,
     quick: bool,
     confirm_auto_bounds: bool,
+    flip_y: Option<bool>,
     notice: String,
 }
 
@@ -86,6 +88,14 @@ fn in_range(p: &WorkspaceProfile, work: [f64; 3]) -> bool {
 
 fn at_mount(p: &WorkspaceProfile, work: [f64; 3]) -> bool {
     in_range(p, work) && (p.mount_z - work[2]).abs() <= 0.001
+}
+
+/// Determine horizontal and vertical reversal from physical page corners.
+fn paper_axes(top_left: [f64; 2], bottom_right: [f64; 2], swap: bool) -> [bool; 3] {
+    let dx = bottom_right[0] - top_left[0];
+    let dy = bottom_right[1] - top_left[1];
+    let (horizontal, vertical) = if swap { (dy, dx) } else { (dx, dy) };
+    [swap, horizontal < 0., vertical > 0.]
 }
 
 type Measurements = ([f64; 2], [f64; 2], f64, f64);
@@ -115,7 +125,7 @@ impl WorkspaceWizard {
 
     fn values(&self) -> Result<Measurements, String> {
         let [Some(a), Some(b)] = self.corners else {
-            return Err("请记录两个 XY 对角。".into());
+            return Err("请记录纸张左上角和右下角。".into());
         };
         let [Some(upper), Some(lower)] = self.ends else {
             return Err("请记录 Z 的物理上端和靠纸端。".into());
@@ -185,6 +195,20 @@ impl WorkspaceWizard {
         } else {
             "已应用行程，仅本次会话有效。"
         };
+        if let Some(reverse) = self.flip_y {
+            if self.quick {
+                c.set_paper_direction(reverse, !session_only)?;
+            } else {
+                let [swap, horizontal, _] = paper_axes(p.corner_a, p.corner_b, c.form.swap_xy);
+                let (x, y) = if swap {
+                    (reverse, horizontal)
+                } else {
+                    (horizontal, reverse)
+                };
+                c.set_paper_axes([swap, x, y], !session_only)?;
+                [c.form.x, c.form.y] = p.corner_a;
+            }
+        }
         c.form.pen_up = p.pen_up_z;
         c.form.pen_down = p.pen_down_z;
         Ok(format!(
@@ -492,14 +516,16 @@ impl WorkspaceWizard {
         }
         let title = match self.stage {
             Stage::Stopped => "操作已暂停",
-            Stage::Quick => "1 / 3   快速装笔",
-            Stage::Teach => "1 / 5   示教机台行程",
-            Stage::Review => "2 / 5   核对行程与装笔高度",
-            Stage::Move => "3 / 5   空笔夹定位",
-            Stage::Fix if self.quick => "2 / 3   贴纸装笔",
-            Stage::Fix => "4 / 5   贴纸装笔",
-            Stage::Test | Stage::Save if self.quick => "3 / 3   检查试写",
-            Stage::Test | Stage::Save => "5 / 5   检查试写",
+            Stage::Quick => "1 / 4   快速装笔",
+            Stage::Teach => "1 / 6   示教机台行程",
+            Stage::Review => "2 / 6   核对行程与装笔高度",
+            Stage::Move => "3 / 6   空笔夹定位",
+            Stage::Fix if self.quick => "2 / 4   贴纸装笔",
+            Stage::Fix => "4 / 6   贴纸装笔",
+            Stage::Test | Stage::Save if self.quick => "3 / 4   检查试写",
+            Stage::Test | Stage::Save => "5 / 6   检查试写",
+            Stage::Orient if self.quick => "4 / 4   纸面方向",
+            Stage::Orient => "6 / 6   纸面方向",
         };
         f.text(title, 46., 17, true);
         let report_y = match self.stage {
@@ -547,10 +573,14 @@ impl WorkspaceWizard {
                 290.
             }
             Stage::Test => {
-                if let Some(done) = self.test_ink(&mut f, c, ready) {
+                self.test_ink(&mut f, c, ready);
+                320.
+            }
+            Stage::Orient => {
+                if let Some(done) = self.paper_direction(&mut f, c, ready) {
                     return Outcome::Done(done);
                 }
-                320.
+                310.
             }
             Stage::Fix | Stage::Save => {
                 if let Some(done) = self.fix(&mut f, c, ready) {
@@ -609,7 +639,7 @@ impl WorkspaceWizard {
             }
         }
         f.text(
-            "在两个对角位置分别记录 XY，在两个 Z 端点分别记录高度。",
+            "分别记录纸张左上角、右下角的 XY，以及 Z 上下端。",
             264.,
             14,
             false,
@@ -620,7 +650,7 @@ impl WorkspaceWizard {
         {
             let col = i % 2;
             let y = 297. + 60. * (i / 2) as f32;
-            let name = ["对角 A", "对角 B", "物理上端", "靠纸下端"][i];
+            let name = ["左上角", "右下角", "物理上端", "靠纸下端"][i];
             let val = match target {
                 Target::A | Target::B => {
                     self.corners[col].map(|a| format!("{:.2}, {:.2}", a[0], a[1]))
@@ -776,12 +806,7 @@ impl WorkspaceWizard {
         f.text("保持当前 XY，只沿 Z 轴低速定位。", 261., 14, false);
     }
 
-    fn test_ink(
-        &mut self,
-        f: &mut Panel<'_, '_>,
-        c: &mut Controller,
-        ready: bool,
-    ) -> Option<String> {
+    fn test_ink(&mut self, f: &mut Panel<'_, '_>, c: &mut Controller, ready: bool) {
         f.report(
             "笔尖附近留出至少 5 mm 空白纸面。程序将试写两段短线，中间抬笔。",
             80.,
@@ -791,8 +816,8 @@ impl WorkspaceWizard {
             139.,
         );
         if !self.tested && f.pair(1090, 218., 0, "试写两段短线", true, ready) {
-            let p = self.plan.as_ref()?;
-            let offset = self.offset?;
+            let Some(p) = self.plan.as_ref() else { return };
+            let Some(offset) = self.offset else { return };
             let bounds = MachineBounds {
                 min: p.min,
                 max: p.max,
@@ -800,12 +825,14 @@ impl WorkspaceWizard {
             let token = c.test_calibration_ink(bounds, p.pen_up_z, p.pen_down_z, offset);
             self.request(token, Operation::Test, c);
         }
-        if self.tested && f.pair(1091, 218., 0, "出墨正常 · 保存", true, ready) {
-            self.stage = Stage::Save;
-            match self.finish(c, false) {
-                Ok(message) => return Some(message),
-                Err(error) => self.notice = error,
-            }
+        if self.tested && f.pair(1091, 218., 0, "出墨正常 · 下一步", true, ready) {
+            self.stage = Stage::Orient;
+            self.flip_y = (!self.quick).then(|| {
+                self.plan
+                    .as_ref()
+                    .is_some_and(|plan| paper_axes(plan.corner_a, plan.corner_b, c.form.swap_xy)[2])
+            });
+            self.notice.clear();
         }
         if f.pair(1092, 218., 1, "返回装笔", false, ready) {
             self.stage = if self.quick {
@@ -820,6 +847,55 @@ impl WorkspaceWizard {
             }
             self.tested = false;
             self.notice = "请先松开或取下笔，再定位空笔夹。".into();
+        }
+    }
+
+    fn paper_direction(
+        &mut self,
+        f: &mut Panel<'_, '_>,
+        c: &mut Controller,
+        ready: bool,
+    ) -> Option<String> {
+        f.report(
+            "以正常阅读纸张的方向为准。如果字上下镜像，就选反转纸面上下。",
+            80.,
+        );
+        f.report(
+            if self.quick {
+                "两种设置会应用到后续预览和写字。"
+            } else {
+                "已根据左上角和右下角预选方向，可按纸面校对。"
+            },
+            133.,
+        );
+        for (index, (reverse, label)) in [(false, "保留纸面上下"), (true, "反转纸面上下")]
+            .into_iter()
+            .enumerate()
+        {
+            if f.pair(
+                1097 + index as u64,
+                178.,
+                index,
+                label,
+                self.flip_y == Some(reverse),
+                ready,
+            ) {
+                self.flip_y = Some(reverse);
+            }
+        }
+        if f.pair(
+            1099,
+            237.,
+            1,
+            "保存并完成",
+            true,
+            ready && self.flip_y.is_some(),
+        ) {
+            self.stage = Stage::Save;
+            match self.finish(c, false) {
+                Ok(message) => return Some(message),
+                Err(error) => self.notice = error,
+            }
         }
         None
     }
@@ -845,7 +921,7 @@ impl WorkspaceWizard {
             false,
         );
         f.report(
-            "书写起点 X/Y 须位于纸面内。默认轴向可从 X 最小、Y 最大处向内留边。",
+            "记录的左上角将成为书写起点。页边距可在「纸张与字迹」里设置。",
             244.,
         );
         if self.stage == Stage::Save {
@@ -874,6 +950,19 @@ impl WorkspaceWizard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paper_directions_follow_named_corners_instead_of_sorted_machine_bounds() {
+        assert_eq!(
+            paper_axes([0., 0.], [60., 90.], false),
+            [false, false, true]
+        );
+        assert_eq!(
+            paper_axes([60., 90.], [0., 0.], false),
+            [false, true, false]
+        );
+        assert_eq!(paper_axes([0., 90.], [60., 0.], true), [true, true, true]);
+    }
 
     #[test]
     fn review_needs_all_measurements_and_never_clips_edited_clearance() {

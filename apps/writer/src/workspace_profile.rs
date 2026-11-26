@@ -258,7 +258,48 @@ pub fn load_profile(binding: &Binding) -> Result<Option<WorkspaceProfile>> {
 
 fn save_to(root: &Path, binding: &Binding, profile: &WorkspaceProfile) -> Result<()> {
     let body = profile.encode(binding)?;
-    let path = binding.file(root);
+    write_atomic(&binding.file(root), &body)
+}
+
+fn axis_path(device: &str) -> Result<PathBuf> {
+    if !(1..=100).contains(&device.len())
+        || !device
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err("无效的设备标识".into());
+    }
+    Ok(config_root()?
+        .with_file_name("paper-axes")
+        .join(format!("{device}.txt")))
+}
+
+pub(crate) fn load_axes(device: &str) -> Result<Option<[bool; 3]>> {
+    let file = match File::open(axis_path(device)?) {
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        result => result.map_err(|error| error.to_string())?,
+    };
+    let mut bytes = Vec::new();
+    file.take(5)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    let [swap, flip_x, flip_y, b'\n'] = bytes.as_slice() else {
+        return Err("纸面方向档案无效".into());
+    };
+    let flag = |value| match value {
+        b'0' => Ok(false),
+        b'1' => Ok(true),
+        _ => Err("纸面方向档案无效".to_owned()),
+    };
+    Ok(Some([flag(*swap)?, flag(*flip_x)?, flag(*flip_y)?]))
+}
+
+pub(crate) fn save_axes(device: &str, axes: [bool; 3]) -> Result<()> {
+    let [swap, x, y] = axes.map(u8::from);
+    write_atomic(&axis_path(device)?, &format!("{swap}{x}{y}\n"))
+}
+
+fn write_atomic(path: &Path, body: &str) -> Result<()> {
     let parent = path.parent().expect("profile directory");
     let mut dirs = fs::DirBuilder::new();
     dirs.recursive(true);
@@ -293,7 +334,7 @@ fn save_to(root: &Path, binding: &Binding, profile: &WorkspaceProfile) -> Result
         file.write_all(body.as_bytes())?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&temp, &path)?;
+        fs::rename(&temp, path)?;
         #[cfg(unix)]
         File::open(parent)?.sync_all()?;
         Ok(())
