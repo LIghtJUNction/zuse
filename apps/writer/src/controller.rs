@@ -1936,6 +1936,27 @@ mod tests {
     const PROGRAM: &str = "G21 G17 G90 G94\nG0 Z3.000\nG0 X10.000 Y20.000\nG1 Z0.000 F300.000\nG1 X12.500 Y18.500\nG0 Z3.000\nM2\n";
 
     #[test]
+    fn full_writer_form_generates_preview_at_controlled_feed() {
+        let form = Form::default();
+        let command = source(&Action::Preview, &form, "").unwrap();
+        let result = zuse::runtime::Runtime::new()
+            .execute(&command, zuse::runtime::Options::default())
+            .unwrap();
+        let payload = json::with_value(&result, |root| {
+            root.get("results")
+                .and_then(|steps| steps.elements().next())
+                .and_then(|step| step.get("value"))
+                .map(|value| value.raw().to_owned())
+                .ok_or_else(|| result.clone())
+        })
+        .unwrap();
+        let program = json::field(&payload, "gcode").unwrap();
+        assert!(!program.contains("G0"));
+        assert!(program.contains("F300.000"));
+        assert!(!preview_paths(&program, form.pen_up).unwrap().is_empty());
+    }
+
+    #[test]
     fn ink_test_uses_two_dashes_and_ends_with_the_pen_up_inside_bounds() {
         let bounds = MachineBounds {
             min: [0., 0., -2.],

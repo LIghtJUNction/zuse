@@ -11,7 +11,7 @@ use core::fmt;
 /// Largest accepted UTF-8 script (one MiB).
 pub const MAX_SCRIPT_BYTES: usize = 1_048_576;
 /// Maximum arguments in one call.
-pub const MAX_ARGS: usize = 24;
+pub const MAX_ARGS: usize = 32;
 /// Maximum identifier length in bytes.
 pub const MAX_NAME_BYTES: usize = 128;
 /// Maximum quoted value length before escape decoding.
