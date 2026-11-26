@@ -70,10 +70,40 @@ impl Default for Form {
 }
 
 #[derive(Clone, Debug)]
+pub struct ScreenRequest {
+    source: String,
+    operation: &'static str,
+}
+impl ScreenRequest {
+    fn new(source: String, preview: bool) -> Result<Self> {
+        let mut calls = zuse::language::Parser::new(&source);
+        let call = calls
+            .next()
+            .ok_or("缺少屏幕输出调用")?
+            .map_err(|e| e.to_string())?;
+        let operation = match (preview, call.name) {
+            (true, "write.preview") => "write.preview",
+            (false, "write.mouse") => "write.mouse",
+            (false, "write.touchscreen") => "write.touchscreen",
+            (false, "write.touchpad") => "write.touchpad",
+            _ => return Err("屏幕操作与所选输出模式不符".into()),
+        };
+        if calls.next().is_some() {
+            return Err("每次只接受一个屏幕输出调用".into());
+        }
+        Ok(Self { source, operation })
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum Action {
+    Screen(ScreenRequest),
     Preview,
     Connect,
     Refresh,
+    CalibrationStatus,
+    Mount(MountAction, Option<[f64; 3]>),
+    CalibrationCapture(CalibrationStep),
     Disconnect,
     Jog { axis: char, delta: f64 },
     SetPenUp,
@@ -86,8 +116,112 @@ pub enum Action {
     Cancel,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalibrationStep {
+    Status,
+    PenUp,
+    PenDown,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CalibrationReceipt {
+    pub epoch: u64,
+    pub probe_active: Option<bool>,
+    pub request_id: u64,
+    pub step: CalibrationStep,
+    pub work: [f64; 3],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MachineBounds {
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MountAction {
+    Status,
+    MoveZ(f64),
+    Jog { axis: char, delta: f64 },
+    ApplyBounds(MachineBounds),
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MountReceipt {
+    pub request_id: u64,
+    pub epoch: u64,
+    pub action: MountAction,
+    pub work: [f64; 3],
+    pub work_offset: Option<[f64; 3]>,
+}
+const MOUNT_STATUS: &str = "plotter.status(work=true,offset=true,timeout=6000)";
+
+impl MountAction {
+    fn program(self, reference: Option<[f64; 3]>) -> Result<String> {
+        match self {
+            Self::Status => Ok(MOUNT_STATUS.into()),
+            Self::MoveZ(z) if (-10000.0..=10000.0).contains(&z) => {
+                Ok(format!("plotter.pen(z={z},feed=40,timeout=300000)"))
+            }
+            Self::MoveZ(_) => Err("安装高度必须是有效的毫米工作坐标".into()),
+            Self::Jog { axis, delta } => {
+                let axis = axis.to_ascii_lowercase();
+                let limit = match axis {
+                    'x' | 'y' => 10.,
+                    'z' => 0.5,
+                    _ => return Err("示教点动只支持 X、Y、Z".into()),
+                };
+                if !delta.is_finite() || !(0.001..=limit).contains(&delta.abs()) {
+                    return Err(format!("该轴每次点动限 0.001–{limit} mm"));
+                }
+                Ok(format!(
+                    "plotter.jog(axis=\"{axis}\",delta={delta},feed=40,timeout=20000)"
+                ))
+            }
+            Self::ApplyBounds(bounds) => {
+                let wco = reference.ok_or("应用边界前请读取并核对当前 WCO")?;
+                if !wco.iter().all(|x| x.is_finite())
+                    || !(0..3).all(|i| {
+                        bounds.min[i].is_finite()
+                            && bounds.max[i].is_finite()
+                            && bounds.min[i] < bounds.max[i]
+                    })
+                {
+                    return Err("边界须为三组有序且有限的坐标".into());
+                }
+                Ok(format!(
+                    "plotter.set_bounds(x_min={},x_max={},y_min={},y_max={},z_min={},z_max={},wco_x={},wco_y={},wco_z={})",
+                    bounds.min[0],
+                    bounds.max[0],
+                    bounds.min[1],
+                    bounds.max[1],
+                    bounds.min[2],
+                    bounds.max[2],
+                    wco[0],
+                    wco[1],
+                    wco[2]
+                ))
+            }
+        }
+    }
+}
+
+impl Action {
+    fn calibration_step(&self) -> Option<CalibrationStep> {
+        match self {
+            Self::CalibrationCapture(step) => Some(*step),
+            Self::CalibrationStatus => Some(CalibrationStep::Status),
+            Self::SetPenUp => Some(CalibrationStep::PenUp),
+            Self::SetPenDown => Some(CalibrationStep::PenDown),
+            _ => None,
+        }
+    }
+}
+
+const WORK_STATUS: &str = "plotter.status(work=true,timeout=6000)";
+const LEGACY_STATUS: &str = "plotter.status(timeout=1200)";
+
 fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
     let text = match action {
+        Action::Screen(screen) => screen.source.clone(),
         Action::Preview => format!(
             "write.gcode(text={},font={},size={},advance={},line_height={},x={},y={},offset_x={},offset_y={},reference_units={},reference_distance={},swap_xy={},flip_x={},flip_y={},seed={},pen_up={},pen_down={},feed={})",
             quote(&f.text),
@@ -110,7 +244,12 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
             f.feed
         ),
         Action::Connect => format!("plotter.connect(port={},baud={})", quote(&f.port), f.baud),
-        Action::Refresh | Action::SetPenUp | Action::SetPenDown => "plotter.status()".into(),
+        Action::Refresh => "plotter.status()".into(),
+        Action::Mount(kind, reference) => kind.program(*reference)?,
+        Action::CalibrationCapture(_)
+        | Action::CalibrationStatus
+        | Action::SetPenUp
+        | Action::SetPenDown => WORK_STATUS.into(),
         Action::Disconnect => "plotter.disconnect()".into(),
         Action::Jog { axis, delta } => {
             let a = axis.to_ascii_lowercase();
@@ -345,6 +484,7 @@ fn value(receipt: &str) -> Result<String> {
 enum Event {
     Observed(Result<(Snapshot, Option<String>)>, u64),
     Accepted(Snapshot),
+    ScreenSettled(Snapshot),
     Done(Action, Box<Form>, Result<(String, Option<Snapshot>)>),
     Cancelled(Result<()>),
 }
@@ -359,7 +499,13 @@ fn submit(
 ) -> Result<(String, Option<Snapshot>)> {
     let before = match session.status() {
         Ok(s) => s,
-        Err(_) if expected.is_none() && matches!(action, Action::Connect | Action::Preview) => {
+        Err(_)
+            if expected.is_none()
+                && matches!(
+                    action,
+                    Action::Connect | Action::Preview | Action::Screen(_)
+                ) =>
+        {
             // Another client may win the start race. Query the existing named session.
             let start = session.cli("start", &[], None);
             session
@@ -375,13 +521,23 @@ fn submit(
         return Err("提交前已取消".into());
     }
     let id = request_id();
-    let command = if matches!(
-        action,
-        Action::Refresh | Action::SetPenUp | Action::SetPenDown
-    ) {
+    let command = if matches!(action,Action::Screen(request) if request.operation=="write.preview")
+        || matches!(
+            action,
+            Action::Refresh
+                | Action::CalibrationCapture(_)
+                | Action::CalibrationStatus
+                | Action::SetPenUp
+                | Action::SetPenDown
+        ) {
         "observe"
     } else {
         "script"
+    };
+    let wait_ms = if matches!(action, Action::Screen(_)) {
+        600_000_u64
+    } else {
+        300_000
     };
     let accepted = session.cli(
         command,
@@ -392,7 +548,7 @@ fn submit(
             "--expect-revision",
             &before.rev.to_string(),
             "--max-wait-ms",
-            "300000",
+            &wait_ms.to_string(),
         ],
         Some(script),
     )?;
@@ -411,7 +567,7 @@ fn submit(
     events
         .send(Event::Accepted(target.clone()))
         .map_err(|_| "窗口已关闭")?;
-    let until = Instant::now() + Duration::from_secs(320);
+    let until = Instant::now() + Duration::from_millis(wait_ms + 20_000);
     let mut cancel_sent = false;
     loop {
         let now = session.status()?;
@@ -433,6 +589,34 @@ fn submit(
             }
             let current =
                 after.active.is_none() && after.last == Some(job) && after.rev == target.rev + 1;
+            // Only this precise, correlated zero-effect preflight rejection permits an
+            // older daemon to service the request. Never retry an uncertain observation.
+            if current
+                && matches!(script, WORK_STATUS | MOUNT_STATUS)
+                && action.calibration_step().is_some()
+                && legacy_work_rejection(&out)
+            {
+                return legacy_work_status(
+                    session,
+                    action,
+                    after,
+                    stop,
+                    events,
+                    script == MOUNT_STATUS,
+                );
+            }
+            if let Action::Screen(request) = action {
+                if current {
+                    events
+                        .send(Event::ScreenSettled(after.clone()))
+                        .map_err(|_| "窗口已关闭")?;
+                }
+                let payload = value(&out)?;
+                if sole_operation(&out).as_deref() != Some(request.operation) {
+                    return Err("屏幕作业回执与请求的操作不符".into());
+                }
+                return Ok((payload, current.then_some(after)));
+            }
             return Ok((value(&out)?, current.then_some(after)));
         }
         if Instant::now() > until {
@@ -440,6 +624,55 @@ fn submit(
         }
         thread::sleep(Duration::from_millis(160));
     }
+}
+
+fn legacy_work_rejection(receipt: &str) -> bool {
+    let Some(result) = raw(receipt, "result") else {
+        return false;
+    };
+    field(receipt, "status").as_deref() == Some("failed")
+        && field(&result, "stage").as_deref() == Some("prepare")
+        && field(&result, "error_code").as_deref() == Some("preflight_error")
+        && num(&result, "completed") == Some(0)
+        && matches!(
+            field(&result, "error").as_deref(),
+            Some(
+                "plotter.status: unknown argument work" | "plotter.status: unknown argument offset"
+            )
+        )
+}
+
+fn legacy_work_status(
+    session: &Session,
+    action: &Action,
+    mut last: Snapshot,
+    stop: &AtomicBool,
+    events: &mpsc::Sender<Event>,
+    offset_required: bool,
+) -> Result<(String, Option<Snapshot>)> {
+    let deadline = Instant::now() + Duration::from_secs(6);
+    for sample in 1..=8 {
+        let (payload, snapshot) =
+            submit(session, action, LEGACY_STATUS, Some(&last), stop, events)?;
+        let Some(next) = snapshot else {
+            return Ok((payload, None));
+        };
+        // Use only positions from one receipt, and never continue sampling an unready machine.
+        if raw(&payload, "connected").as_deref() != Some("true")
+            || field(&payload, "state").as_deref() != Some("Idle")
+            || {
+                let sample = Coordinates::parse(&payload)?;
+                sample.work.is_some() && (!offset_required || sample.offset.is_some())
+            }
+            || sample == 8
+            || Instant::now() >= deadline
+        {
+            return Ok((payload, Some(next)));
+        }
+        last = next;
+        thread::sleep(Duration::from_millis(100));
+    }
+    unreachable!()
 }
 
 fn coords(s: &str, key: &str) -> Result<Option<[f64; 3]>> {
@@ -458,6 +691,38 @@ fn coords(s: &str, key: &str) -> Result<Option<[f64; 3]>> {
         }
         Ok(Some(xyz))
     })
+}
+
+#[derive(Clone, Copy)]
+struct Coordinates {
+    machine: Option<[f64; 3]>,
+    work: Option<[f64; 3]>,
+    offset: Option<[f64; 3]>,
+}
+impl Coordinates {
+    // All three terms come exclusively from this one millimetre report.
+    fn parse(payload: &str) -> Result<Self> {
+        let m = coords(payload, "machine_position")?;
+        let w = coords(payload, "work_position")?;
+        let o = coords(payload, "work_offset")?;
+        let machine = m.or_else(|| w.zip(o).map(|(w, o)| std::array::from_fn(|i| w[i] + o[i])));
+        let work = w.or_else(|| m.zip(o).map(|(m, o)| std::array::from_fn(|i| m[i] - o[i])));
+        let offset = o.or_else(|| m.zip(w).map(|(m, w)| std::array::from_fn(|i| m[i] - w[i])));
+        if machine
+            .iter()
+            .chain(&work)
+            .chain(&offset)
+            .flatten()
+            .any(|n| !n.is_finite())
+        {
+            return Err("GRBL 坐标超出范围".into());
+        }
+        Ok(Self {
+            machine,
+            work,
+            offset,
+        })
+    }
 }
 
 fn export(path: &std::path::Path, program: &str) -> Result<()> {
@@ -495,8 +760,54 @@ fn device_receipt(receipt: &str) -> Option<String> {
     .then_some(payload)
 }
 
-#[derive(Debug)]
+// A neighbouring revision may contain a single other window's read. A skipped
+// revision or a program that merely ends in plotter.status can hide real motion.
+fn contiguous_completion(previous: &Snapshot, current: &Snapshot, job: u64) -> bool {
+    if previous.pid != current.pid || current.active.is_some() || current.last != Some(job) {
+        return false;
+    }
+    if let Some(active) = previous.active {
+        active == job && previous.rev.checked_add(1) == Some(current.rev)
+    } else {
+        previous.last.unwrap_or(0).checked_add(1) == Some(job)
+            && previous.rev.checked_add(2) == Some(current.rev)
+    }
+}
+
+fn sole_operation(receipt: &str) -> Option<String> {
+    if field(receipt, "status").as_deref() != Some("completed") {
+        return None;
+    }
+    let result = raw(receipt, "result")?;
+    if field(&result, "status").as_deref() != Some("completed") {
+        return None;
+    }
+    json::with_value(&result, |v| {
+        let mut steps = v.get("results").ok_or("missing steps")?.elements();
+        let op = steps
+            .next()
+            .and_then(|s| s.get("operation"))
+            .ok_or("missing operation")?;
+        if steps.next().is_some() {
+            return Err("multiple operations".into());
+        }
+        json::text(op)
+    })
+    .ok()
+}
+fn observed_operation(previous: &Snapshot, current: &Snapshot, receipt: &str) -> Option<String> {
+    let job = num(receipt, "job_id")?;
+    contiguous_completion(previous, current, job)
+        .then(|| sole_operation(receipt))
+        .flatten()
+}
+
+#[derive(Clone, Debug)]
 struct Device {
+    offset: Option<[f64; 3]>,
+    id: Option<String>,
+    model: Option<String>,
+    firmware: Option<String>,
     port: String,
     baud: u32,
     label: Option<String>,
@@ -526,13 +837,164 @@ impl Device {
     }
 }
 
+fn same_xyz(a: [f64; 3], b: [f64; 3], tolerance: f64) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tolerance)
+}
+fn check_bound_receipt(data: &str, b: MachineBounds, reference: [f64; 3]) -> Result<()> {
+    let box_data = raw(data, "bounds").ok_or("控制器未返回已应用的边界")?;
+    for (i, axis) in ["x", "y", "z"].iter().enumerate() {
+        for (side, target) in [("min", b.min[i]), ("max", b.max[i])] {
+            if raw(&box_data, &format!("{axis}_{side}")).and_then(|v| v.parse::<f64>().ok())
+                != Some(target)
+            {
+                return Err("控制器回执与指定边界不一致".into());
+            }
+        }
+    }
+    if !coords(data, "work_offset")?.is_some_and(|offset| same_xyz(offset, reference, 0.000_001)) {
+        return Err("控制器未确认边界绑定的工作偏移".into());
+    }
+    Ok(())
+}
+
+fn device_envelope(data: &str, selected: &Device) -> bool {
+    raw(data, "connected").as_deref() == Some("true")
+        && field(data, "port")
+            .zip(num(data, "baud").and_then(|n| u32::try_from(n).ok()))
+            .is_some_and(|(path, baud)| selected.matches(&path, baud))
+}
+
+struct MountObservation {
+    payload: String,
+    snapshot: Snapshot,
+    work: [f64; 3],
+    offset: [f64; 3],
+}
+
+impl MountObservation {
+    fn from_result(
+        (payload, snapshot): (String, Option<Snapshot>),
+        device: &Device,
+    ) -> Result<Self> {
+        let snapshot = snapshot.ok_or("工作坐标回执已被其他会话操作取代")?;
+        if !device_envelope(&payload, device)
+            || field(&payload, "state").as_deref() != Some("Idle")
+            || field(&payload, "units").as_deref() != Some("mm")
+            || [
+                ("device_id", &device.id),
+                ("controller", &device.model),
+                ("firmware", &device.firmware),
+            ]
+            .into_iter()
+            .any(|(key, known)| {
+                known
+                    .as_ref()
+                    .is_some_and(|v| field(&payload, key).as_ref() != Some(v))
+            })
+        {
+            return Err("示教所选写字机身份、空闲状态或毫米单位未确认".into());
+        }
+        let xyz = Coordinates::parse(&payload)?;
+        Ok(Self {
+            payload,
+            snapshot,
+            work: xyz.work.ok_or("本次回执缺少 WPos")?,
+            offset: xyz.offset.ok_or("本次回执缺少可核实的 WCO")?,
+        })
+    }
+
+    fn completed(self) -> (String, Option<Snapshot>) {
+        (self.payload, Some(self.snapshot))
+    }
+}
+
+fn mount_job(
+    action: &Action,
+    program: &str,
+    snapshot: Option<&Snapshot>,
+    device: Option<&Device>,
+    mut run: impl FnMut(&Action, &str, &Snapshot) -> Result<(String, Option<Snapshot>)>,
+) -> Result<(String, Option<Snapshot>)> {
+    let Action::Mount(kind, reference) = action else {
+        unreachable!()
+    };
+    let device = device.ok_or("连接写字机后再开始示教")?;
+    let initial = snapshot.ok_or("示教需要已核实的会话快照")?;
+    let before = MountObservation::from_result(
+        run(&Action::CalibrationStatus, MOUNT_STATUS, initial)?,
+        device,
+    )?;
+    if *kind == MountAction::Status {
+        return Ok(before.completed());
+    }
+    if reference.is_some_and(|saved| !same_xyz(saved, before.offset, 0.000_001)) {
+        return Err("示教参考 WCO 已变化，命令未发送".into());
+    }
+    let mut target = before.work;
+    match *kind {
+        MountAction::MoveZ(z) => {
+            if (z - target[2]).abs() * 1500.0 > 295_000.0 {
+                return Err("安装位距离超出本次低速移动的 300 秒上限".into());
+            }
+            target[2] = z;
+        }
+        MountAction::Jog { axis, delta } => {
+            let i = match axis.to_ascii_uppercase() {
+                'X' => 0,
+                'Y' => 1,
+                'Z' => 2,
+                _ => return Err("无效的点动轴".into()),
+            };
+            target[i] += delta;
+        }
+        _ => {}
+    }
+    // Only submit()'s read-only observation can fall back on a legacy daemon.
+    let (receipt, after) = run(action, program, &before.snapshot)?;
+    let after = after.ok_or("命令已结束，结果被其他操作取代，请核对写字机")?;
+    if !device_envelope(&receipt, device) {
+        return Err("命令已结束，回执未确认所选设备，请勿重复提交".into());
+    }
+    if let MountAction::ApplyBounds(bounds) = kind {
+        check_bound_receipt(&receipt, *bounds, before.offset)?;
+    }
+    let confirmed = run(&Action::CalibrationStatus, MOUNT_STATUS, &after)
+        .and_then(|result| MountObservation::from_result(result, device))
+        .map_err(|e| format!("命令已收到回执，最终工作位置未确认，请勿重复提交：{e}"))?;
+    // GRBL reports three decimals in millimetres and four in inches.
+    let tolerance = if field(&confirmed.payload, "report_units").as_deref() == Some("inch") {
+        0.001_271
+    } else {
+        0.000_501
+    };
+    if ["device_id", "controller", "firmware", "report_units"]
+        .iter()
+        .any(|key| field(&before.payload, key) != field(&confirmed.payload, key))
+        || !same_xyz(before.offset, confirmed.offset, 0.000_001)
+        || !same_xyz(target, confirmed.work, tolerance)
+        || (0..3).any(|i| target[i] != before.work[i] && confirmed.work[i] == before.work[i])
+    {
+        return Err("命令已收到回执，最终工作位置或偏移与预期不符，请核对写字机".into());
+    }
+    Ok(confirmed.completed())
+}
+
 pub struct Controller {
+    screen: Option<(u64, String)>,
+    screen_running: bool,
+    screen_job: Option<Snapshot>,
     pub form: Form,
     pub strokes: Strokes,
     pub gcode: String,
     pub status: String,
     pub mpos: Option<[f64; 3]>,
     pub wpos: Option<[f64; 3]>,
+    pressure_sample: Option<(f64, String)>,
+    probe_pin: Option<bool>,
+    calibration: Option<CalibrationReceipt>,
+    calibration_epoch: u64,
+    mount: Option<MountReceipt>,
+    work_offset: Option<[f64; 3]>,
     session: Session,
     snapshot: Option<Snapshot>,
     events: mpsc::Receiver<Event>,
@@ -553,12 +1015,21 @@ impl Default for Controller {
     fn default() -> Self {
         let (tx, events) = mpsc::channel();
         Self {
+            screen: None,
+            screen_running: false,
+            screen_job: None,
             form: Form::default(),
             strokes: vec![],
             gcode: String::new(),
             status: "就绪".into(),
             mpos: None,
             wpos: None,
+            pressure_sample: None,
+            probe_pin: None,
+            calibration: None,
+            calibration_epoch: 0,
+            mount: None,
+            work_offset: None,
             session: Session::default(),
             snapshot: None,
             events,
@@ -606,15 +1077,124 @@ impl Controller {
             .as_ref()
             .is_some_and(|d| d.matches(&self.form.port, self.form.baud))
     }
-    fn mark_device_stale(&mut self) {
-        self.needs_device_status = true;
+    /// Screen previews and output use the same named session as the other writer jobs.
+    pub fn dispatch_screen(&mut self, source: String, preview: bool) -> Option<u64> {
+        let request = match ScreenRequest::new(source, preview) {
+            Ok(request) => request,
+            Err(error) => {
+                self.status = error;
+                return None;
+            }
+        };
+        let before = self.generation;
+        self.dispatch(Action::Screen(request));
+        (self.generation != before).then_some(self.generation)
+    }
+    pub fn screen_receipt(&self) -> Option<(u64, &str)> {
+        self.screen
+            .as_ref()
+            .map(|(token, value)| (*token, value.as_str()))
+    }
+    pub fn hardware_id(&self) -> Option<&str> {
+        if self.needs_device_status || !self.connected() {
+            return None;
+        }
+        self.link.as_ref()?.id.as_deref()
+    }
+    pub fn controller_identity(&self) -> Option<(&str, &str)> {
+        if self.needs_device_status || !self.connected() {
+            return None;
+        }
+        let d = self.link.as_ref()?;
+        Some((d.model.as_deref()?, d.firmware.as_deref()?))
+    }
+    pub fn work_offset(&self) -> Option<[f64; 3]> {
+        self.work_offset
+    }
+    pub fn mount_receipt(&self) -> Option<&MountReceipt> {
+        if self.busy() || self.needs_device_status {
+            None
+        } else {
+            self.mount.as_ref()
+        }
+    }
+    fn dispatch_mount(&mut self, what: MountAction, reference: Option<[f64; 3]>) -> Option<u64> {
+        let before = self.generation;
+        self.dispatch(Action::Mount(what, reference));
+        (self.generation != before).then_some(self.generation)
+    }
+    pub fn refresh_mount_reference(&mut self) -> Option<u64> {
+        self.dispatch_mount(MountAction::Status, None)
+    }
+    pub fn move_mount_z(&mut self, z: f64) -> Option<u64> {
+        self.dispatch_mount(
+            MountAction::MoveZ(z),
+            self.link.as_ref().and_then(|d| d.offset),
+        )
+    }
+    pub fn jog_calibration(&mut self, axis: char, delta: f64) -> Option<u64> {
+        self.dispatch_mount(
+            MountAction::Jog {
+                axis: axis.to_ascii_uppercase(),
+                delta,
+            },
+            self.link.as_ref().and_then(|d| d.offset),
+        )
+    }
+    pub fn apply_calibration_bounds_at(&mut self, b: MachineBounds, wco: [f64; 3]) -> Option<u64> {
+        self.dispatch_mount(MountAction::ApplyBounds(b), Some(wco))
+    }
+
+    pub fn pressure(&self) -> Option<f64> {
+        self.pressure_sample.as_ref().map(|p| p.0)
+    }
+    pub fn pressure_unit(&self) -> Option<&str> {
+        self.pressure_sample.as_ref().map(|p| p.1.as_str())
+    }
+    pub fn probe_active(&self) -> Option<bool> {
+        self.probe_pin
+    }
+    /// Changes when earlier captures can no longer be combined with new ones.
+    pub fn calibration_epoch(&self) -> u64 {
+        self.calibration_epoch
+    }
+    fn invalidate_calibration(&mut self) {
+        self.calibration_epoch = self.calibration_epoch.wrapping_add(1);
+        self.calibration = None;
+        self.mount = None;
+    }
+    pub fn calibration_receipt(&self) -> Option<&CalibrationReceipt> {
+        if self.needs_device_status || self.busy() {
+            return None;
+        }
+        self.calibration.as_ref()
+    }
+
+    /// Return the accepted window action's token. Busy/refused dispatches have no token.
+    pub fn dispatch_calibration(&mut self, step: CalibrationStep) -> Option<u64> {
+        let before = self.generation;
+        self.dispatch(Action::CalibrationCapture(step));
+        (self.generation != before).then_some(self.generation)
+    }
+
+    fn clear_samples(&mut self) {
         self.mpos = None;
         self.wpos = None;
+        self.pressure_sample = None;
+        self.probe_pin = None;
+        self.work_offset = None;
+    }
+
+    fn mark_device_stale(&mut self) {
+        self.invalidate_calibration();
+        self.needs_device_status = true;
+        self.clear_samples();
     }
     fn forget_device(&mut self) {
-        self.link = None;
-        self.mpos = None;
-        self.wpos = None;
+        if self.link.take().is_some() {
+            self.invalidate_calibration();
+        }
+        self.clear_samples();
     }
     fn invalidate_plan(&mut self) {
         self.plan = None;
@@ -627,10 +1207,13 @@ impl Controller {
                 return;
             }
             if let Some(flag) = &self.stop {
-                flag.store(true, Ordering::Release);
+                if !flag.swap(true, Ordering::AcqRel) && !self.screen_running {
+                    self.invalidate_calibration();
+                }
                 self.status = "已请求取消，等待作业回执".into();
             } else if let Some(target) = self.snapshot.clone().filter(|s| s.active.is_some()) {
                 self.cancel_pending = true;
+                self.invalidate_calibration();
                 let session = self.session.clone();
                 let tx = self.tx.clone();
                 thread::spawn(move || {
@@ -661,6 +1244,9 @@ impl Controller {
                 | Action::PenDown
                 | Action::Send
                 | Action::Check
+                | Action::CalibrationCapture(_)
+                | Action::CalibrationStatus
+                | Action::Mount(..)
                 | Action::SetPenUp
                 | Action::SetPenDown
         ) && (!self.connected() || self.needs_device_status)
@@ -704,6 +1290,17 @@ impl Controller {
         let stop = Arc::new(AtomicBool::new(false));
         self.stop = Some(stop.clone());
         self.generation += 1;
+        self.screen_running = matches!(action, Action::Screen(_));
+        if self.screen_running {
+            self.screen = None;
+        }
+        if action.calibration_step().is_some() {
+            self.calibration = None;
+        }
+        if matches!(action, Action::Mount(..)) {
+            self.mount = None;
+        }
+        let device = self.link.clone();
         let (session, form, tx, expected) = (
             self.session.clone(),
             self.form.clone(),
@@ -716,6 +1313,15 @@ impl Controller {
                 Action::Export(path) => {
                     export(path, &program).map(|()| (path.display().to_string(), expected))
                 }
+                Action::Mount(..) => mount_job(
+                    &action,
+                    &script,
+                    expected.as_ref(),
+                    device.as_ref(),
+                    |request, program, last| {
+                        submit(&session, request, program, Some(last), &stop, &tx)
+                    },
+                ),
                 _ => submit(&session, &action, &script, expected.as_ref(), &stop, &tx),
             };
             let _ = tx.send(Event::Done(action, Box::new(form), result));
@@ -737,20 +1343,10 @@ impl Controller {
         let baud = num(payload, "baud")
             .and_then(|n| u32::try_from(n).ok())
             .ok_or("缺少会话设备波特率")?;
-        let m = coords(payload, "machine_position")?;
-        let w = coords(payload, "work_position")?;
-        let off = coords(payload, "work_offset")?;
-        let mpos = m.or_else(|| {
-            w.zip(off)
-                .map(|(w, o)| std::array::from_fn(|i| w[i] + o[i]))
-        });
-        let wpos = w.or_else(|| {
-            m.zip(off)
-                .map(|(m, o)| std::array::from_fn(|i| m[i] - o[i]))
-        });
-        if mpos.iter().chain(&wpos).flatten().any(|n| !n.is_finite()) {
-            return Err("GRBL 坐标超出范围".into());
-        }
+        let xyz = Coordinates::parse(payload)?;
+        let id = field(payload, "device_id").filter(|v| !v.trim().is_empty());
+        let model = field(payload, "controller");
+        let firmware = field(payload, "firmware");
         let label = match (field(payload, "controller"), field(payload, "firmware")) {
             (Some(model), Some(version)) => Some(format!("{model} {version}")),
             (model, version) => model.or(version),
@@ -761,9 +1357,46 @@ impl Controller {
                 .filter(|d| d.matches(&port, baud))
                 .and_then(|d| d.label.clone())
         });
-        self.mpos = mpos;
-        self.wpos = wpos;
+        let changed = self.link.as_ref().is_none_or(|d| {
+            !d.matches(&port, baud)
+                || (d.label.is_some() && label.is_some() && d.label != label)
+                || (d.id.is_some() && model.is_some() && firmware.is_some() && d.id != id)
+                || d.offset
+                    .zip(xyz.offset)
+                    .is_some_and(|(a, b)| !same_xyz(a, b, 0.000_001))
+        });
+        if changed {
+            self.invalidate_calibration();
+        }
+        self.pressure_sample = raw(payload, "pressure")
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .zip(field(payload, "pressure_unit").filter(|unit| !unit.trim().is_empty()));
+        self.probe_pin = match raw(payload, "probe_active").as_deref() {
+            Some("true") => Some(true),
+            Some("false") => Some(false),
+            _ => field(payload, "pins").map(|pins| pins.contains('P')),
+        };
+        self.mpos = xyz.machine;
+        self.wpos = xyz.work;
+        self.work_offset = xyz.offset;
+        // A jog acknowledgement may omit identity. Retain a previously verified
+        // value only for the same still-owned device; full status updates replace it.
+        let previous = self.link.as_ref().filter(|_| !changed);
+        let is_status = model.is_some() && firmware.is_some();
+        let id = if is_status {
+            id
+        } else {
+            id.or_else(|| previous.and_then(|d| d.id.clone()))
+        };
+        let model = model.or_else(|| previous.and_then(|d| d.model.clone()));
+        let firmware = firmware.or_else(|| previous.and_then(|d| d.firmware.clone()));
+        let offset = xyz.offset.or_else(|| previous.and_then(|d| d.offset));
         self.link = Some(Device {
+            id,
+            model,
+            firmware,
+            offset,
             #[cfg(unix)]
             tty: tty_identity(&port),
             port,
@@ -776,6 +1409,15 @@ impl Controller {
 
     fn apply(&mut self, action: &Action, f: &Form, payload: &str) -> Result<String> {
         match action {
+            Action::Screen(request) => {
+                self.screen = Some((self.generation, payload.to_string()));
+                Ok(if request.operation == "write.preview" {
+                    "屏幕书写预览就绪"
+                } else {
+                    "屏幕书写已完成"
+                }
+                .into())
+            }
             Action::Preview => {
                 if f != &self.form {
                     return Err("预览期间参数已变化，请重新生成".into());
@@ -789,25 +1431,54 @@ impl Controller {
                 self.sent = false;
                 Ok(msg)
             }
-            Action::Connect | Action::Refresh | Action::SetPenUp | Action::SetPenDown => {
-                self.position(payload)?;
-                if matches!(action, Action::SetPenUp | Action::SetPenDown) {
+            Action::Connect
+            | Action::Refresh
+            | Action::CalibrationStatus
+            | Action::CalibrationCapture(_)
+            | Action::SetPenUp
+            | Action::SetPenDown => {
+                let previous_epoch = self.link.as_ref().map(|_| self.calibration_epoch);
+                if let Err(e) = self.position(payload) {
+                    self.mark_device_stale();
+                    return Err(e);
+                }
+                if let Some(step) = action.calibration_step() {
+                    if previous_epoch.is_some_and(|epoch| epoch != self.calibration_epoch) {
+                        return Err("校准期间设备身份已变化，笔位未记录".into());
+                    }
                     if f != &self.form || field(payload, "state").as_deref() != Some("Idle") {
                         return Err("标定需要空闲控制器和相同的参数".into());
                     }
-                    let z = self
+                    let work = self
                         .wpos
-                        .ok_or("缺少当前工作坐标 WPos 或 MPos/WCO，无法记录笔位")?[2];
+                        .ok_or("本次回执缺少 WPos 或同帧 MPos/WCO，笔位未记录")?;
+                    let z = work[2];
                     if !self.connected() {
                         return Err("所选设备与标定回执不符".into());
                     }
-                    if matches!(action, Action::SetPenUp) {
-                        self.form.pen_up = z
-                    } else {
-                        self.form.pen_down = z
+                    match action {
+                        Action::SetPenUp => {
+                            self.form.pen_up = z;
+                            self.invalidate_plan();
+                        }
+                        Action::SetPenDown => {
+                            self.form.pen_down = z;
+                            self.invalidate_plan();
+                        }
+                        _ => {}
                     }
-                    self.invalidate_plan();
-                    return Ok(format!("已记录工作坐标 Z={z:.3}"));
+                    self.calibration = Some(CalibrationReceipt {
+                        epoch: self.calibration_epoch,
+                        probe_active: self.probe_pin,
+                        request_id: self.generation,
+                        step,
+                        work,
+                    });
+                    return Ok(if step == CalibrationStep::Status {
+                        format!("已核对工作坐标 Z={z:.3} mm")
+                    } else {
+                        format!("已记录工作坐标 Z={z:.3} mm")
+                    });
                 }
                 if self.form.port.is_empty()
                     && let Some(d) = &self.link
@@ -832,11 +1503,35 @@ impl Controller {
                 self.position(payload)?;
                 Ok("已断开控制器".into())
             }
+            Action::Mount(kind, _) => {
+                let epoch = self.calibration_epoch;
+                self.position(payload)?;
+                if epoch != self.calibration_epoch
+                    || !self.connected()
+                    || self.form.port != f.port
+                    || self.form.baud != f.baud
+                    || field(payload, "state").as_deref() != Some("Idle")
+                {
+                    return Err("示教回执与当前设备或会话不匹配".into());
+                }
+                let work = self.wpos.ok_or("示教缺少最终 WPos")?;
+                let offset = self.work_offset.ok_or("示教缺少同帧工作偏移")?;
+                self.mount = Some(MountReceipt {
+                    request_id: self.generation,
+                    epoch,
+                    action: *kind,
+                    work,
+                    work_offset: Some(offset),
+                });
+                Ok(format!(
+                    "示教回执 · X={:.3} Y={:.3} Z={:.3} mm",
+                    work[0], work[1], work[2]
+                ))
+            }
             Action::Export(_) => Ok(format!("已导出 {payload}")),
             Action::Check => Ok(format!("控制器校验完成 · {payload}")),
             Action::Send | Action::Jog { .. } | Action::PenUp | Action::PenDown => {
-                self.mpos = None;
-                self.wpos = None;
+                self.clear_samples();
                 if field(payload, "units").as_deref() == Some("mm") {
                     self.position(payload)?
                 }
@@ -849,7 +1544,15 @@ impl Controller {
     pub fn poll(&mut self) {
         while let Ok(event) = self.events.try_recv() {
             match event {
+                Event::ScreenSettled(s) => {
+                    self.tried_revision = Some((s.pid, s.rev));
+                    self.snapshot = Some(s);
+                    self.screen_job = None;
+                }
                 Event::Accepted(s) => {
+                    if self.screen_running {
+                        self.screen_job = Some(s.clone());
+                    }
                     if self.auto_refresh {
                         // A failed observer job also advances the session revision. Do not submit
                         // the same failing query again when its terminal snapshot arrives.
@@ -869,8 +1572,34 @@ impl Controller {
                         .unwrap_or_else(|e| e);
                 }
                 Event::Done(action, f, r) => {
-                    self.stop = None;
+                    let cancelled = self
+                        .stop
+                        .take()
+                        .is_some_and(|flag| flag.load(Ordering::Acquire));
                     self.auto_refresh = false;
+                    if std::mem::take(&mut self.screen_running) {
+                        // Only this window dispatches the one parsed screen call. A stale
+                        // terminal revision is reconciled by normal session observation.
+                        self.status = match r {
+                            Ok((payload, _)) => {
+                                if cancelled {
+                                    "已请求取消屏幕作业，请核对屏幕输出".into()
+                                } else {
+                                    self.apply(&action, &f, &payload).unwrap_or_else(|e| e)
+                                }
+                            }
+                            Err(e) => format!("屏幕作业未确认完成 · {e}"),
+                        };
+                        continue;
+                    }
+                    if cancelled
+                        && (action.calibration_step().is_some()
+                            || matches!(action, Action::Mount(..)))
+                    {
+                        self.mark_device_stale();
+                        self.status = "校准已取消，笔位未记录".into();
+                        continue;
+                    }
                     self.status = match r {
                         Ok((payload, snapshot)) => {
                             if !matches!(action, Action::Export(_)) && snapshot.is_none() {
@@ -884,7 +1613,9 @@ impl Controller {
                                 self.snapshot = snapshot;
                             }
                             self.apply(&action, &f, &payload).unwrap_or_else(|e| {
-                                if !matches!(action, Action::Preview | Action::Export(_)) {
+                                if !matches!(action, Action::Preview | Action::Export(_))
+                                    && action.calibration_step().is_none()
+                                {
                                     self.mark_device_stale();
                                 }
                                 e
@@ -917,7 +1648,43 @@ impl Controller {
                             }
                             let changed = self.snapshot.as_ref() != Some(&s);
                             if changed {
-                                self.mark_device_stale();
+                                let pending_external = self.snapshot.as_ref().is_some_and(|old| {
+                                    old.pid == s.pid
+                                        && old.active.is_none()
+                                        && old.last == s.last
+                                        && old.rev.checked_add(1) == Some(s.rev)
+                                        && old.last.unwrap_or(0).checked_add(1) == s.active
+                                }) && s.active.is_some();
+                                let operation =
+                                    self.snapshot.as_ref().zip(last.as_deref()).and_then(
+                                        |(old, receipt)| observed_operation(old, &s, receipt),
+                                    );
+                                let own_screen = self.screen_job.as_ref().is_some_and(|job| {
+                                    job.active
+                                        .is_some_and(|id| contiguous_completion(job, &s, id))
+                                });
+                                if own_screen
+                                    || matches!(
+                                        operation.as_deref(),
+                                        Some(
+                                            "write.preview"
+                                                | "write.mouse"
+                                                | "write.touchscreen"
+                                                | "write.touchpad"
+                                        )
+                                    )
+                                {
+                                    self.screen_job = None;
+                                    self.tried_revision = Some((s.pid, s.rev));
+                                } else if operation.as_deref() == Some("plotter.status") {
+                                    self.needs_device_status = true;
+                                    self.clear_samples();
+                                } else if !pending_external {
+                                    self.mark_device_stale();
+                                }
+                                // Pending external work hides receipts via busy(). Keep the
+                                // last device sample until the actual operation is identified.
+
                                 self.status = if let Some(id) = s.active {
                                     format!("{} · 外部作业 #{id} 运行中", self.session.name)
                                 } else if let Some(id) = s.last {
@@ -937,8 +1704,12 @@ impl Controller {
                                 && let Some(data) = last.as_deref().and_then(device_receipt)
                             {
                                 let f = self.form.clone();
-                                if let Ok(label) = self.apply(&Action::Refresh, &f, &data) {
-                                    self.status = label;
+                                match self.apply(&Action::Refresh, &f, &data) {
+                                    Ok(label) => self.status = label,
+                                    Err(e) => {
+                                        self.mark_device_stale();
+                                        self.status = e;
+                                    }
                                 }
                             }
                             let revision = (s.pid, s.rev);
@@ -955,7 +1726,9 @@ impl Controller {
                         }
                         Err(e) => {
                             if self.snapshot.is_some() {
-                                self.mark_device_stale();
+                                if !self.needs_device_status || self.calibration.is_some() {
+                                    self.mark_device_stale();
+                                }
                                 self.status = format!("会话状态待核实 · {e}");
                             }
                         }
@@ -1124,6 +1897,204 @@ mod tests {
     }
 
     #[test]
+    fn only_local_calibration_receipts_advance_and_pin_is_not_pressure() {
+        let mut c = Controller::default();
+        let good = r#"{"connected":true,"port":"","baud":115200,"units":"mm","state":"Idle","work_position":[2,3,0.5],"pins":"P","pressure":null}"#;
+        let f = c.form.clone();
+        c.apply(&Action::Refresh, &f, good).unwrap();
+        assert!(c.calibration_receipt().is_none());
+        assert_eq!(c.probe_active(), Some(true));
+        assert_eq!(c.pressure(), None);
+        c.generation = 7;
+        c.apply(&Action::CalibrationStatus, &f, good).unwrap();
+        assert_eq!(
+            c.calibration_receipt().unwrap().step,
+            CalibrationStep::Status
+        );
+        assert_eq!(c.calibration_receipt().unwrap().request_id, 7);
+        assert_eq!(c.calibration_receipt().unwrap().work, [2., 3., 0.5]);
+        assert_eq!(c.form.pen_down, f.pen_down);
+        c.generation = 8;
+        c.apply(&Action::SetPenDown, &f, good).unwrap();
+        assert_eq!(c.calibration_receipt().unwrap().request_id, 8);
+        assert_eq!(
+            c.calibration_receipt().unwrap().step,
+            CalibrationStep::PenDown
+        );
+        assert_eq!(c.form.pen_down, 0.5);
+        let f = c.form.clone();
+        let bad = good.replace(r#""work_position""#, r#""machine_position""#);
+        assert!(c.apply(&Action::SetPenUp, &f, &bad).is_err());
+        assert_eq!(c.form.pen_up, f.pen_up);
+        let sample = good.replace(
+            r#""pressure":null"#,
+            r#""pressure":0.25,"pressure_unit":"N""#,
+        );
+        c.apply(&Action::Refresh, &f, &sample).unwrap();
+        assert_eq!((c.pressure(), c.pressure_unit()), (Some(0.25), Some("N")));
+        c.apply(&Action::Refresh, &f, &good.replace("null", "0.25"))
+            .unwrap();
+        assert_eq!(c.pressure(), None);
+    }
+    #[test]
+    fn epoch_tracks_device_external_and_unknown_effects_not_own_verified_steps() {
+        let mut c = Controller::default();
+        let s = r#"{"connected":true,"port":"/dev/fake","baud":115200,"state":"Idle","units":"mm","work_position":[0,0,4],"pins":"P","firmware":"1.3a"}"#;
+        c.form.port = "/dev/fake".into();
+        let f = c.form.clone();
+        c.apply(&Action::Refresh, &f, s).unwrap();
+        let start = c.calibration_epoch();
+        assert!(start > 0);
+        for action in [
+            Action::CalibrationStatus,
+            Action::SetPenUp,
+            Action::SetPenDown,
+        ] {
+            let f = c.form.clone();
+            c.apply(&action, &f, s).unwrap();
+            let receipt = c.calibration_receipt().unwrap();
+            assert_eq!(receipt.epoch, start);
+            assert_eq!(receipt.probe_active, Some(true));
+        }
+        let f = c.form.clone();
+        c.apply(
+            &Action::Jog {
+                axis: 'Z',
+                delta: 0.1,
+            },
+            &f,
+            s,
+        )
+        .unwrap();
+        c.apply(&Action::Refresh, &f, s).unwrap();
+        assert_eq!(c.calibration_epoch(), start);
+        c.stop = Some(Arc::new(AtomicBool::new(false)));
+        c.dispatch(Action::Cancel);
+        assert!(c.calibration_epoch() > start && c.calibration_receipt().is_none());
+        c.stop = None;
+        c.snapshot = Some(Snapshot {
+            pid: 1,
+            rev: 1,
+            active: None,
+            last: Some(4),
+        });
+        c.last_poll = Instant::now();
+        let ext = Snapshot {
+            pid: 1,
+            rev: 2,
+            active: None,
+            last: Some(5),
+        };
+        // Simulate an externally completed move. A fresh correlated plotter job is required.
+        c.tried_revision = Some((1, 2));
+        let cancelled = c.calibration_epoch();
+        c.tx.send(Event::Observed(Ok((ext, None)), c.generation))
+            .unwrap();
+        c.poll();
+        assert!(c.calibration_epoch() > cancelled);
+        let prev = c.calibration_epoch();
+        c.tx.send(Event::Done(
+            Action::Jog {
+                axis: 'Z',
+                delta: 0.1,
+            },
+            Box::new(f.clone()),
+            Err("transport lost".into()),
+        ))
+        .unwrap();
+        c.poll();
+        assert!(c.calibration_epoch() > prev);
+        let before = c.form.pen_down;
+        assert!(
+            c.apply(
+                &Action::SetPenDown,
+                &f,
+                &s.replace("1.3a", "other firmware")
+            )
+            .is_err()
+        );
+        assert_eq!(c.form.pen_down, before);
+    }
+
+    #[test]
+    fn another_windows_contiguous_passive_status_preserves_captures_without_resubmitting() {
+        let mut c = Controller::default();
+        let status = r#"{"connected":true,"port":"/dev/fake","baud":115200,"units":"mm","state":"Idle","work_position":[1,2,3]}"#;
+        c.form.port = "/dev/fake".into();
+        let f = c.form.clone();
+        c.apply(&Action::SetPenDown, &f, status).unwrap();
+        c.last_poll = Instant::now();
+        c.snapshot = Some(Snapshot {
+            pid: 1,
+            rev: 10,
+            active: None,
+            last: Some(4),
+        });
+        let epoch = c.calibration_epoch();
+        let active = Snapshot {
+            pid: 1,
+            rev: 11,
+            active: Some(5),
+            last: Some(4),
+        };
+        let end = Snapshot {
+            pid: 1,
+            rev: 12,
+            active: None,
+            last: Some(5),
+        };
+        let receipt = |ops: &str| {
+            format!(
+                r#"{{"job_id":5,"status":"completed","result":{{"status":"completed","results":[{ops}]}}}}"#
+            )
+        };
+        let step = format!(r#"{{"operation":"plotter.status","value":{status}}}"#);
+        c.tx.send(Event::Observed(Ok((active.clone(), None)), c.generation))
+            .unwrap();
+        c.poll();
+        assert!(c.calibration_receipt().is_none());
+        assert_eq!(c.calibration_epoch(), epoch);
+        c.tx.send(Event::Observed(
+            Ok((end.clone(), Some(receipt(&step)))),
+            c.generation,
+        ))
+        .unwrap();
+        c.poll();
+        assert_eq!(c.calibration_receipt().unwrap().epoch, epoch);
+        assert!(!c.busy());
+        assert!(c.tried_revision.is_none());
+        let mixed = receipt(&format!(r#"{{"operation":"plotter.jog"}},{step}"#));
+        assert!(observed_operation(&active, &end, &mixed).is_none());
+        let gap = Snapshot {
+            pid: 1,
+            rev: 8,
+            active: None,
+            last: Some(2),
+        };
+        assert!(observed_operation(&gap, &end, &receipt(&step)).is_none());
+    }
+
+    #[test]
+    fn legacy_sampling_requires_exact_zero_effect_prepare_failure() {
+        let rejected = r#"{"status":"failed","result":{"status":"failed","stage":"prepare","error_code":"preflight_error","error":"plotter.status: unknown argument work","completed":0,"results":[]}}"#;
+        assert!(legacy_work_rejection(rejected));
+        for other in [
+            rejected.replace("prepare", "execute"),
+            rejected.replace("argument work", "argument other"),
+            rejected.replace(r#""completed":0"#, r#""completed":1"#),
+        ] {
+            assert!(!legacy_work_rejection(&other));
+        }
+        for a in [
+            Action::CalibrationStatus,
+            Action::SetPenUp,
+            Action::SetPenDown,
+        ] {
+            assert_eq!(source(&a, &Form::default(), "").unwrap(), WORK_STATUS);
+        }
+    }
+
+    #[test]
     fn external_cancel_is_bound_to_displayed_target() {
         let s =
             Snapshot::parse(r#"{"pid":500,"state_revision":8,"active_job_id":3,"last_job_id":2}"#)
@@ -1136,5 +2107,345 @@ mod tests {
         assert!(!c.owns_job());
         assert!(c.busy());
         assert!(value(r#"{"status":"failed","result":{"error":"unconfirmed block"}}"#).is_err());
+    }
+    const MOUNT_FRAME: &str = r#"{"connected":true,"port":"writer-sim","baud":115200,"controller":"BtWriter","firmware":"1.3a.20221114","device_id":"unit-a","state":"Idle","units":"mm","report_units":"mm","work_position":[4,5,6],"work_offset":[1,2,3]}"#;
+    const ACK: &str = r#"{"connected":true,"port":"writer-sim","baud":115200,"state":"Idle"}"#;
+    const BOX: MachineBounds = MachineBounds {
+        min: [0., 1., 2.],
+        max: [5., 6., 7.],
+    };
+    const BOUND_ACK: &str = r#"{"connected":true,"port":"writer-sim","baud":115200,"bounds":{"x_min":0,"x_max":5,"y_min":1,"y_max":6,"z_min":2,"z_max":7},"work_offset":[1,2,3]}"#;
+
+    // Simulate a named-session CLI's correlated, contiguous finished jobs without a port.
+    fn simulate_mount(
+        kind: MountAction,
+        reference: Option<[f64; 3]>,
+        outputs: &[Result<&str>],
+    ) -> (Result<String>, Vec<String>) {
+        let mut c = Controller::default();
+        c.position(MOUNT_FRAME).unwrap();
+        let snapshot = Snapshot {
+            pid: 1,
+            rev: 0,
+            active: None,
+            last: None,
+        };
+        let mut calls = vec![];
+        let result = mount_job(
+            &Action::Mount(kind, reference),
+            &kind.program(reference).unwrap(),
+            Some(&snapshot),
+            c.link.as_ref(),
+            |_, program, last| {
+                let i = calls.len();
+                assert_eq!(last.rev, 2 * i as u64);
+                calls.push(program.to_string());
+                let output = outputs
+                    .get(i)
+                    .expect("unexpected operation")
+                    .as_ref()
+                    .map_err(|e| e.clone())?;
+                Ok((
+                    output.to_string(),
+                    Some(Snapshot {
+                        rev: last.rev + 2,
+                        last: Some(i as u64 + 1),
+                        ..last.clone()
+                    }),
+                ))
+            },
+        );
+        (result.map(|v| v.0), calls)
+    }
+
+    #[test]
+    fn teaching_jogs_use_one_linear_axis_and_the_calibration_feed() {
+        for (axis, delta) in [('x', -10.), ('Y', 0.001), ('z', 0.5)] {
+            let p = MountAction::Jog { axis, delta }.program(None).unwrap();
+            assert!(
+                p.contains("feed=40")
+                    && p.contains(&format!("axis=\"{}\"", axis.to_ascii_lowercase()))
+            );
+        }
+        for (axis, delta) in [
+            ('a', 0.1),
+            ('Z', 0.501),
+            ('X', 10.001),
+            ('y', f64::NAN),
+            ('z', 0.),
+        ] {
+            assert!(MountAction::Jog { axis, delta }.program(None).is_err());
+        }
+        assert!(MountAction::MoveZ(f64::INFINITY).program(None).is_err());
+        assert!(MountAction::ApplyBounds(BOX).program(None).is_err());
+        assert!(
+            MountAction::ApplyBounds(MachineBounds {
+                min: BOX.max,
+                max: BOX.min
+            })
+            .program(Some([0.; 3]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn scoped_pen_samples_and_mount_receipts_never_change_write_heights() {
+        let mut c = Controller::default();
+        c.apply(&Action::Refresh, &c.form.clone(), MOUNT_FRAME)
+            .unwrap();
+        let f = c.form.clone();
+        c.generation = 73;
+        for step in [CalibrationStep::PenUp, CalibrationStep::PenDown] {
+            c.apply(&Action::CalibrationCapture(step), &f, MOUNT_FRAME)
+                .unwrap();
+            let r = c.calibration_receipt().unwrap();
+            assert_eq!((r.request_id, r.step, r.work[2]), (73, step, 6.));
+            assert_eq!(c.form, f);
+        }
+        let k = MountAction::Status;
+        c.apply(&Action::Mount(k, None), &f, MOUNT_FRAME).unwrap();
+        let r = c.mount_receipt().unwrap();
+        assert_eq!(
+            (r.request_id, r.work, r.work_offset, r.action),
+            (73, [4., 5., 6.], Some([1., 2., 3.]), k)
+        );
+        assert_eq!(c.hardware_id(), Some("unit-a"));
+        assert_eq!(c.controller_identity(), Some(("BtWriter", "1.3a.20221114")));
+        let epoch = c.calibration_epoch();
+        c.position(&MOUNT_FRAME.replace("[1,2,3]", "[2,2,3]"))
+            .unwrap();
+        assert_ne!(c.calibration_epoch(), epoch);
+        assert!(c.mount_receipt().is_none());
+        assert_eq!(c.form, f);
+    }
+
+    #[test]
+    fn mount_z_waits_for_same_device_verified_final_work_position() {
+        let final_frame = MOUNT_FRAME.replace("[4,5,6]", "[4,5,2.5]");
+        let k = MountAction::MoveZ(2.5);
+        let (out, calls) = simulate_mount(
+            k,
+            Some([1., 2., 3.]),
+            &[Ok(MOUNT_FRAME), Ok(ACK), Ok(&final_frame)],
+        );
+        assert_eq!(out.unwrap(), final_frame);
+        assert_eq!(
+            calls,
+            [
+                MOUNT_STATUS,
+                "plotter.pen(z=2.5,feed=40,timeout=300000)",
+                MOUNT_STATUS
+            ]
+        );
+        for frame in [
+            MOUNT_FRAME.to_string(),
+            final_frame.replace("unit-a", "unit-b"),
+            final_frame.replace("[1,2,3]", "[0,0,0]"),
+            final_frame.replace("Idle", "Run"),
+        ] {
+            let (out, calls) = simulate_mount(k, None, &[Ok(MOUNT_FRAME), Ok(ACK), Ok(&frame)]);
+            assert!(out.is_err());
+            assert_eq!(calls.len(), 3);
+        }
+        let (out, calls) = simulate_mount(
+            k,
+            None,
+            &[Ok(MOUNT_FRAME), Err("timeout, outcome unknown".into())],
+        );
+        assert!(out.is_err());
+        assert_eq!(calls.len(), 2);
+        let (out, calls) = simulate_mount(k, Some([0.; 3]), &[Ok(MOUNT_FRAME)]);
+        assert!(out.is_err());
+        assert_eq!(calls, [MOUNT_STATUS]);
+    }
+
+    #[test]
+    fn fresh_bounds_compare_all_six_limits_and_work_reference() {
+        let k = MountAction::ApplyBounds(BOX);
+        let wco = Some([1., 2., 3.]);
+        let (out, calls) =
+            simulate_mount(k, wco, &[Ok(MOUNT_FRAME), Ok(BOUND_ACK), Ok(MOUNT_FRAME)]);
+        assert!(out.is_ok());
+        assert_eq!(calls.len(), 3);
+        assert!(calls[1].contains("wco_x=1,wco_y=2,wco_z=3"));
+        for wrong in [
+            BOUND_ACK.replace("x_max\":5", "x_max\":4"),
+            BOUND_ACK.replace("[1,2,3]", "[1,2,4]"),
+            BOUND_ACK.replace("writer-sim", "other"),
+        ] {
+            let (out, calls) = simulate_mount(k, wco, &[Ok(MOUNT_FRAME), Ok(&wrong)]);
+            assert!(out.is_err());
+            assert_eq!(calls.len(), 2);
+        }
+        let (out, calls) = simulate_mount(
+            k,
+            wco,
+            &[
+                Ok(MOUNT_FRAME),
+                Err("unsupported plotter.set_bounds".into()),
+            ],
+        );
+        assert!(out.is_err());
+        assert_eq!(calls.len(), 2);
+    }
+
+    #[test]
+    fn read_only_mount_status_requires_same_frame_work_offset() {
+        let k = MountAction::Status;
+        for frame in [
+            MOUNT_FRAME.replace(",\"work_offset\":[1,2,3]", ""),
+            MOUNT_FRAME.replace("Idle", "Alarm"),
+            MOUNT_FRAME.replace("writer-sim", "other"),
+        ] {
+            let (out, calls) = simulate_mount(k, None, &[Ok(&frame)]);
+            assert!(out.is_err());
+            assert_eq!(calls, [MOUNT_STATUS]);
+        }
+        let both = MOUNT_FRAME.replace("\"work_offset\":[1,2,3]", "\"machine_position\":[5,7,9]");
+        let (out, calls) = simulate_mount(k, None, &[Ok(&both)]);
+        assert!(out.is_ok());
+        assert_eq!(calls, [MOUNT_STATUS]);
+    }
+
+    #[test]
+    fn screen_accepts_exactly_one_parsed_operation_in_its_selected_mode() {
+        for (src, p) in [
+            ("write.preview(text=\"a;plotter.connect()\")", true),
+            ("write.mouse()", false),
+            ("write.touchscreen()", false),
+            ("write.touchpad()", false),
+        ] {
+            assert_eq!(ScreenRequest::new(src.into(), p).unwrap().source, src);
+        }
+        let mut c = Controller::default();
+        for (src, p) in [
+            ("write.mouse()", true),
+            ("write.preview()", false),
+            ("plotter.pen(z=2)", false),
+            ("write.preview();plotter.disconnect()", true),
+            ("write.mouse()\n+", false),
+            ("# comment", true),
+        ] {
+            assert_eq!(c.dispatch_screen(src.into(), p), None);
+            assert!(c.screen_receipt().is_none() && !c.owns_job());
+        }
+    }
+
+    #[test]
+    fn another_windows_single_screen_job_preserves_plotter_position_and_calibration() {
+        let mut c = Controller::default();
+        c.apply(&Action::Refresh, &c.form.clone(), MOUNT_FRAME)
+            .unwrap();
+        c.apply(
+            &Action::CalibrationCapture(CalibrationStep::PenUp),
+            &c.form.clone(),
+            MOUNT_FRAME,
+        )
+        .unwrap();
+        c.last_poll = Instant::now();
+        let epoch = c.calibration_epoch();
+        c.snapshot = Some(Snapshot {
+            pid: 3,
+            rev: 10,
+            active: None,
+            last: Some(4),
+        });
+        let active = Snapshot {
+            pid: 3,
+            rev: 11,
+            active: Some(5),
+            last: Some(4),
+        };
+        let end = Snapshot {
+            pid: 3,
+            rev: 12,
+            active: None,
+            last: Some(5),
+        };
+        let out = r#"{"job_id":5,"status":"completed","result":{"status":"completed","results":[{"operation":"write.touchscreen","value":{"strokes":2}}]}}"#;
+        c.tx.send(Event::Observed(Ok((active, None)), c.generation))
+            .unwrap();
+        c.poll();
+        assert!(c.calibration_receipt().is_none());
+        c.tx.send(Event::Observed(Ok((end, Some(out.into()))), c.generation))
+            .unwrap();
+        c.poll();
+        assert_eq!(c.calibration_receipt().unwrap().epoch, epoch);
+        assert!(!c.needs_device_status && !c.owns_job());
+        assert_eq!(c.wpos, Some([4., 5., 6.]));
+        assert_eq!(c.work_offset(), Some([1., 2., 3.]));
+        assert!(c.screen_receipt().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn screen_preview_and_output_use_named_session_without_touching_a_serial_port() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(request_id());
+        fs::create_dir(&dir).unwrap();
+        let exe = dir.join("zuse-test");
+        fs::write(&exe,r##"#!/bin/sh
+set -eu
+d=${0%/*}
+job=0
+if [ -e "$d/job" ]; then read -r job < "$d/job"; fi
+case "$2" in
+status)
+    if [ "$job" -eq 0 ]; then last=null; else last=$job; fi
+    printf '{"ok":true,"session":"screen-test","pid":1,"state_revision":%s,"active_job_id":null,"last_job_id":%s}\n' "$((2*job))" "$last"
+    ;;
+observe|script)
+    [ "$3" = "screen-test" ] && [ "$4" = "-" ] && [ "$5" = "--request-id" ] && [ "$8" = "$((2*job))" ] && [ "${10}" = "600000" ]
+    body=$(cat)
+    printf '%s %s\n' "$2" "$body" >> "$d/log"
+    job=$((job+1)); printf '%s\n' "$job" > "$d/job"
+    printf '{"ok":true,"session":"screen-test","status":"accepted","job_id":%s,"request_id":"%s","state_revision":%s}\n' "$job" "$6" "$((2*job-1))"
+    ;;
+result)
+    case "$job" in 1) op=write.preview;; 2) op=write.mouse;; *) op=other;; esac
+    printf '{"ok":true,"session":"screen-test","job_id":%s,"status":"completed","result":{"status":"completed","results":[{"operation":"%s","value":{"lines":2}}]}}\n' "$job" "$op"
+    ;;
+*) exit 3;;
+esac
+"##).unwrap();
+        fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut c = Controller {
+            session: Session {
+                bin: exe.into_os_string(),
+                name: "screen-test".into(),
+            },
+            ..Controller::default()
+        };
+        let epoch = c.calibration_epoch();
+        let mut tokens = Vec::new();
+        for (src, preview, match_expected) in [
+            ("write.preview(text=\"abc\")", true, true),
+            ("write.mouse(text=\"abc\")", false, true),
+            ("write.touchpad(text=\"abc\")", false, false),
+        ] {
+            let token = c.dispatch_screen(src.into(), preview).unwrap();
+            tokens.push(token);
+            assert_eq!(c.dispatch_screen(src.into(), preview), None);
+            assert!(c.screen_receipt().is_none());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while c.busy() {
+                c.poll();
+                assert!(Instant::now() < deadline, "{}", c.status);
+                thread::sleep(Duration::from_millis(5));
+            }
+            if match_expected {
+                assert_eq!(c.screen_receipt(), Some((token, r#"{"lines":2}"#)));
+            } else {
+                assert!(c.screen_receipt().is_none());
+                assert!(c.status.contains("回执与请求"));
+            }
+        }
+        assert_eq!(tokens, [1, 2, 3]);
+        assert_eq!(c.calibration_epoch(), epoch);
+        assert_eq!(
+            fs::read_to_string(dir.join("log")).unwrap(),
+            "observe write.preview(text=\"abc\")\nscript write.mouse(text=\"abc\")\nscript write.touchpad(text=\"abc\")\n"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }

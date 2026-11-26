@@ -1,5 +1,8 @@
+use crate::alignment::Alignment;
 use crate::controller::{Action, Controller};
 use crate::devices::{self, DeviceCandidate};
+use crate::screen_output::ScreenOutput;
+use crate::workspace_wizard::{Outcome, WorkspaceWizard};
 use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
 
 const INK: u32 = 0x222222ff;
@@ -10,6 +13,11 @@ const PAPER: u32 = 0xf6f6f3ff;
 // Keep partially typed numbers in the editor. Validate and transfer them as
 // a group when building a plan, never on each digit of a keyboard event.
 pub struct WriterView {
+    screen_output: ScreenOutput,
+    screen_mode: bool,
+    show_origin_hint: bool,
+    workspace: Option<WorkspaceWizard>,
+    alignment: Option<Alignment>,
     picker: DevicePicker,
     geometry: [String; 8],
     mapping: [String; 4],
@@ -108,7 +116,7 @@ fn number(value: &str, name: &str) -> Result<f64, String> {
 }
 
 impl WriterView {
-    pub fn new(c: &mut Controller) -> Self {
+    pub fn new(c: &mut Controller, align: bool) -> Self {
         if c.form.text.is_empty() {
             c.form.text = "你好 Zuse".into();
         }
@@ -120,6 +128,11 @@ impl WriterView {
         c.dispatch(Action::Refresh);
         let f = &c.form;
         Self {
+            screen_mode: false,
+            show_origin_hint: false,
+            screen_output: ScreenOutput::default(),
+            workspace: align.then(WorkspaceWizard::default),
+            alignment: None,
             picker,
             geometry: [
                 f.size,
@@ -149,6 +162,38 @@ impl WriterView {
             scroll_y: 0.0,
             max_scroll: 0.0,
         }
+    }
+    pub fn aligning(&self) -> bool {
+        self.workspace.is_some()
+    }
+    pub fn needs_tick(&self) -> bool {
+        self.screen_mode && self.screen_output.needs_tick()
+    }
+    pub fn screen(&self) -> (bool, bool, bool) {
+        (
+            self.workspace.is_some(),
+            self.alignment.is_some(),
+            self.screen_mode,
+        )
+    }
+    pub fn can_navigate(&self) -> bool {
+        self.workspace.as_ref().is_none_or(|w| !w.pending())
+    }
+    pub fn back(&mut self) {
+        if self.alignment.take().is_none() {
+            self.workspace = None;
+        }
+        self.scroll_y = 0.;
+        self.notice.clear();
+    }
+    fn finish_alignment(&mut self, c: &mut Controller, message: String) {
+        self.workspace = None;
+        self.alignment = None;
+        self.scroll_y = 0.;
+        self.geometry[6] = c.form.pen_up.to_string();
+        self.geometry[7] = c.form.pen_down.to_string();
+        self.dirty(c);
+        self.notice = message;
     }
     pub fn sync_baud(&mut self, value: u32) {
         self.baud = value.to_string();
@@ -233,12 +278,41 @@ impl WriterView {
             } else {
                 0.0
             };
-        let (rx, ry, right) = if wide {
-            (pad + left + gap, 94., width - left - gap)
+        let aligning = self.aligning();
+        let stacked_target = !wide && !aligning;
+        let top = if w < 520. { 112. } else { 94. } + if stacked_target { 48. } else { 0. };
+        let machine_height = if self.screen_mode {
+            445.
         } else {
-            (pad, 772. + device_extra, width)
+            device_extra + if aligning { 370. } else { 657. }
         };
-        let content_h = (ry + 708.).max(94. + device_extra + 657.);
+        let (rx, right) = if wide {
+            (pad + left + gap, width - left - gap)
+        } else {
+            (pad, width)
+        };
+        let panel_height = self
+            .alignment
+            .as_ref()
+            .map(|a| a.height(right))
+            .or_else(|| self.workspace.as_ref().map(|m| m.height(right)))
+            .unwrap_or_else(|| {
+                if self.screen_mode {
+                    self.screen_output.height(right)
+                } else {
+                    708.
+                }
+            });
+        // A connected narrow window opens directly on the calibration controls.
+        let panel_first = aligning && c.connected_device().is_some();
+        let (my, ry) = if wide {
+            (top, top)
+        } else if panel_first {
+            (top + panel_height + gap, top)
+        } else {
+            (top, top + machine_height + gap)
+        };
+        let content_h = (ry + panel_height).max(my + machine_height);
         self.max_scroll = (content_h + 20. - h).max(0.);
         self.scroll_y = self.scroll_y.min(self.max_scroll);
         let y = -self.scroll_y;
@@ -251,6 +325,8 @@ impl WriterView {
             } else {
                 "共享作业中"
             }
+        } else if self.screen_mode {
+            "屏幕输入"
         } else if c.connected_device().is_some() {
             "已连接"
         } else {
@@ -262,21 +338,150 @@ impl WriterView {
             .map(|id| format!("{state}  #{id}"))
             .unwrap_or_else(|| state.to_owned());
         let state = job.as_str();
-        canvas.ellipsis(
-            &session,
-            pad + title_width + 22.,
-            y + 29.,
-            (w - 2. * pad - title_width - 32. - canvas.measure(state, 14, false)).max(0.),
-            14,
-            false,
-            MUTED,
-        );
+        let nav_width = if aligning { 100. } else { 78. };
+        let nav_x = w - pad - nav_width;
+        let nav_y = y + 16.;
         let sw = canvas.measure(state, 14, false);
-        canvas.text(state, w - pad - sw, y + 29., 14, false, MUTED);
-        canvas.line((pad, y + 66.), (w - pad, y + 66.), 1., RULE);
+        let state_right = if wide && !aligning {
+            nav_x - 244.
+        } else {
+            nav_x - 16.
+        };
+        if w < 520. {
+            canvas.ellipsis(
+                &session,
+                pad,
+                y + 62.,
+                (width - sw - 14.).max(0.),
+                13,
+                false,
+                MUTED,
+            );
+            canvas.text(state, w - pad - sw, y + 62., 13, false, MUTED);
+        } else {
+            let sx = pad + title_width + 22.;
+            canvas.ellipsis(
+                &session,
+                sx,
+                y + 29.,
+                (state_right - 16. - sw - sx).max(0.),
+                14,
+                false,
+                MUTED,
+            );
+            canvas.text(state, state_right - sw, y + 29., 14, false, MUTED);
+        }
+        canvas.line((pad, y + top - 28.), (w - pad, y + top - 28.), 1., RULE);
         let mut frame = Frame { canvas, ui };
-        self.machine(&mut frame, c, pad, y + 94., left, closing);
-        self.writing(&mut frame, c, rx, y + ry, right, closing);
+        if !aligning {
+            let tx = if wide { nav_x - 229. } else { pad };
+            let ty = if wide { nav_y } else { y + top - 73. };
+            frame.caption("输出到", tx, ty + 9.);
+            for (i, label) in ["写字机", "屏幕输入"].iter().enumerate() {
+                let selected = i == 1;
+                let r = Rect::new(
+                    tx + 47. + i as f32 * 77.,
+                    ty,
+                    if selected { 90. } else { 72. },
+                    33.,
+                );
+                if frame.button(
+                    180 + i as u64,
+                    r,
+                    label,
+                    self.screen_mode == selected,
+                    !closing && !c.busy(),
+                ) && self.screen_mode != selected
+                {
+                    self.screen_output.deactivate();
+                    self.screen_mode = selected;
+                    self.scroll_y = 0.;
+                    self.confirm_cancel = None;
+                    self.notice.clear();
+                    return;
+                }
+            }
+        }
+        if !self.screen_mode
+            && frame.button(
+                170,
+                Rect::new(nav_x, nav_y, nav_width, 35.),
+                if self.alignment.is_some() {
+                    "返回向导"
+                } else if aligning {
+                    "返回书写"
+                } else {
+                    "对笔"
+                },
+                !aligning,
+                !closing && !c.busy() && self.can_navigate(),
+            )
+        {
+            if aligning {
+                self.back();
+            } else {
+                self.workspace = Some(WorkspaceWizard::default());
+                self.confirm_cancel = None;
+                self.scroll_y = 0.;
+                self.notice.clear();
+            }
+            return;
+        }
+        if self.screen_mode {
+            let valid = self.screen_form(
+                &mut frame,
+                c,
+                Rect::new(pad, y + my, left, machine_height),
+                closing,
+            );
+            if !valid {
+                self.screen_output.deactivate();
+            }
+            self.screen_output.draw(
+                frame.canvas,
+                frame.ui,
+                c,
+                Rect::new(rx, y + ry, right, panel_height),
+                closing || !valid,
+            );
+            return;
+        }
+        self.machine(&mut frame, c, pad, y + my, left, closing);
+        if let Some(alignment) = &mut self.alignment {
+            if alignment.draw(
+                frame.canvas,
+                frame.ui,
+                c,
+                Rect::new(rx, y + ry, right, panel_height),
+                closing,
+            ) {
+                let message = format!(
+                    "已应用对笔结果，抬笔 {:.3} mm，落笔 {:.3} mm。请更新预览。",
+                    c.form.pen_up, c.form.pen_down
+                );
+                self.finish_alignment(c, message);
+            }
+        } else if let Some(workspace) = &mut self.workspace {
+            match workspace.draw(
+                frame.canvas,
+                frame.ui,
+                c,
+                Rect::new(rx, y + ry, right, panel_height),
+                closing,
+            ) {
+                Outcome::Done(message) => {
+                    self.show_origin_hint = true;
+                    self.finish_alignment(c, message)
+                }
+                Outcome::Secondary => {
+                    self.alignment = Some(Alignment::default());
+                    self.scroll_y = 0.;
+                }
+                Outcome::Stay => {}
+            }
+        } else {
+            self.writing(&mut frame, c, rx, y + ry, right, closing);
+        }
     }
     fn machine(
         &mut self,
@@ -360,6 +565,11 @@ impl WriterView {
             !c.busy() && !closing,
         ) {
             self.act(c, Action::Refresh);
+        }
+        if self.aligning() {
+            f.canvas
+                .ellipsis(&c.status, x, y + 350., w, 13, false, MUTED);
+            return;
         }
         f.heading("手动调节", x, y + 369.);
         f.field(
@@ -558,6 +768,128 @@ impl WriterView {
         }
         list.height()
     }
+    fn text_font(
+        &mut self,
+        f: &mut Frame<'_, '_>,
+        c: &mut Controller,
+        area: Rect,
+        stacked: bool,
+        editing: bool,
+    ) -> bool {
+        let (x, y, w) = (area.x, area.y, area.w);
+        let text_w = if stacked { w } else { w * 0.60 };
+        let font_x = if stacked { x } else { x + text_w };
+        let font_y = if stacked { y + 106. } else { y + 41. };
+        let mut changed = f.field(
+            30,
+            x,
+            y + 41.,
+            if stacked { w } else { text_w - 8. },
+            "文字",
+            &mut c.form.text,
+            "输入要书写的文字",
+            editing,
+        );
+        changed |= f.field(
+            31,
+            font_x,
+            font_y,
+            x + w - font_x - 88.,
+            "单线字体",
+            &mut c.form.font,
+            "builtin",
+            editing,
+        );
+        if f.button(
+            32,
+            Rect::new(x + w - 80., font_y + 21., 80., 34.),
+            "下一字体",
+            false,
+            editing,
+        ) {
+            match zuse::font_store::cli(&["list"]).and_then(|s| choices(&s, "fonts")) {
+                Ok(fonts) if !fonts.is_empty() => {
+                    c.form.font = next(&fonts, &c.form.font);
+                    changed = true;
+                }
+                Ok(_) => {}
+                Err(e) => self.notice = e,
+            }
+        }
+        changed
+    }
+
+    fn screen_form(
+        &mut self,
+        f: &mut Frame<'_, '_>,
+        c: &mut Controller,
+        area: Rect,
+        closing: bool,
+    ) -> bool {
+        let (x, y, w) = (area.x, area.y, area.w);
+        let editing = !closing && !c.busy();
+        f.heading("书写内容", x, y);
+        let mut changed = self.text_font(f, c, area, true, editing);
+        let width = (w - 8.) / 2.;
+        let [size, advance, line, ..] = &mut self.geometry;
+        let [ox, oy, ..] = &mut self.mapping;
+        for (i, (label, buffer)) in [
+            ("字号", size),
+            ("字距", advance),
+            ("行距", line),
+            ("随机种子", &mut self.seed),
+            ("字形 X 偏移幅度", ox),
+            ("字形 Y 偏移幅度", oy),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            changed |= f.field(
+                190 + i as u64,
+                x + (i % 2) as f32 * (width + 8.),
+                y + 176. + (i / 2) as f32 * 64.,
+                width,
+                label,
+                buffer,
+                "",
+                editing,
+            );
+        }
+        if changed {
+            self.screen_output.deactivate();
+            self.dirty(c);
+        }
+        match self.copy_screen_params(c) {
+            Ok(()) => true,
+            Err(e) => {
+                f.canvas.ellipsis(&e, x, y + 384., w, 14, false, INK);
+                false
+            }
+        }
+    }
+
+    fn copy_screen_params(&self, c: &mut Controller) -> Result<(), String> {
+        let size = number(&self.geometry[0], LABELS[0])?;
+        let advance = number(&self.geometry[1], LABELS[1])?;
+        let line = number(&self.geometry[2], LABELS[2])?;
+        let ox = number(&self.mapping[0], MAP_LABELS[0])?;
+        let oy = number(&self.mapping[1], MAP_LABELS[1])?;
+        let seed = self
+            .seed
+            .trim()
+            .parse()
+            .map_err(|_| "随机种子需为非负整数")?;
+        let f = &mut c.form;
+        (
+            f.size,
+            f.advance,
+            f.line_height,
+            f.offset_x,
+            f.offset_y,
+            f.seed,
+        ) = (size, advance, line, ox, oy, seed);
+        Ok(())
+    }
     fn writing(
         &mut self,
         f: &mut Frame<'_, '_>,
@@ -582,43 +914,7 @@ impl WriterView {
         ) {
             self.advanced = !self.advanced;
         }
-        let text_w = w * 0.60;
-        let mut changed = f.field(
-            30,
-            x,
-            y + 41.,
-            text_w - 8.,
-            "文字",
-            &mut c.form.text,
-            "输入要书写的文字",
-            editing,
-        );
-        changed |= f.field(
-            31,
-            x + text_w,
-            y + 41.,
-            w - text_w - 88.,
-            "单线字体",
-            &mut c.form.font,
-            "builtin",
-            editing,
-        );
-        if f.button(
-            32,
-            Rect::new(x + w - 80., y + 62., 80., 34.),
-            "下一字体",
-            false,
-            editing,
-        ) {
-            match zuse::font_store::cli(&["list"]).and_then(|s| choices(&s, "fonts")) {
-                Ok(fonts) if !fonts.is_empty() => {
-                    c.form.font = next(&fonts, &c.form.font);
-                    changed = true;
-                }
-                Ok(_) => {}
-                Err(e) => self.notice = e,
-            }
-        }
+        let mut changed = self.text_font(f, c, Rect::new(x, y, w, 0.), false, editing);
         let pw = (w - 16.) / 3.;
         if self.advanced {
             for (i, label) in MAP_LABELS.iter().enumerate() {
@@ -679,6 +975,17 @@ impl WriterView {
         }
         if changed {
             self.dirty(c);
+        }
+        if self.show_origin_hint && !self.advanced {
+            f.canvas.ellipsis(
+                "起点 X/Y 请留在纸面内，默认轴向从 X 最小、Y 最大处向内留边。",
+                x,
+                y + 306.,
+                w,
+                13,
+                false,
+                MUTED,
+            );
         }
         f.heading("笔迹预览", x, y + 331.);
         if f.button(
