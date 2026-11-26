@@ -53,24 +53,30 @@ def search_label(label):
         t=subprocess.run(["tesseract","stdin","stdout","-l","eng","--psm","11","tsv"],stdin=proc.stdout,capture_output=True,check=True,text=False).stdout.decode()
     finally:
         proc.stdout.close();proc.wait()
-    words=list(csv.DictReader(io.StringIO(t),delimiter="\t"))
-    last_ocr=" ".join(w["text"] for w in words if w["text"].strip())
-    def normalized(word):return re.sub(r"[^a-z0-9]","",(word or "").lower())
-    wanted=[normalized(z) for z in label.split()]
-    for i,w in enumerate(words):
-        if normalized(w["text"])!=wanted[0]:continue
-        actual=[];match=[]
-        for row in words[i:]:
-            if row["block_num"]!=w["block_num"] or row["line_num"]!=w["line_num"]:break
-            token=normalized(row["text"])
-            if token:actual.append(token);match.append(row)
-            if len(actual)>=len(wanted):break
-        if actual==wanted:
-            left=int(w["left"]);top=int(w["top"])
-            right=max(int(row["left"])+int(row["width"]) for row in match)
-            bottom=max(int(row["top"])+int(row["height"]) for row in match)
-            return ((left+right)//4,(top+bottom)//4)
-    return None
+    from difflib import SequenceMatcher
+    words=[row for row in csv.DictReader(io.StringIO(t),delimiter="\t",quoting=csv.QUOTE_NONE)
+           if (row.get("text") or "").strip() and all((row.get(k) or "").isdigit() for k in ("top","left","width","height"))]
+    last_ocr=" ".join(w["text"] for w in words)
+    def normalized(word):return re.sub(r"[^a-z0-9]","",word.lower())
+    # If just the leading verb on a blue button is misread, its specific suffix is still a valid hit.
+    aliases={"Choose font file":"font file","Import custom font":"custom font","Open text file":"text file"}
+    phrases=[normalized(label)]
+    if label in aliases:phrases.append(normalized(aliases[label]))
+    boxes=[(normalized(row["text"]),int(row["left"]),int(row["top"]),int(row["width"]),int(row["height"])) for row in words]
+    boxes=[b for b in boxes if b[0]]
+    best=0.83
+    point=None
+    for i,(token,left,top,width,height) in enumerate(boxes):
+        text="";right=left;bottom=top+height
+        for token,x,y,w,h in boxes[i:i+len(label.split())+3]:
+            # Stay within a single painted button. Tesseract occasionally splits its text across blocks.
+            if abs((y+h/2)-(top+height/2))>max(height,h)*.65 or x<right-4 or x-right>32:break
+            text+=token;right=x+w;bottom=max(bottom,y+h)
+            rating=max(SequenceMatcher(None,text,p).ratio() for p in phrases)
+            if rating>best:
+                best=rating;point=((left+right)//4,(top+bottom)//4)
+            if rating==1:return point
+    return point
 def click_label(label):
     try:pt=wait(lambda:search_label(label),timeout=20)
     except AssertionError as e:raise AssertionError(f"Could not find {label!r} in Writer: {last_ocr}") from e

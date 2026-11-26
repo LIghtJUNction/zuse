@@ -88,6 +88,14 @@ jobs:
           writer="$RUNNER_TEMP/Zuse-Writer/Zuse Writer"
           engine="$RUNNER_TEMP/Zuse-Writer/.zuse-writer/zuse"
           xvfb-run -a -s '-screen 0 1440x1000x24' python tests/writer_file_picker.py "$writer" "$engine" "$PWD" "$RUNNER_TEMP/writer-evidence"
+      - name: Capture the writing screen
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ runner.temp }}/writer-evidence/writer-first-screen.png
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 30
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -404,11 +404,13 @@ impl WriterView {
         let gap = (width * 0.035).clamp(16., 38.);
         let aligning = self.aligning();
         let title_width = canvas.measure("Zuse Writer", 30, true);
-        let nav_width = 120.;
+        let show_setup_link = !self.screen_mode && (aligning || self.advanced || c.paper.is_some());
+        let show_targets = !aligning && (self.advanced || self.screen_mode);
+        let nav_width = if show_setup_link { 120. } else { 0. };
         let nav_x = w - pad - nav_width;
         let target_width = 230.;
-        let wrapped_targets = !aligning && width < title_width + nav_width + target_width + 64.;
-        let inline_targets = !aligning && !wrapped_targets;
+        let wrapped_targets = show_targets && width < title_width + nav_width + target_width + 64.;
+        let inline_targets = show_targets && !wrapped_targets;
         let target_x = if inline_targets {
             nav_x - 12. - target_width
         } else {
@@ -564,7 +566,7 @@ impl WriterView {
         );
         canvas.line((0., y + top - 24.), (w, y + top - 24.), 1., RULE);
         let mut frame = Frame { canvas, ui };
-        if !aligning {
+        if show_targets {
             let tx = target_x;
             let ty = if wrapped_targets { y + 87. } else { nav_y };
             frame.caption("输出到", tx, ty + 9.);
@@ -590,7 +592,7 @@ impl WriterView {
                 }
             }
         }
-        if !self.screen_mode
+        if show_setup_link
             && frame.quiet_button(
                 170,
                 Rect::new(nav_x, nav_y, nav_width, 35.),
@@ -1518,13 +1520,17 @@ impl WriterView {
             true,
             INK,
         );
-        if f.button(
-            50,
-            Rect::new(x + w - update_width, preview_title - 4., update_width, 34.),
-            "更新预览",
-            false,
-            editing,
-        ) {
+        let preview_is_next =
+            c.connected() && c.paper.is_some() && (c.gcode.is_empty() || c.preview_submitted());
+        if !preview_is_next
+            && f.button(
+                50,
+                Rect::new(x + w - update_width, preview_title - 4., update_width, 34.),
+                "更新预览",
+                !c.connected() && c.form.port.trim().is_empty(),
+                editing,
+            )
+        {
             match self.copy_geometry(c) {
                 Ok(()) => self.act(c, Action::Preview),
                 Err(e) => {
@@ -1560,7 +1566,7 @@ impl WriterView {
             51,
             layout.action(usize::from(self.advanced)),
             next,
-            true,
+            c.connected(),
             editing,
         ) {
             if !c.connected() || c.paper.is_none() {

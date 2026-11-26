@@ -665,7 +665,7 @@ impl WorkspaceWizard {
         let (title, instruction) = if !connected {
             (
                 "先连接写字机",
-                "插好 USB 线，在「设备」里选中写字机，再点「连接」。可以先设置每次移动的距离。",
+                "打开写字机电源，插好 USB 线，再点「连接写字机」。",
             )
         } else {
             match self.step {
