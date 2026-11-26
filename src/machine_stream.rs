@@ -1138,6 +1138,61 @@ fn state(line: &str) -> Option<&str> {
 }
 // Sending additional trajectory blocks through the cancelled token is forbidden.
 // Feed hold is a cleanup command on the same port and never resumes the queue.
+pub(crate) fn park_connected<P: Port>(
+    port: &mut P,
+    bounds: &Workspace,
+    target: [f64; 3],
+    feed: f64,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<String> {
+    bounds.require_generation(port.generation())?;
+    let [x, y, z] = target.map(|value| (value * 1000.).round() / 1000.);
+    let program = plotter_lines(&format!(
+        "G21 G90 G94\nG1 Z{z:.3} F{feed:.3}\nG1 X{x:.3} Y{y:.3} F{feed:.3}\n"
+    ))?;
+    let tolerance = {
+        let mut connection = Connection {
+            port,
+            end,
+            cancel,
+            pending: Vec::new(),
+        };
+        connection.require_state("Idle", true)?;
+        let settings = connection.read_settings()?;
+        let mut tolerance = [0.; 3];
+        for (i, value) in tolerance.iter_mut().enumerate() {
+            let steps = settings
+                .get(&(100 + i as u16))
+                .copied()
+                .filter(|n| *n >= 1.)
+                .ok_or("park requires valid axis step resolution; no motion sent")?;
+            *value = 0.51 / steps + 0.0013;
+        }
+        tolerance
+    };
+    transmit(port, &program, end, cancel, Some(bounds))?;
+    let mut connection = Connection {
+        port,
+        end,
+        cancel,
+        pending: Vec::new(),
+    };
+    let pose = connection.idle_pose(true)?;
+    bounds.require_generation(connection.port.generation())?;
+    bounds.verify(&bounds.identity, &pose)?;
+    if (0..3).any(|i| (pose.work[i] - [x, y, z][i]).abs() > tolerance[i]) {
+        return Err(
+            "park command sent but arrival was not verified; inspect before retrying".into(),
+        );
+    }
+    Ok(format!(
+        r#"{{"state":"Idle","work_position":{:?},"work_offset":{:?},"parked":true}}"#,
+        pose.work,
+        pose.offset.ok_or("park completed without work offset")?
+    ))
+}
+
 pub(crate) fn reset_connected<P: Port>(
     port: &mut P,
     end: Instant,
@@ -1372,6 +1427,51 @@ mod tests {
         );
         assert!(result.err().unwrap().contains("no motion sent"));
         assert_eq!(mock.writes, ["?", "$$\n"]);
+    }
+
+    #[test]
+    fn park_lifts_before_xy_and_verifies_arrival_within_step_resolution() {
+        let cancel = Cancellation::default();
+        let mut mock = Mock::default();
+        let limits = TravelBounds::new([0.; 3], [10.; 3]).unwrap();
+        let bounds = Workspace {
+            limits,
+            identity: Identity {
+                firmware: "1.1h.2019".into(),
+                device_id: None,
+            },
+            generation: std::cell::Cell::new(0),
+            offset: [0.; 3],
+        };
+        mock.expect("?", &[ORIGIN]);
+        mock.expect("$$\n", &["$100=80\n$101=80\n$102=100\nok\n"]);
+        mock.expect("?", &[ORIGIN]);
+        mock.expect("$I\n", &[GRBL_ID]);
+        mock.expect("$$\n", &["$13=0\nok\n"]);
+        mock.expect("?", &[ORIGIN]);
+        for line in [
+            "G94\n",
+            "G21G90G94\n",
+            "G1Z3.000F300.000\n",
+            "G1X4.004Y2.000F300.000\n",
+        ] {
+            mock.expect(line, &["ok\n"]);
+        }
+        let arrived = "<Idle|MPos:4,2,3|WCO:0,0,0>\n";
+        mock.expect("?", &[arrived]);
+        mock.expect("$$\n", &["$13=0\nok\n"]);
+        mock.expect("?", &[arrived]);
+        let receipt = park_connected(
+            &mut mock,
+            &bounds,
+            [4.004, 2., 3.],
+            300.,
+            Instant::now() + Duration::from_secs(2),
+            &cancel,
+        )
+        .unwrap();
+        assert!(receipt.contains(r#""parked":true"#));
+        assert!(mock.commands.is_empty());
     }
 
     const GRBL_ID: &str = "[VER:1.1h.2019:]\nok\n";

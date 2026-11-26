@@ -701,6 +701,25 @@ impl WriterView {
             return;
         }
         f.heading("手动调节", x, y + 369.);
+        if f.button(
+            705,
+            Rect::new(x + w - 136., y + 361., 136., 32.),
+            "回到左上角",
+            false,
+            enabled,
+        ) {
+            let target = || -> Result<Action, String> {
+                Ok(Action::Park {
+                    x: number(&self.geometry[3], LABELS[3])?,
+                    y: number(&self.geometry[4], LABELS[4])?,
+                    up: number(&self.geometry[6], LABELS[6])?,
+                })
+            };
+            match target() {
+                Ok(action) => self.act(c, action),
+                Err(error) => self.notice = error,
+            }
+        }
         f.field(
             6,
             x,

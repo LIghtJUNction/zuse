@@ -117,6 +117,7 @@ pub enum Action {
     Disconnect,
     Reset,
     AutoBounds,
+    Park { x: f64, y: f64, up: f64 },
     Jog { axis: char, delta: f64 },
     SetPenUp,
     SetPenDown,
@@ -284,6 +285,7 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
         Action::Disconnect => "plotter.disconnect()".into(),
         Action::Reset => "plotter.reset()".into(),
         Action::AutoBounds => "plotter.auto_bounds()".into(),
+        Action::Park { x, y, up } => format!("plotter.park(x={x},y={y},z={up},feed=300)"),
         Action::Jog { axis, delta } => {
             let a = axis.to_ascii_lowercase();
             if !matches!(a, 'x' | 'y' | 'z') || !delta.is_finite() || *delta == 0. {
@@ -1363,6 +1365,7 @@ impl Controller {
                 | Action::PenDown
                 | Action::Reset
                 | Action::AutoBounds
+                | Action::Park { .. }
                 | Action::Send
                 | Action::Check
                 | Action::CalibrationCapture(_)
@@ -1567,6 +1570,14 @@ impl Controller {
                     "屏幕书写已完成"
                 }
                 .into())
+            }
+            Action::Park { .. } => {
+                if raw(payload, "parked").as_deref() != Some("true") {
+                    return Err("回左上角未取得到位回执".into());
+                }
+                self.wpos = coords(payload, "work_position")?;
+                self.work_offset = coords(payload, "work_offset")?;
+                Ok("已抬笔并回到纸张左上角。".into())
             }
             Action::AutoBounds => {
                 self.mark_device_stale();

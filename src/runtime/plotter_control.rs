@@ -36,6 +36,10 @@ enum Action {
     Disconnect,
     Reset,
     AutoBounds,
+    Park {
+        target: [f64; 3],
+        feed: f64,
+    },
     Jog {
         axis: char,
         delta: f64,
@@ -111,6 +115,19 @@ impl Command {
                 )
             }
             "plotter.auto_bounds" => (Action::AutoBounds, 120000),
+            "plotter.park" => {
+                let target = ["x", "y", "z"].map(|key| number(call, key, f64::NAN));
+                if !target.iter().all(|n| (-10_000. ..=10_000.).contains(n)) {
+                    return Err("park requires finite work X, Y and pen-up Z in millimetres".into());
+                }
+                (
+                    Action::Park {
+                        target,
+                        feed: feed(call)?,
+                    },
+                    120_000,
+                )
+            }
             "plotter.reset" => (Action::Reset, 8000),
             "plotter.disconnect" => {
                 return Ok(Self {
@@ -305,6 +322,13 @@ pub(super) fn execute(
             device.bounds = Some(bounds);
             device.probe = machine_stream::ProbeEvidence::default();
             receipt
+        }
+        Action::Park { target, feed } => {
+            let bounds = device
+                .bounds
+                .as_ref()
+                .ok_or("park requires calibrated machine travel bounds; no motion sent")?;
+            machine_stream::park_connected(&mut device.port, bounds, target, feed, end, cancel)?
         }
         Action::Reset => {
             device.probe = machine_stream::ProbeEvidence::default();

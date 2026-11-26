@@ -93,7 +93,7 @@ impl Workspace {
         )
     }
 
-    fn verify(&self, identity: &Identity, pose: &Pose) -> Result<()> {
+    pub(super) fn verify(&self, identity: &Identity, pose: &Pose) -> Result<()> {
         if self.identity != *identity {
             return Err("the selected controller identity changed; teach bounds again".into());
         }
