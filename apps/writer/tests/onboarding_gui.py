@@ -37,7 +37,7 @@ def await_value(read, description, timeout=15):
 
 
 class Window:
-    def __init__(self, binary, root):
+    def __init__(self, binary, root, edit_offline=False):
         self.root = root
         self.proc = subprocess.Popen([binary, "--align"], stdout=sys.stderr)
         try:
@@ -48,8 +48,9 @@ class Window:
             self.close()
             raise
         command("xdotool", "windowfocus", "--sync", self.win)
-        self.language = self.locate("English")
-        self.click(self.language)
+        self.language = self.locate("English") if edit_offline else None
+        if self.language:
+            self.click(self.language)
 
     def close(self):
         self.proc.terminate()
@@ -59,10 +60,13 @@ class Window:
         command("import", "-window", self.win, str(path))
 
     def save_chinese(self, path):
-        self.click(self.language)
-        self.locate("English")
+        if self.language:
+            # The English distance buttons were positively identified before editing.
+            self.click(self.language)
+            await_value(lambda: self.find("Fine") is None and self.find("Coarse") is None,
+                        "Chinese distance controls to repaint")
+            self.language = None
         self.snap(path)
-        self.click(self.language)
 
     def lines(self):
         img = self.root / "frame.png"
@@ -111,7 +115,7 @@ class Window:
     def click(self, pos):
         command("xdotool", "mousemove", "--window", self.win, *map(str, pos), "click", "1")
 
-    def record_corner(self):
+    def corner_button(self):
         # At either corner the enabled recording button spans the paper pane.
         # Follow its rendered rectangle, then check the saved coordinates independently.
         def position():
@@ -132,7 +136,7 @@ class Window:
             if len(rows) < 8:
                 return None
             return (width * 70 // 100, rows[len(rows) // 2])
-        self.click(await_value(position, "enabled paper-corner recording button"))
+        return await_value(position, "enabled paper-corner recording button")
 
     def click_label(self, label):
         self.click(self.locate(label))
@@ -156,7 +160,7 @@ def exercise(binary, output, root):
         return [float(item) for item in draft.read_text().splitlines()[3].split()]
     unplugged = cfg / "unplugged"
     unplugged.touch()
-    w = Window(binary, root)
+    w = Window(binary, root, edit_offline=True)
     try:
         fine = w.locate("Fine")
         coarse = w.locate("Coarse")
@@ -172,16 +176,17 @@ def exercise(binary, output, root):
     unplugged.unlink()
     w = Window(binary, root)
     try:
-        w.record_corner()
+        w.click(w.corner_button())
         await_value(lambda: corners() == [0, 0], "first logged corner")
         command(str(fixture), "inject", "plotter.jog", "plotter.jog_held", "plotter.status")
     finally:
         w.close()
     w = Window(binary, root)
     try:
+        w.corner_button()  # A retained draft must be verified before this button is enabled.
         assert corners() == [0, 0]
         w.save_chinese(output / "02-resume-top-left.png")
-        w.record_corner()
+        w.click(w.corner_button())
         await_value(lambda: corners() == [0, 0, 2, 2], "both saved paper corners")
         w.save_chinese(output / "03-corners.png")
     finally:

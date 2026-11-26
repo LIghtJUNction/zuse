@@ -81,13 +81,31 @@ def click_label(label):
     try:pt=wait(lambda:search_label(label),timeout=20)
     except AssertionError as e:raise AssertionError(f"Could not find {label!r} in Writer: {last_ocr}") from e
     click(*pt)
+def article_toolbar(apply=False):
+    # The editor's heading identifies the active view; derive its toolbar from the actual native
+    # window geometry and the same responsive maximum (940 logical px) as WriterView::draw.
+    # A native dialog title/result or the application-applied text independently verifies every click.
+    wait(lambda:search_label("Edit article"),timeout=16)
+    size=dict(line.split("=",1) for line in x("getwindowgeometry","--shell",wid).splitlines() if "=" in line)
+    win_width=int(size["WIDTH"]);panel_width=min(win_width-32,940);left=(win_width-panel_width)//2
+    bx=left+panel_width-122 if apply else left
+    by=22 if apply else 68
+    bw=122 if apply else 128
+    img=dest/("article-apply-button.png" if apply else "article-open-button.png")
+    cmd("import","-window",wid,"-crop",f"{bw}x34+{bx}+{by}",img)
+    proc=subprocess.Popen(["convert",str(img),"-resize","350%","-colorspace","Gray","png:-"],stdout=subprocess.PIPE)
+    try:
+        observed=subprocess.run(["tesseract","stdin","stdout","--psm","7"],stdin=proc.stdout,capture_output=True).stdout.decode().strip()
+    finally:proc.stdout.close();proc.wait()
+    print(f"Article toolbar {bx},{by} {bw}x34; cropped label {observed!r}",flush=True)
+    click(bx+bw//2,by+17)
 def stamp(s):print(s,flush=True)
 p=subprocess.Popen([str(writer)],cwd=d,env=env,stdout=(dest/"stdout").open("w"),stderr=(dest/"stderr").open("w"))
 try:
     wid=wait(lambda: next(iter(windows("Zuse Writer")),None))
     focus(wid);time.sleep(1)
-    click_label("English")
     proof("writer-first-screen.png")
+    click_label("English")
     click_label("Choose font")
     click_label("Choose font file")
     dialog=wait(lambda: next(iter(windows("Choose font file")),None))
@@ -106,13 +124,13 @@ try:
     assert name+"-2" in listing() and (d/"fonts"/(name+".zfont")).read_bytes()==original
     stamp(dict(alias=name,duplicate=name+"-2",original_sha256=hashlib.sha256(original).hexdigest()))
     click_label("Workspace");click_label("Edit article")
-    click_label("Open text file");choose_file("Open a UTF-8 text file",article)
+    article_toolbar();choose_file("Open a UTF-8 text file",article)
     time.sleep(.7);proof("writer-article-open.png")
     # Copy all draft text from the native editor, independently verifying CRLF normalization and BOM removal.
     key("ctrl+a"); key("ctrl+c")
     actual=cmd("xclip","-selection","clipboard","-o",timeout=5).decode()
     assert actual=="A\nA\n",repr(actual)
-    click_label("Apply text");stamp("article A\\nA imported and applied")
+    article_toolbar(apply=True);stamp("article A\\nA imported and applied")
 except BaseException:
     if "wid" in globals():proof("failure.png")
     cmd("import","-window","root",dest/"failure-desktop.png")
