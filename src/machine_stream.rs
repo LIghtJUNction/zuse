@@ -1227,9 +1227,24 @@ pub(crate) fn reset_connected<P: Port>(
     c.port.expect_reset();
     c.send(&[0x18])
         .map_err(|error| format!("reset result unknown: {error}"))?;
-    let frame = c
-        .query_status(true)
-        .map_err(|error| format!("reset sent; final state unknown: {error}"))?;
+    let confirm = (|| {
+        // Wait for a quiet serial interval before polling. Some BtWriter builds
+        // answer '?' during boot, before emitting the tail of the startup banner.
+        c.pending.clear();
+        loop {
+            c.cancel.check()?;
+            let remaining = c.end.saturating_duration_since(Instant::now());
+            if remaining < Duration::from_millis(450) {
+                return Err("startup output did not settle by the controller deadline".into());
+            }
+            let read = c.port.read(450)?;
+            if read.timed_out && read.bytes.is_empty() {
+                break;
+            }
+        }
+        c.query_status(true)
+    })();
+    let frame = confirm.map_err(|error| format!("reset sent; final state unknown: {error}"))?;
     let state = state(&frame).ok_or("reset sent; status unreadable")?;
     Ok(format!(
         r#"{{"state":{},"reset_sent":true,"calibration_required":true}}"#,
@@ -1362,6 +1377,7 @@ mod tests {
         replies: VecDeque<Vec<u8>>,
         commands: VecDeque<(String, Vec<Vec<u8>>)>,
         cancel_on_motion: Option<Cancellation>,
+        timeout_when_empty: bool,
     }
     impl Mock {
         fn expect(&mut self, command: &str, reply: &[&str]) {
@@ -1390,6 +1406,12 @@ mod tests {
             Ok(bytes.len())
         }
         fn read(&mut self, _: u32) -> Result<ReadResult> {
+            if self.timeout_when_empty && self.replies.is_empty() {
+                return Ok(ReadResult {
+                    bytes: Vec::new(),
+                    timed_out: true,
+                });
+            }
             let bytes = self.replies.pop_front().ok_or("test disconnect")?;
             Ok(ReadResult {
                 bytes,
@@ -1397,6 +1419,27 @@ mod tests {
             })
         }
     }
+    #[test]
+    fn reset_consumes_fragmented_startup_output_before_polling() {
+        let mut mock = Mock {
+            timeout_when_empty: true,
+            ..Mock::default()
+        };
+        mock.expect("?", &[ORIGIN]);
+        mock.expect("$I\n", &[GRBL_ID]);
+        mock.expect("$N\n", &["$N0=\n$N1=\nok\n"]);
+        mock.expect("\x18", &["Grbl 1.3a ['$' f", "or help]\r\n"]);
+        mock.expect("?", &[ORIGIN]);
+        let receipt = reset_connected(
+            &mut mock,
+            Instant::now() + Duration::from_secs(2),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert!(receipt.contains(r#""reset_sent":true"#));
+        assert!(mock.commands.is_empty() && mock.replies.is_empty());
+    }
+
     #[test]
     fn cancelled_stream_sends_feed_hold_and_reports_stopped_state() {
         let cancel = Cancellation::default();
