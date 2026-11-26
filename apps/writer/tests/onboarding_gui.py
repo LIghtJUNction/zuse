@@ -48,7 +48,8 @@ class Window:
             self.close()
             raise
         command("xdotool", "windowfocus", "--sync", self.win)
-        self.click_label("English")
+        self.language = self.locate("English")
+        self.click(self.language)
 
     def close(self):
         self.proc.terminate()
@@ -56,6 +57,12 @@ class Window:
 
     def snap(self, path):
         command("import", "-window", self.win, str(path))
+
+    def save_chinese(self, path):
+        self.click(self.language)
+        self.locate("English")
+        self.snap(path)
+        self.click(self.language)
 
     def lines(self):
         img = self.root / "frame.png"
@@ -131,7 +138,7 @@ def exercise(binary, output, root):
         command("xdotool", "key", "ctrl+a")
         command("xdotool", "type", "37.5")
         await_value(lambda: float(prefs.read_text()) == 37.5, "offline custom step")
-        w.snap(output / "01-connect.png")
+        w.save_chinese(output / "01-connect.png")
     finally:
         w.close()
     unplugged.unlink()
@@ -151,12 +158,12 @@ def exercise(binary, output, root):
         w.locate("Holder now")
         w.locate("Recorded top left")
         assert corners() == [0, 0]
-        w.snap(output / "02-resume-top-left.png")
+        w.save_chinese(output / "02-resume-top-left.png")
         w.click_label("Record as bottom right")
         w.locate("Set the holder height")
         w.locate("Recorded bottom right")
         await_value(lambda: corners() == [0, 0, 2, 2], "both saved paper corners")
-        w.snap(output / "03-corners.png")
+        w.save_chinese(output / "03-corners.png")
     finally:
         w.close()
     journal = [json.loads(line) for line in (cfg / "job-log").read_text().splitlines()]

@@ -99,3 +99,16 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 90
+
+  writer-format:
+    name: Check Writer source formatting
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Compare with rustfmt output
+        run: |
+          cargo fmt --manifest-path apps/writer/Cargo.toml
+          git -c color.ui=never diff --exit-code -- apps/writer/src

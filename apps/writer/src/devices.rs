@@ -35,7 +35,18 @@ pub(crate) fn discover() -> Vec<DeviceCandidate> {
     {
         macos::devices("/dev".as_ref())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        // QueryDosDevice enumerates COM names without opening or configuring them.
+        zuse::serial::ports().and_then(|ports| zuse::json::with_value(&ports, |root| {
+            root.elements().map(|item| {
+                let path = zuse::json::text(item)?;
+                Ok(DeviceCandidate { label: path.clone(), identifier: Some(path.clone()),
+                    detail: crate::locale::text("串口设备").into(), path })
+            }).collect()
+        })).unwrap_or_default()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         Vec::new()
     }

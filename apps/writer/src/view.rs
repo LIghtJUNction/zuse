@@ -90,7 +90,8 @@ impl DevicePicker {
     }
 
     fn height(&self) -> f32 {
-        if self.candidates.len() <= 1 { return 57.; }
+        if self.candidates.is_empty() { return 72.; }
+        if self.candidates.len() == 1 { return 57.; }
         29. + self.rows().len() as f32 * DEVICE_ROW + if self.pages() > 1 { 36. } else { 0. }
     }
 }
@@ -211,7 +212,7 @@ impl WriterView {
     pub(crate) fn set_sources(&mut self, sources: Menu, message: String) {
         self.sources = (!sources.sources.choices.is_empty()).then_some(sources);
         self.notice = if message.contains("--kuixiang-config") {
-            crate::locale::text("两份奎享配置的纸张不同，可在「连接设置」中选择。").into()
+            crate::locale::text("检测到两份奎享配置，可在「连接设置」中选择。").into()
         } else { message };
     }
     pub fn dark(&self) -> bool {
@@ -700,7 +701,7 @@ impl WriterView {
         if f.button(4, Rect::new(x, connect_y, w, 36.),
             if linked { "断开连接" } else { "连接写字机" }, !linked,
             !closing && !c.busy() && (linked || !c.form.port.trim().is_empty())) {
-            self.connection_attempted = true;
+            self.connection_attempted = !linked;
             if linked {
                 self.act(c, Action::Disconnect);
             } else if let Ok(baud) = self.baud.trim().parse::<u32>() {
@@ -712,9 +713,9 @@ impl WriterView {
             }
         }
         let mut settings_y = connect_y + 45.;
-        if self.connection_attempted {
-            let message = if self.notice.is_empty() { &c.status } else { &self.notice };
-            f.status(7188, Rect::new(x, settings_y, w, 28.), message);
+        if self.connection_attempted && !linked {
+            let message = if c.busy() { "正在连接写字机…" } else { "连接未成功。检查 USB 和电源后再试。" };
+            f.note(message, x, settings_y + 4., w);
             settings_y += 35.;
         }
         if f.quiet_button(7189, Rect::new(x, settings_y, w, 32.),
@@ -1067,7 +1068,13 @@ impl WriterView {
         let list = &mut self.picker;
         if list.candidates.is_empty() {
             f.caption("还没找到写字机", x, y);
-            f.note("接上 USB 并打开电源，再点「重新查找」。", x, y + 23., w);
+            let hint = crate::locale::text("接上 USB 并打开电源，再点「重新查找」。");
+            if f.canvas.measure(hint, 13, false) <= w {
+                f.note(hint, x, y + 23., w);
+            } else {
+                f.note("接上 USB 并打开电源。", x, y + 23., w);
+                f.note("再点「重新查找」。", x, y + 42., w);
+            }
         } else if let [only] = list.candidates.as_slice() {
             let selected = c.form.port == only.path;
             f.caption(if selected { "已选设备" } else { "找到一台设备" }, x, y);

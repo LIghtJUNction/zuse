@@ -740,7 +740,8 @@ impl WorkspaceWizard {
                 panel.text("设定移动速度 (mm/min)", y, 14, true);
                 y += 23.;
                 let field = panel.cell(y, 0, 2, 34.);
-                panel.ui.input(panel.canvas, 1044, field, &mut c.form.jog_feed, "mm/min", false, !closing && !c.busy() && !self.pending());
+                    let feed_editable = !closing && !c.busy() && !self.pending();
+                panel.ui.input(panel.canvas, 1044, field, &mut c.form.jog_feed, "mm/min", false, feed_editable);
                 let key_area = panel.cell(y, 1, 2, 34.);
                 self.keyboard_button = Some(key_area);
                 let key_label = if self.keyboard { "停用键盘方向键" } else { "启用键盘方向键" };

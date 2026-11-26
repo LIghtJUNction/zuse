@@ -281,3 +281,9 @@ Y 增大	Y +
 把笔夹移到装笔高度	Move holder to fitting height
 笔已夹紧，保存校准	Pen secured · Save calibration
 先微调一小步看方向。同一轴的「增大」和「减小」方向相反。长按连续移动，松开停止续发。	Try one small step to check direction. Use the opposite sign to go back. Hold to repeat moves and release to stop sending them.
+检测到两份奎享配置，可在「连接设置」中选择。	Two KuiXiang installations were found. Choose one under Connection settings.
+串口设备	Serial device
+正在连接写字机…	Connecting to the machine…
+连接未成功。检查 USB 和电源后再试。	Connection failed. Check USB and power, then try again.
+接上 USB 并打开电源。	Plug in USB and turn on the machine.
+再点「重新查找」。	Then select Look again.
