@@ -55,6 +55,7 @@ impl Cancellation {
     }
     /// Request cancellation without waiting for an active native dispatch.
     /// Controllers must wait for execution to finish before confirming cleanup.
+    #[cfg(any(unix, test))]
     pub(crate) fn request_cancel(&self) {
         self.0.cancelled.store(true, Ordering::Release);
         self.wake_waiters();

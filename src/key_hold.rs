@@ -159,6 +159,7 @@ pub(crate) struct CheckDeadline {
 
 #[cfg(any(target_os = "linux", test))]
 impl CheckDeadline {
+    #[cfg(target_os = "linux")]
     pub(crate) fn transport(at: Instant) -> Self {
         Self {
             at,

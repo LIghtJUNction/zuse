@@ -103,7 +103,7 @@ source = "git+https://github.com/LIghtJUNction/zconv.git#f9448d27997dc70dac05f0c
 [[package]]
 name = "zgpui"
 version = "0.1.9"
-source = "git+https://github.com/LIghtJUNction/zgpui.git#087dc628c3bb137448bf57dc25b965adcd9ae188"
+source = "git+https://github.com/LIghtJUNction/zgpui.git#bd482f6868718b9766840db8ac5a04031ee4ea9d"
 
 [[package]]
 name = "zmcpio"
