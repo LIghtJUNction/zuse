@@ -5,6 +5,17 @@ use std::time::{Duration, Instant};
 #[path = "linuxcnc.rs"]
 mod linuxcnc;
 pub use linuxcnc::run_linuxcnc;
+mod bounds;
+pub(crate) use bounds::{TravelBounds, Workspace};
+pub(crate) fn bind_workspace(
+    port: &mut SerialPort,
+    limits: TravelBounds,
+    expected: Option<[f64; 3]>,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<Workspace> {
+    bounds::bind(port, limits, expected, end, cancel)
+}
 
 /// Validate the complete pen program without opening a serial port.
 pub fn check_grbl(program: &str) -> std::result::Result<usize, String> {
@@ -48,7 +59,7 @@ pub fn stream_grbl(
     let end = deadline(timeout_ms)?;
     let lines = plotter_lines(program)?;
     let mut port = cancel.dispatch(|| SerialPort::open_machine(path, baud))?;
-    let outcome = transmit(&mut port, &lines, end, cancel);
+    let outcome = transmit(&mut port, &lines, end, cancel, None);
     let close = port.close();
     match (outcome, close) {
         (Ok(n), Ok(())) => Ok(n),
@@ -81,21 +92,23 @@ enum StatusView {
     Raw,
     Metric,
     Work,
+    Frame,
 }
 
 #[derive(Default)]
 pub(crate) struct ProbeEvidence {
-    active_firmware: Option<String>,
+    active_source: Option<String>,
 }
 
 impl ProbeEvidence {
-    fn observe(&mut self, firmware: &str, frame: &str) -> Option<bool> {
+    fn observe(&mut self, firmware: &str, device: Option<&str>, frame: &str) -> Option<bool> {
+        let source = device.unwrap_or(firmware);
         if self
-            .active_firmware
+            .active_source
             .as_deref()
-            .is_some_and(|previous| previous != firmware)
+            .is_some_and(|previous| previous != source)
         {
-            self.active_firmware = None;
+            self.active_source = None;
         }
         let mut fields = frame
             .trim_end_matches('>')
@@ -109,14 +122,14 @@ impl ProbeEvidence {
             return None;
         }
         if pins.contains('P') {
-            if self.active_firmware.is_none() {
-                self.active_firmware = Some(firmware.to_owned());
+            if self.active_source.is_none() {
+                self.active_source = Some(source.to_owned());
             }
             return Some(true);
         }
         // Standard Grbl defines P in its pin list. A vendor's limit pins alone do not establish
         // that its firmware reports P; require a previous positive sample from this device.
-        (firmware.starts_with("1.1") || self.active_firmware.is_some()).then_some(false)
+        (firmware.starts_with("1.1") || self.active_source.is_some()).then_some(false)
     }
 }
 
@@ -125,13 +138,16 @@ pub(crate) fn inspect_connected(
     end: Instant,
     cancel: &Cancellation,
     work: bool,
+    offset: bool,
     probe: &mut ProbeEvidence,
 ) -> Result<String> {
     inspect_port(
         port,
         end,
         cancel,
-        if work {
+        if offset {
+            StatusView::Frame
+        } else if work {
             StatusView::Work
         } else {
             StatusView::Metric
@@ -146,11 +162,12 @@ pub(crate) fn program_connected(
     check: bool,
     end: Instant,
     cancel: &Cancellation,
+    bounds: Option<&Workspace>,
 ) -> Result<usize> {
     if check {
-        check_on_port(port, lines, end, cancel)
+        check_on_port(port, lines, end, cancel, bounds)
     } else {
-        transmit(port, lines, end, cancel)
+        transmit(port, lines, end, cancel, bounds)
     }
 }
 
@@ -168,18 +185,24 @@ fn inspect_port<P: Port>(
         pending: Vec::new(),
     };
     let first = c.query_status(true)?;
-    let firmware = c.identify()?;
+    let Identity {
+        firmware,
+        device_id,
+    } = c.identify()?;
     let (unit, frame, coords, probe_state) = if view == StatusView::Raw {
         let coords = Positions::parse(&first)?;
         (None, first, coords, None)
     } else {
-        probe.observe(&firmware, &first);
+        probe.observe(&firmware, device_id.as_deref(), &first);
         let scale = c.report_scale()?;
         loop {
             let frame = c.query_status(false)?;
             let coords = Positions::parse(&frame)?;
-            let pin = probe.observe(&firmware, &frame);
-            if view != StatusView::Work || coords.work_axis(0).is_some() {
+            let pin = probe.observe(&firmware, device_id.as_deref(), &frame);
+            if !matches!(view, StatusView::Work | StatusView::Frame)
+                || (coords.work_axis(0).is_some()
+                    && (view != StatusView::Frame || coords.offset_xyz().is_some()))
+            {
                 break (Some(scale), frame, coords, pin);
             }
             // Poll only for same-frame WPos or MPos + WCO. Never reuse an older offset.
@@ -250,7 +273,21 @@ fn inspect_port<P: Port>(
             result.push_str(&format!(r#","pins":{}"#, quote(pins)));
         }
     }
-    if view == StatusView::Work {
+    if view == StatusView::Frame
+        && coords.offset.is_none()
+        && let (Some(offset), Some(mm)) = (coords.offset_xyz(), unit)
+    {
+        let offset = offset.map(|v| v * mm);
+        if !offset.iter().all(|v| v.is_finite()) {
+            return Err("non-finite work offset".into());
+        }
+        result.push_str(&format!(r#","work_offset":{offset:?}"#));
+    }
+    if matches!(view, StatusView::Work | StatusView::Frame) {
+        result.push_str(&format!(
+            r#","device_id":{}"#,
+            device_id.as_deref().map_or_else(|| "null".into(), quote)
+        ));
         // GRBL exposes a digital probe input on supported builds. No force reading is present.
         let value = match probe_state {
             Some(true) => "true",
@@ -259,7 +296,7 @@ fn inspect_port<P: Port>(
         };
         result.push_str(&format!(
             r#","pressure":null,"probe_triggered":{value},"probe_seen_active":{}"#,
-            probe.active_firmware.is_some()
+            probe.active_source.is_some()
         ));
     }
     result.push('}');
@@ -279,7 +316,7 @@ pub fn check_on_grbl(
     let end = deadline(timeout_ms)?;
     let lines = plotter_lines(program)?;
     let mut port = cancel.dispatch(|| SerialPort::open_machine(path, baud))?;
-    let result = check_on_port(&mut port, &lines, end, cancel);
+    let result = check_on_port(&mut port, &lines, end, cancel, None);
     let close = port.close();
     let count = result?;
     close.map_err(|e| {
@@ -293,6 +330,7 @@ fn check_on_port<P: Port>(
     lines: &[String],
     end: Instant,
     cancel: &Cancellation,
+    bounds: Option<&Workspace>,
 ) -> Result<usize> {
     let mut c = Connection {
         port,
@@ -301,7 +339,8 @@ fn check_on_port<P: Port>(
         pending: Vec::new(),
     };
     c.require_state("Idle", true)?;
-    c.identify()?;
+    let id = c.identify()?;
+    c.enforce_program(bounds, &id, lines)?;
     c.check_startup_blocks()?;
     c.require_state("Idle", false)?;
     c.send(b"$C\n").and_then(|()| c.ack(false)).map_err(|e| {
@@ -348,6 +387,19 @@ fn check_on_port<P: Port>(
     }
 }
 
+fn words(mut line: &str) -> impl Iterator<Item = (u8, &str)> {
+    std::iter::from_fn(move || {
+        let (&address, _) = line.as_bytes().split_first()?;
+        let tail = &line[1..];
+        let next = tail
+            .find(|c: char| c.is_ascii_uppercase())
+            .unwrap_or(tail.len());
+        let value = &tail[..next];
+        line = &tail[next..];
+        Some((address, value))
+    })
+}
+
 // Strip comments before transmission: GRBL recognizes real-time characters even in comments.
 pub(crate) fn plotter_lines(program: &str) -> Result<Vec<String>> {
     if program.len() > MAX_PROGRAM {
@@ -383,14 +435,7 @@ pub(crate) fn plotter_lines(program: &str) -> Result<Vec<String>> {
         let mut cutting_feed = false;
         let mut block_motion = false;
         let mut axes = false;
-        let mut rest = code.as_str();
-        while !rest.is_empty() {
-            let addr = rest.as_bytes()[0];
-            let tail = &rest[1..];
-            let next = tail
-                .find(|c: char| c.is_ascii_uppercase())
-                .unwrap_or(tail.len());
-            let value = &tail[..next];
+        for (addr, value) in words(&code) {
             let group = match (addr, value) {
                 (b'G', "21") => {
                     mm = true;
@@ -436,7 +481,6 @@ pub(crate) fn plotter_lines(program: &str) -> Result<Vec<String>> {
                 ));
             }
             seen[group] = true;
-            rest = &tail[next..];
         }
         if axes && !(block_motion && mm && absolute) {
             return Err(format!(
@@ -464,6 +508,37 @@ pub(crate) fn plotter_lines(program: &str) -> Result<Vec<String>> {
         return Err("GRBL program end precedes additional commands".into());
     }
     Ok(lines)
+}
+
+#[derive(Default, PartialEq)]
+struct Identity {
+    firmware: String,
+    device_id: Option<String>,
+}
+
+fn writer_id(address: &str) -> Option<String> {
+    use sha1::{Digest, Sha1};
+    let mut mac = [0; 6];
+    let mut parts = address.split(':');
+    for b in &mut mac {
+        let octet = parts.next()?;
+        if octet.len() != 2 || !octet.bytes().all(|v| v.is_ascii_hexdigit()) {
+            return None;
+        }
+        *b = u8::from_str_radix(octet, 16).ok()?;
+    }
+    if parts.next().is_some() || mac == [0; 6] || mac == [255; 6] {
+        return None;
+    }
+    let mut digest = Sha1::new();
+    digest.update(b"zuse/btwriter/addr/v1\0");
+    digest.update(mac);
+    let mut id = String::from("btwriter-");
+    use std::fmt::Write;
+    for byte in digest.finalize() {
+        write!(id, "{byte:02x}").unwrap();
+    }
+    Some(id)
 }
 
 struct Connection<'a, P> {
@@ -695,13 +770,14 @@ impl<P: Port> Connection<'_, P> {
             }
         }
     }
-    fn identify(&mut self) -> Result<String> {
+    fn identify(&mut self) -> Result<Identity> {
         self.send(b"$I\n")?;
         self.ack(true)
     }
-    fn ack(&mut self, info: bool) -> Result<String> {
+    fn ack(&mut self, info: bool) -> Result<Identity> {
         let mut version: Option<String> = None;
         let mut bt_writer = false;
+        let mut device_id = None;
         loop {
             let line = self
                 .next(self.end)?
@@ -712,10 +788,13 @@ impl<P: Port> Connection<'_, P> {
                     return Err("unattributed data after GRBL acknowledgement".into());
                 }
                 if !info {
-                    return Ok(String::new());
+                    return Ok(Identity::default());
                 }
                 return match version {
-                    Some(v) if v == "1.3a.20221114" && bt_writer => Ok(v),
+                    Some(v) if v == "1.3a.20221114" && bt_writer => Ok(Identity {
+                        firmware: v,
+                        device_id,
+                    }),
                     Some(v)
                         if v.strip_prefix("1.1").is_some_and(|tail| {
                             tail.is_empty()
@@ -723,7 +802,10 @@ impl<P: Port> Connection<'_, P> {
                                 || tail.as_bytes()[0].is_ascii_lowercase()
                         }) =>
                     {
-                        Ok(v)
+                        Ok(Identity {
+                            firmware: v,
+                            device_id: None,
+                        })
                     }
                     _ => Err(
                         "expected GRBL 1.1 or the identified BtWriter 1.3a.20221114 firmware"
@@ -752,7 +834,16 @@ impl<P: Port> Connection<'_, P> {
                 && line.contains("):Status=")
                 && line.ends_with(']')
             {
+                if bt_writer {
+                    return Err("conflicting BtWriter identity markers".into());
+                }
                 bt_writer = true;
+                if let Some((address, _)) = line
+                    .trim_start_matches("[MSG:Mode=BT:Name=BtWriter(")
+                    .split_once("):Status=")
+                {
+                    device_id = writer_id(address);
+                }
                 continue;
             }
             if (info && line.starts_with("[OPT:"))
@@ -777,8 +868,9 @@ pub(crate) fn jog_connected(
     feed: f64,
     end: Instant,
     cancel: &Cancellation,
+    bounds: Option<&Workspace>,
 ) -> Result<String> {
-    jog_on_port(port, axis, delta, feed, end, cancel)
+    jog_on_port(port, axis, delta, feed, end, cancel, bounds)
 }
 
 fn jog_on_port<P: Port>(
@@ -788,6 +880,7 @@ fn jog_on_port<P: Port>(
     feed: f64,
     end: Instant,
     cancel: &Cancellation,
+    bounds: Option<&Workspace>,
 ) -> Result<String> {
     let index = match axis {
         'X' => 0,
@@ -805,30 +898,23 @@ fn jog_on_port<P: Port>(
         pending: Vec::new(),
     };
     c.require_state("Idle", true)?;
-    c.identify()?;
-    let mm = c.report_scale()?;
-    let mut position = None;
-    // WCO is periodic. Never combine live MPos with a guessed or past-job offset.
-    for attempt in 0..32 {
-        let frame = c.query_status(false)?;
-        if state(&frame) != Some("Idle") {
-            return Err("controller left Idle before jog".into());
-        }
-        if let Some(v) = Positions::parse(&frame)?.work_axis(index) {
-            position = Some(v * mm);
-            break;
-        }
-        if attempt < 31 {
-            c.cancel
-                .sleep(QUERY_INTERVAL.min(end.saturating_duration_since(Instant::now())))?;
-        }
-    }
-    let from = position.ok_or("fresh WPos or matching MPos/WCO not reported; no jog sent")?;
+    let id = c.identify()?;
+    let pose = c.idle_pose(bounds.is_some())?;
+    let from = pose.work[index];
     let target = from + delta;
     if !(target as f32).is_finite() || target as f32 == from as f32 {
         return Err("jog delta cannot be expressed at this GRBL coordinate".into());
     }
-    let block = format!("$J=G21G90{axis}{target:.6}F{feed:.6}\n");
+    let wire_target = format!("{target:.6}");
+    if let Some(guard) = bounds {
+        guard.jog(
+            &id,
+            &pose,
+            index,
+            wire_target.parse().map_err(|_| "invalid jog target")?,
+        )?;
+    }
+    let block = format!("$J=G21G90{axis}{wire_target}F{feed:.6}\n");
     if block.len() > 80 || feed < 0.0000005 || (target - from).abs() < 0.0000005 {
         return Err("jog exceeds GRBL block precision or length".into());
     }
@@ -916,6 +1002,7 @@ fn transmit<P: Port>(
     lines: &[String],
     end: Instant,
     cancel: &Cancellation,
+    bounds: Option<&Workspace>,
 ) -> Result<usize> {
     let mut c = Connection {
         port,
@@ -923,9 +1010,11 @@ fn transmit<P: Port>(
         cancel,
         pending: Vec::new(),
     };
-    c.idle(true)
+    let id = c
+        .idle(true)
         .and_then(|()| c.identify())
         .map_err(|e| format!("controller handshake before program: {e}"))?;
+    c.enforce_program(bounds, &id, lines)?;
     // G94 establishes mm/min for this generated trajectory even after earlier G93 jobs.
     c.send(b"G94\n")
         .and_then(|()| c.ack(false))
@@ -983,6 +1072,206 @@ mod tests {
             })
         }
     }
+    const GRBL_ID: &str = "[VER:1.1h.2019:]\nok\n";
+    const ORIGIN: &str = "<Idle|MPos:1,1,1|WCO:0,0,0>\n";
+    fn sample(id: &str, frame: &str) -> Mock {
+        let mut m = Mock::default();
+        m.expect("?", &[ORIGIN]);
+        m.expect("$I\n", &[id]);
+        m.expect("$$\n", &["$13=0\nok\n"]);
+        m.expect("?", &[frame]);
+        m
+    }
+
+    #[test]
+    fn whole_job_origin_and_every_axis_are_checked_before_any_effect() {
+        let cancel = Cancellation::default();
+        let limits = TravelBounds::new([0.; 3], [10.; 3]).unwrap();
+        let guard = bounds::bind(
+            &mut sample(GRBL_ID, ORIGIN),
+            limits,
+            Some([0.; 3]),
+            deadline(500).unwrap(),
+            &cancel,
+        )
+        .unwrap();
+        for (frame, last, reason) in [
+            (ORIGIN, "G0 Y11", "Y=11"),
+            (
+                "<Idle|WPos:1,-1,1|WCO:0,0,0>\n",
+                "G0 X5",
+                "current position",
+            ),
+            ("<Idle|MPos:1,1,1|WCO:0,0,1>\n", "G1 Z3", "work origin"),
+        ] {
+            let lines = plotter_lines(&format!("G21 G90\nG0 X2\nG1 Z5 F10\n{last}")).unwrap();
+            for check in [false, true] {
+                let mut m = sample(GRBL_ID, frame);
+                let result = if check {
+                    check_on_port(
+                        &mut m,
+                        &lines,
+                        deadline(500).unwrap(),
+                        &cancel,
+                        Some(&guard),
+                    )
+                } else {
+                    transmit(
+                        &mut m,
+                        &lines,
+                        deadline(500).unwrap(),
+                        &cancel,
+                        Some(&guard),
+                    )
+                };
+                assert!(result.unwrap_err().contains(reason));
+                assert_eq!(m.writes, ["?", "$I\n", "$$\n", "?"]);
+            }
+        }
+        let mut m = sample(GRBL_ID, ORIGIN);
+        assert!(
+            jog_on_port(
+                &mut m,
+                'Z',
+                -2.,
+                20.,
+                deadline(500).unwrap(),
+                &cancel,
+                Some(&guard)
+            )
+            .unwrap_err()
+            .contains("Z=-1")
+        );
+        assert_eq!(m.writes, ["?", "$I\n", "$$\n", "?"]);
+        let mut m = sample(GRBL_ID, ORIGIN);
+        let lines = plotter_lines("G21 G90\nG0 Z10\nG1 X0 F20\nG0 Y10").unwrap();
+        m.expect("G94\n", &["ok\n"]);
+        for line in &lines {
+            m.expect(&format!("{line}\n"), &["ok\n"]);
+        }
+        m.expect("?", &[ORIGIN]);
+        assert_eq!(
+            transmit(
+                &mut m,
+                &lines,
+                deadline(500).unwrap(),
+                &cancel,
+                Some(&guard)
+            ),
+            Ok(4)
+        );
+    }
+
+    #[test]
+    fn jog_checks_the_exact_wire_coordinate_at_taught_edges() {
+        let cancel = Cancellation::default();
+        for (start, delta, low, high, target, allowed) in [
+            (0.2, 0.1, -1., 0.3, "0.300000", true),
+            (-0.2, -0.1, -0.3, 1., "-0.300000", true),
+            (0.2, 0.1000007, -1., 0.3000008, "0.300001", false),
+        ] {
+            let frame = format!("<Idle|WPos:{start},0,0|WCO:0,0,0>\n");
+            let limits = TravelBounds::new([low, -1., -1.], [high, 1., 1.]).unwrap();
+            let guard = bounds::bind(
+                &mut sample(GRBL_ID, &frame),
+                limits,
+                None,
+                deadline(500).unwrap(),
+                &cancel,
+            )
+            .unwrap();
+            let mut m = sample(GRBL_ID, &frame);
+            if allowed {
+                m.expect(&format!("$J=G21G90X{target}F20.000000\n"), &["ok\n"]);
+                m.expect("?", &[&frame]);
+            }
+            let result = jog_on_port(
+                &mut m,
+                'X',
+                delta,
+                20.,
+                deadline(500).unwrap(),
+                &cancel,
+                Some(&guard),
+            );
+            assert_eq!(result.is_ok(), allowed, "{result:?}");
+            assert_eq!(m.writes.iter().any(|cmd| cmd.starts_with("$J=")), allowed);
+        }
+    }
+
+    #[test]
+    fn bounds_require_the_same_verifiable_frame() {
+        let cancel = Cancellation::default();
+        let limits = TravelBounds::new([0.; 3], [10.; 3]).unwrap();
+        let mut no_offset = sample(GRBL_ID, "<Idle|WPos:1,2,3>\n");
+        assert!(
+            bounds::bind(
+                &mut no_offset,
+                limits,
+                None,
+                deadline(100).unwrap(),
+                &cancel
+            )
+            .err()
+            .unwrap()
+            .contains("offset")
+        );
+        assert_eq!(no_offset.writes, ["?", "$I\n", "$$\n", "?"]);
+        let frame = "<Idle|MPos:3,5,7|WPos:1,2,3>\n";
+        assert!(
+            bounds::bind(
+                &mut sample(GRBL_ID, frame),
+                limits,
+                Some([2., 3., 4.]),
+                deadline(500).unwrap(),
+                &cancel
+            )
+            .is_ok()
+        );
+        assert!(
+            bounds::bind(
+                &mut sample(GRBL_ID, frame),
+                limits,
+                Some([2., 3., 4.1]),
+                deadline(500).unwrap(),
+                &cancel
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn distinct_btwriter_profiles_have_opaque_ids_and_metric_frame() {
+        let expected = writer_id("aa:bb:cc:dd:ee:01").unwrap();
+        assert_eq!(writer_id("AA:BB:CC:DD:EE:01").as_ref(), Some(&expected));
+        assert_ne!(writer_id("aa:bb:cc:dd:ee:02").as_ref(), Some(&expected));
+        for invalid in [
+            "test-device",
+            "00:00:00:00:00:00",
+            "ff:ff:ff:ff:ff:ff",
+            "AA:BB:CC:DD:EE",
+            "AA:BB:CC:DD:EE:FF:00",
+        ] {
+            assert!(writer_id(invalid).is_none());
+        }
+        let marker = "[MSG:Mode=BT:Name=BtWriter(AA:BB:CC:DD:EE:01):Status=Not connected]";
+        for (version, reported) in [("1.3a.20221114", quote(&expected)), ("1.1h", "null".into())] {
+            let id = format!("[VER:{version}:]\n{marker}\nok\n");
+            let mut m = sample(&id, "<Idle|WPos:1,2,3|MPos:3,5,7>\n");
+            let report = inspect_port(
+                &mut m,
+                deadline(500).unwrap(),
+                &Cancellation::default(),
+                StatusView::Frame,
+                &mut ProbeEvidence::default(),
+            )
+            .unwrap();
+            assert!(report.contains(&format!(r#""device_id":{reported}"#)));
+            assert!(report.contains(r#""work_offset":[2.0, 3.0, 4.0]"#));
+            assert!(!report.contains("AA:BB"));
+        }
+    }
+
     #[test]
     fn normalized_probe_reads_reporting_units_and_derives_work_xyz_from_one_report() {
         let mut m = Mock::default();
@@ -1063,14 +1352,17 @@ mod tests {
     fn probe_evidence_is_scoped_to_the_controller_and_never_substitutes_for_a_fresh_pin_sample() {
         let mut probe = ProbeEvidence::default();
         let bt = "1.3a.20221114";
-        assert_eq!(probe.observe(bt, "<Idle|Pn:XY>"), None);
-        assert_eq!(probe.observe(bt, "<Idle|Pn:PXY>"), Some(true));
-        assert_eq!(probe.observe(bt, "<Idle>"), None);
-        assert_eq!(probe.observe(bt, "<Idle|Pn:XY>"), Some(false));
-        assert_eq!(probe.observe(bt, "<Idle|Pn:P|Pn:XY>"), None);
-        assert_eq!(ProbeEvidence::default().observe(bt, "<Idle|Pn:XY>"), None);
-        probe.observe("1.1h", "<Idle>");
-        assert_eq!(probe.observe(bt, "<Idle|Pn:XY>"), None);
+        assert_eq!(probe.observe(bt, None, "<Idle|Pn:XY>"), None);
+        assert_eq!(probe.observe(bt, None, "<Idle|Pn:PXY>"), Some(true));
+        assert_eq!(probe.observe(bt, None, "<Idle>"), None);
+        assert_eq!(probe.observe(bt, None, "<Idle|Pn:XY>"), Some(false));
+        assert_eq!(probe.observe(bt, None, "<Idle|Pn:P|Pn:XY>"), None);
+        assert_eq!(
+            ProbeEvidence::default().observe(bt, None, "<Idle|Pn:XY>"),
+            None
+        );
+        probe.observe("1.1h", None, "<Idle>");
+        assert_eq!(probe.observe(bt, None, "<Idle|Pn:XY>"), None);
     }
 
     #[test]
@@ -1131,6 +1423,7 @@ mod tests {
             100.,
             deadline(3000).unwrap(),
             &Cancellation::default(),
+            None,
         )
         .unwrap();
         assert!(receipt.contains(r#""target_mm":27.4"#));
@@ -1155,7 +1448,8 @@ mod tests {
                     1.,
                     100.,
                     deadline(500).unwrap(),
-                    &Cancellation::default()
+                    &Cancellation::default(),
+                    None
                 )
                 .is_err()
             );
@@ -1208,7 +1502,8 @@ mod tests {
                     &mut m,
                     &lines,
                     deadline(500).unwrap(),
-                    &Cancellation::default()
+                    &Cancellation::default(),
+                    None
                 )
                 .is_err()
             );
@@ -1227,7 +1522,8 @@ mod tests {
                 &mut m,
                 &lines,
                 deadline(500).unwrap(),
-                &Cancellation::default()
+                &Cancellation::default(),
+                None
             )
             .unwrap(),
             7
@@ -1262,7 +1558,8 @@ mod tests {
                 &mut m,
                 &lines,
                 deadline(1000).unwrap(),
-                &Cancellation::default()
+                &Cancellation::default(),
+                None
             )
             .unwrap(),
             2
@@ -1280,7 +1577,8 @@ mod tests {
                     &mut m,
                     &lines,
                     deadline(1000).unwrap(),
-                    &Cancellation::default()
+                    &Cancellation::default(),
+                    None
                 )
                 .is_err()
             );
@@ -1294,7 +1592,8 @@ mod tests {
                 &mut m,
                 &lines,
                 deadline(1000).unwrap(),
-                &Cancellation::default()
+                &Cancellation::default(),
+                None
             )
             .unwrap_err()
             .contains("no program blocks sent")
@@ -1310,7 +1609,8 @@ mod tests {
                 &mut m,
                 &lines,
                 deadline(1000).unwrap(),
-                &Cancellation::default()
+                &Cancellation::default(),
+                None
             )
             .unwrap_err()
             .contains("0 blocks accepted")
@@ -1338,6 +1638,7 @@ mod tests {
                 &lines,
                 deadline(1000).unwrap(),
                 &Cancellation::default(),
+                None,
             )
             .unwrap_err();
             assert!(error.contains("block 1 unconfirmed"));
@@ -1359,7 +1660,8 @@ mod tests {
                 &mut m,
                 &lines,
                 deadline(1000).unwrap(),
-                &Cancellation::default()
+                &Cancellation::default(),
+                None
             )
             .unwrap(),
             2
@@ -1383,6 +1685,7 @@ mod tests {
                 &plotter_lines("G21 G90\nG1 X0 F1").unwrap(),
                 deadline(1000).unwrap(),
                 &Cancellation::default(),
+                None,
             )
             .unwrap_err();
             assert!(e.contains("0 previous program lines"));
@@ -1407,7 +1710,7 @@ mod tests {
         let c = Cancellation::default();
         c.cancel();
         let mut m = Mock::default();
-        assert!(transmit(&mut m, &["G1X0".into()], deadline(1000).unwrap(), &c).is_err());
+        assert!(transmit(&mut m, &["G1X0".into()], deadline(1000).unwrap(), &c, None).is_err());
         assert!(m.writes.is_empty());
     }
 }

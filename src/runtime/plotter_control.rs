@@ -18,12 +18,34 @@ pub(super) struct Command {
 }
 
 enum Action {
-    Connect { port: String, baud: u32 },
-    Status { work: bool },
+    Connect {
+        port: String,
+        baud: u32,
+    },
+    Status {
+        work: bool,
+        offset: bool,
+    },
+    Bounds,
+    SetBounds {
+        limits: machine_stream::TravelBounds,
+        expected: Option<[f64; 3]>,
+    },
+    ClearBounds,
     Disconnect,
-    Jog { axis: char, delta: f64, feed: f64 },
-    Pen { z: f64, feed: f64 },
-    Program { lines: Vec<String>, check: bool },
+    Jog {
+        axis: char,
+        delta: f64,
+        feed: f64,
+    },
+    Pen {
+        z: f64,
+        feed: f64,
+    },
+    Program {
+        lines: Vec<String>,
+        check: bool,
+    },
 }
 
 impl Command {
@@ -37,8 +59,41 @@ impl Command {
                 (Action::Connect { port, baud }, 5000)
             }
             "plotter.status" => {
-                let work = boolean(call, "work", false);
-                (Action::Status { work }, if work { 8000 } else { 3000 })
+                let offset = boolean(call, "offset", false);
+                let work = boolean(call, "work", false) || offset;
+                (
+                    Action::Status { work, offset },
+                    if work { 8000 } else { 3000 },
+                )
+            }
+            "plotter.bounds" | "plotter.clear_bounds" => {
+                return Ok(Self {
+                    action: if call.name == "plotter.bounds" {
+                        Action::Bounds
+                    } else {
+                        Action::ClearBounds
+                    },
+                    timeout_ms: 0,
+                });
+            }
+            "plotter.set_bounds" => {
+                let min = ["x_min", "y_min", "z_min"].map(|k| number(call, k, f64::NAN));
+                let max = ["x_max", "y_max", "z_max"].map(|k| number(call, k, f64::NAN));
+                let limits = machine_stream::TravelBounds::new(min, max)?;
+                let keys = ["wco_x", "wco_y", "wco_z"];
+                let expected = if keys.iter().any(|k| call.get(k).is_some()) {
+                    let wco = keys.map(|k| number(call, k, f64::NAN));
+                    if !wco.iter().all(|n| n.is_finite()) {
+                        return Err(
+                            "expected work origin requires finite wco_x, wco_y, wco_z together"
+                                .into(),
+                        );
+                    }
+                    Some(wco)
+                } else {
+                    None
+                };
+                (Action::SetBounds { limits, expected }, 8000)
             }
             "plotter.disconnect" => {
                 return Ok(Self {
@@ -109,6 +164,7 @@ pub(super) struct Selected {
     baud: u32,
     port: SerialPort,
     probe: machine_stream::ProbeEvidence,
+    bounds: Option<machine_stream::Workspace>,
 }
 
 impl Selected {
@@ -134,6 +190,19 @@ pub(super) fn execute(
         }
         return Ok(disconnected());
     }
+    if matches!(command.action, Action::Bounds | Action::ClearBounds) {
+        let Some(device) = selected.as_mut() else {
+            return Ok(r#"{"connected":false,"bounds":null}"#.into());
+        };
+        if matches!(command.action, Action::ClearBounds) {
+            device.bounds = None;
+        }
+        let fields = device.bounds.as_ref().map_or_else(
+            || r#"{"bounds":null}"#.into(),
+            machine_stream::Workspace::receipt,
+        );
+        return Ok(device.envelope(&fields));
+    }
     let end = machine_stream::deadline(command.timeout_ms)?;
     if let Action::Connect { port: path, baud } = command.action {
         if let Some(old) = selected.as_mut() {
@@ -149,6 +218,7 @@ pub(super) fn execute(
                     end,
                     cancel,
                     false,
+                    false,
                     &mut old.probe,
                 )?;
                 return Ok(old.envelope(&status));
@@ -159,7 +229,8 @@ pub(super) fn execute(
         }
         let mut port = cancel.dispatch(|| SerialPort::open_machine(&path, baud))?;
         let mut probe = machine_stream::ProbeEvidence::default();
-        let status = machine_stream::inspect_connected(&mut port, end, cancel, false, &mut probe)?;
+        let status =
+            machine_stream::inspect_connected(&mut port, end, cancel, false, false, &mut probe)?;
         if let Some(mut old) = selected.take() {
             old.port.close()?;
         }
@@ -168,6 +239,7 @@ pub(super) fn execute(
             baud,
             port,
             probe,
+            bounds: None,
         };
         let result = entry.envelope(&status);
         *selected = Some(entry);
@@ -175,30 +247,57 @@ pub(super) fn execute(
     }
     let Some(device) = selected.as_mut() else {
         return match command.action {
-            Action::Status {work:true} => Ok(r#"{"connected":false,"work_position":null,"pressure":null,"probe_triggered":null,"probe_seen_active":false}"#.into()),
-            Action::Status {work:false} => Ok(disconnected()),
+            Action::Status {work:true,..} => Ok(r#"{"connected":false,"work_position":null,"pressure":null,"probe_triggered":null,"probe_seen_active":false}"#.into()),
+            Action::Status {work:false,..} => Ok(disconnected()),
             _ => Err("use plotter.connect first".into()),
         };
     };
     let result = match command.action {
-        Action::Status { work } => machine_stream::inspect_connected(
+        Action::SetBounds { limits, expected } => {
+            let bounds =
+                machine_stream::bind_workspace(&mut device.port, limits, expected, end, cancel)?;
+            let receipt = bounds.receipt();
+            device.bounds = Some(bounds);
+            receipt
+        }
+        Action::Status { work, offset } => machine_stream::inspect_connected(
             &mut device.port,
             end,
             cancel,
             work,
+            offset,
             &mut device.probe,
         )?,
-        Action::Jog { axis, delta, feed } => {
-            machine_stream::jog_connected(&mut device.port, axis, delta, feed, end, cancel)?
-        }
+        Action::Jog { axis, delta, feed } => machine_stream::jog_connected(
+            &mut device.port,
+            axis,
+            delta,
+            feed,
+            end,
+            cancel,
+            device.bounds.as_ref(),
+        )?,
         Action::Pen { z, feed } => {
             let lines = machine_stream::plotter_lines(&format!("G21 G90\nG1 Z{z} F{feed}"))?;
-            machine_stream::program_connected(&mut device.port, &lines, false, end, cancel)?;
+            machine_stream::program_connected(
+                &mut device.port,
+                &lines,
+                false,
+                end,
+                cancel,
+                device.bounds.as_ref(),
+            )?;
             format!(r#"{{"state":"Idle","z_mm":{z},"feed_mm_min":{feed}}}"#)
         }
         Action::Program { lines, check } => {
-            let count =
-                machine_stream::program_connected(&mut device.port, &lines, check, end, cancel)?;
+            let count = machine_stream::program_connected(
+                &mut device.port,
+                &lines,
+                check,
+                end,
+                cancel,
+                device.bounds.as_ref(),
+            )?;
             let key = if check {
                 "checked_lines"
             } else {
@@ -206,7 +305,9 @@ pub(super) fn execute(
             };
             format!(r#"{{"state":"Idle","{key}":{count}}}"#)
         }
-        Action::Connect { .. } | Action::Disconnect => unreachable!(),
+        Action::Connect { .. } | Action::Disconnect | Action::Bounds | Action::ClearBounds => {
+            unreachable!()
+        }
     };
     Ok(device.envelope(&result))
 }
@@ -244,6 +345,30 @@ mod tests {
             timeout(r#"plotter.jog(axis="x",delta=10,feed=1,timeout=9000)"#),
             Ok(9_000)
         );
+    }
+
+    #[test]
+    fn bounds_are_explicit_and_application_preflights_without_motion() {
+        let set = "plotter.set_bounds(x_min=0,x_max=10,y_min=0,y_max=8,z_min=-2,z_max=5";
+        let dry = Options {
+            dry_run: true,
+            ..Default::default()
+        };
+        let read = Options {
+            read_only: true,
+            ..dry
+        };
+        assert!(check("plotter.bounds()", read).is_ok());
+        assert!(check("plotter.clear_bounds()", read).is_err());
+        assert!(check(&format!("{set})"), read).is_err());
+        assert!(check(&format!("{set},wco_x=1)"), dry).is_err());
+        assert!(check(&format!("{set},wco_x=1,wco_y=2,wco_z=3)"), dry).is_ok());
+        assert!(check(&format!("{set})").replace("x_max=10", "x_max=0"), dry).is_err());
+        assert!(check("plotter.status(offset=true)", read).is_ok());
+        let observed = Runtime::new()
+            .execute("plotter.bounds()", Options::default())
+            .unwrap();
+        assert!(observed.contains(r#""connected":false,"bounds":null"#));
     }
 
     #[test]
