@@ -1,4 +1,5 @@
 use crate::controller::{Controller, MachineBounds, MountAction};
+use crate::workspace_profile::draft::Draft;
 use crate::workspace_profile::{Binding, WorkspaceProfile, load_profile, save_profile};
 use std::time::{Duration, Instant};
 use zgpui::native::{ButtonStyle, Canvas, Event, Rect, Ui};
@@ -11,6 +12,7 @@ enum Step {
     Mount,
     Fit,
     Restore,
+    VerifyDraft,
 }
 
 #[derive(Clone, Copy)]
@@ -18,6 +20,7 @@ enum Request {
     Corner(usize),
     Jog(MountAction),
     Load,
+    Resume,
     Position,
     Positioned,
     Apply { restore: bool },
@@ -49,13 +52,14 @@ struct Hold {
 pub(crate) struct WorkspaceWizard {
     step: Step,
     epoch: Option<u64>,
+    draft: Option<Draft>,
+    checked_disk: bool,
+    verify_when_idle: bool,
     offset: Option<[f64; 3]>,
     binding: Option<Binding>,
     corners: [Option<[f64; 2]>; 2],
     plan: Option<WorkspaceProfile>,
     pending: Option<(u64, Request)>,
-    jog_index: usize,
-    jog_feed: Option<String>,
     jog_buttons: Vec<JogButton>,
     hold: Option<Hold>,
     suppress_click: bool,
@@ -81,6 +85,16 @@ fn inside(plan: &WorkspaceProfile, work: [f64; 3]) -> bool {
 
 fn fitted(plan: &WorkspaceProfile, work: [f64; 3]) -> bool {
     inside(plan, work) && (plan.mount_z - work[2]).abs() <= 0.001
+}
+
+fn held_feed(feed: f64) -> Result<f64, String> {
+    if (40. ..=500.).contains(&feed) {
+        Ok(feed)
+    } else {
+        Err(format!(
+            "当前请求 {feed} mm/min。长按或键盘连续点动要求 40–500 mm/min，请调整速度后重试。"
+        ))
+    }
 }
 
 // 240 ms of commanded travel. At 40..=500 mm/min this is 0.16..=2 mm.
@@ -126,10 +140,9 @@ impl WorkspaceWizard {
                     });
             }
             Event::Up(..) => {
-                self.suppress_click = self
-                    .hold
-                    .take()
-                    .is_some_and(|hold| hold.repeated || hold.stopped);
+                self.suppress_click = self.hold.take().is_some_and(|hold| {
+                    hold.repeated || hold.stopped || hold.armed_at.elapsed() >= POINTER_HOLD_DELAY
+                });
             }
             Event::Move(x, y) => {
                 if let Some(hold) = &mut self.hold
@@ -195,7 +208,7 @@ impl WorkspaceWizard {
     }
 
     fn segment(&mut self, axis: char, sign: f64, c: &mut Controller) {
-        let feed = match self.jog_feed() {
+        let feed = match c.form.xy_jog_feed().and_then(held_feed) {
             Ok(speed) => speed,
             Err(error) => {
                 self.stop_holding();
@@ -222,24 +235,13 @@ impl WorkspaceWizard {
         }
     }
 
-    fn jog_feed(&self) -> Result<f64, String> {
-        self.jog_feed
-            .as_deref()
-            .unwrap_or("300")
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .filter(|speed| (40. ..=500.).contains(speed))
-            .ok_or_else(|| "XY 点动速度需为 40–500 mm/min。".into())
-    }
-
     fn repeat_jog(&mut self, ready: bool, c: &mut Controller) {
         let Some(hold) = &mut self.hold else { return };
         let elapsed = hold.armed_at.elapsed();
         if elapsed >= Duration::from_secs(12) {
             hold.stopped = true;
         }
-        if !ready || hold.stopped || elapsed < Duration::from_millis(280) {
+        if !ready || hold.stopped || elapsed < POINTER_HOLD_DELAY {
             return;
         }
         hold.repeated = true;
@@ -254,6 +256,54 @@ impl WorkspaceWizard {
         } else {
             c.status.clone()
         };
+    }
+
+    fn verify_pending(&mut self) {
+        self.step = Step::VerifyDraft;
+        self.pending = None;
+        self.stop_holding();
+        self.plan = None;
+        self.corners = [None, None];
+        self.offset = None;
+        self.binding = None;
+        self.verify_when_idle = true;
+        self.notice = "角点草稿已保留，等待核对后台会话和工作坐标。".into();
+    }
+
+    fn discard(&mut self, c: &Controller) {
+        match Draft::clear(c.session_name()) {
+            Ok(()) => {
+                *self = Self {
+                    checked_disk: true,
+                    ..Self::default()
+                }
+            }
+            Err(e) => self.notice = format!("未能清除角点草稿：{e}"),
+        }
+    }
+
+    fn checkpoint(&mut self, c: &Controller, force: bool) {
+        let (Some(stamp), Some(binding), [Some(top), bottom]) =
+            (c.corner_stamp(), self.binding.as_ref(), self.corners)
+        else {
+            if force {
+                self.notice.push_str(" 当前窗口保留角点，后台身份未确认。");
+            }
+            return;
+        };
+        if !force
+            && self
+                .draft
+                .as_ref()
+                .is_some_and(|d| stamp.job.saturating_sub(d.stamp.job) < 8)
+        {
+            return;
+        }
+        let draft = Draft::new(stamp, binding, top, bottom);
+        if let Err(e) = draft.save(c.session_name()) {
+            self.notice = format!("角点仅在当前窗口保留：{e}");
+        }
+        self.draft = Some(draft);
     }
 
     fn read(&mut self, request: Request, c: &mut Controller) {
@@ -271,7 +321,12 @@ impl WorkspaceWizard {
             .mount_receipt()
             .filter(|reply| reply.request_id == token && Some(reply.epoch) == self.epoch)
             .copied()
-            .ok_or_else(|| format!("未取得有效坐标回执。{}", c.status))?;
+            .ok_or_else(|| {
+                format!(
+                    "未取得有效坐标回执。{}",
+                    c.mount_error(token).unwrap_or(&c.status)
+                )
+            })?;
         let offset = reply.work_offset.ok_or("控制器未报告工作偏移。")?;
         if c.work_offset() != Some(offset) || self.offset.is_some_and(|old| old != offset) {
             return Err("工作偏移已改变，请重新记录角点。".into());
@@ -302,12 +357,31 @@ impl WorkspaceWizard {
                     Step::Mount
                 };
                 self.notice = format!("已记录 X {x:.3}  Y {y:.3} mm");
+                self.checkpoint(c, true);
             }
             Request::Jog(expected) => {
                 if reply.action != expected {
                     return Err("点动回执与请求不符，请核对位置。".into());
                 }
-                self.notice = "点动完成。".into();
+                self.notice = c.status.clone();
+                self.checkpoint(c, false);
+            }
+            Request::Resume => {
+                let saved = self.draft.as_ref().ok_or("没有待核实的角点")?;
+                let identity = identity.ok_or("无法核实设备身份")?;
+                if !saved.matches(&identity) {
+                    return Err("设备或工作偏移与角点草稿不符".into());
+                }
+                self.corners = [Some(saved.top), saved.bottom];
+                self.binding = Some(identity);
+                self.offset = Some(offset);
+                self.step = if saved.bottom.is_some() {
+                    Step::Mount
+                } else {
+                    Step::BottomRight
+                };
+                self.notice = "已核实并恢复角点。请确认纸张仍固定在原位。".into();
+                self.checkpoint(c, true);
             }
             Request::Load => {
                 let identity = identity.ok_or("此设备没有可核实的档案标识。")?;
@@ -343,6 +417,7 @@ impl WorkspaceWizard {
                 }
                 self.step = Step::Fit;
                 self.notice.clear();
+                self.checkpoint(c, true);
             }
             Request::Apply { restore } => {
                 let plan = self.plan.as_ref().ok_or("缺少纸面范围。")?;
@@ -372,6 +447,8 @@ impl WorkspaceWizard {
                     save_profile(identity, plan)?;
                 }
                 c.apply_paper_profile(plan.clone())?;
+                self.draft = None;
+                Draft::clear(c.session_name())?;
                 return Ok(Some(
                     if restore {
                         "已载入纸面和笔高档案。"
@@ -386,14 +463,40 @@ impl WorkspaceWizard {
     }
 
     fn poll(&mut self, c: &mut Controller) -> Option<String> {
+        if !self.checked_disk {
+            self.checked_disk = true;
+            match Draft::load(c.session_name()) {
+                Ok(Some(draft)) => {
+                    self.draft = Some(draft);
+                    self.verify_pending();
+                }
+                Ok(None) => {}
+                Err(e) => self.notice = format!("角点草稿无法读取：{e}"),
+            }
+        }
         let epoch = c.calibration_epoch();
-        if self.epoch.is_some_and(|previous| previous != epoch) {
-            *self = Self {
-                notice: "控制器坐标基准已变化，请重新校准。".into(),
-                ..Self::default()
-            };
+        if self.epoch.is_some_and(|last| last != epoch) {
+            if self.draft.is_some() {
+                if self.step != Step::VerifyDraft {
+                    self.verify_pending();
+                }
+            } else if self.corners[0].is_some() || self.plan.is_some() || self.pending.is_some() {
+                *self = Self {
+                    checked_disk: true,
+                    notice: "坐标基准无法核实，请重新记录角点。".into(),
+                    ..Self::default()
+                };
+            }
         }
         self.epoch = Some(epoch);
+        if self.verify_when_idle
+            && !c.busy()
+            && let Some(saved) = &self.draft
+            && let Some(token) = c.verify_corners(saved.clone())
+        {
+            self.verify_when_idle = false;
+            self.request(Some(token), Request::Resume, c);
+        }
         if !c.busy()
             && let Some((token, request)) = self.pending.take()
         {
@@ -401,7 +504,11 @@ impl WorkspaceWizard {
                 Ok(done) => return done,
                 Err(error) => {
                     self.stop_holding();
-                    self.notice = error;
+                    self.notice = if matches!(request, Request::Resume) {
+                        format!("角点草稿未通过核对。{error}")
+                    } else {
+                        error
+                    };
                 }
             }
         }
@@ -410,7 +517,7 @@ impl WorkspaceWizard {
 }
 const INK: u32 = 0x202124ff;
 const MUTED: u32 = 0x5f6368ff;
-const STEPS: [f64; 3] = [0.5, 2., 10.];
+const POINTER_HOLD_DELAY: Duration = Duration::from_millis(280);
 
 struct Panel<'a, 'b> {
     canvas: &'a mut Canvas<'b>,
@@ -502,6 +609,7 @@ impl WorkspaceWizard {
             Step::BottomRight => "2 / 3  记录右下角",
             Step::Mount | Step::Fit => "3 / 3  装笔",
             Step::Restore => "载入已保存的校准",
+            Step::VerifyDraft => "核对未完成的角点草稿",
         };
         panel.text(title, 48., 18, true);
         match self.step {
@@ -515,28 +623,34 @@ impl WorkspaceWizard {
                     },
                     81.,
                 );
-                for (index, step) in STEPS.into_iter().enumerate() {
-                    if panel.button(
-                        1010 + index as u64,
-                        panel.cell(158., index, 3, 35.),
-                        &format!("{step} mm"),
-                        index == self.jog_index,
-                        ready,
-                    ) {
-                        self.jog_index = index;
-                    }
+                panel.text("单次 XY 距离 · mm", 134., 14, false);
+                let distance_rect = panel.cell(158., 0, 1, 35.);
+                let editing_distance = !closing && !c.busy();
+                if panel.ui.input(
+                    panel.canvas,
+                    1010,
+                    distance_rect,
+                    &mut c.jog_distance_text,
+                    "1",
+                    false,
+                    editing_distance,
+                ) && let Err(error) = c.edited_jog_distance()
+                {
+                    self.notice = error;
                 }
                 for (index, axis) in ['X', 'Y'].into_iter().enumerate() {
                     for (row, sign) in [1., -1.].into_iter().enumerate() {
-                        let delta = sign * STEPS[self.jog_index];
-                        let label = format!("{axis} {}", if sign > 0. { "+" } else { "−" });
+                        let label = [["X +  →", "X −  ←"], ["Y +  ↑", "Y −  ↓"]][index][row];
                         let area = panel.cell(211. + row as f32 * 46., index, 2, 38.);
                         self.jog_buttons.push(JogButton { area, axis, sign });
-                        if panel.button(1020 + (index * 2 + row) as u64, area, &label, false, ready)
+                        if panel.button(1020 + (index * 2 + row) as u64, area, label, false, ready)
                             && !suppress_click
                         {
-                            match self.jog_feed() {
-                                Ok(feed) => {
+                            match crate::jog_settings::parse_distance(&c.jog_distance_text)
+                                .and_then(|distance| {
+                                    c.form.xy_jog_feed().map(|feed| (sign * distance, feed))
+                                }) {
+                                Ok((delta, feed)) => {
                                     let token = c.jog_calibration(axis, delta, feed);
                                     self.request(
                                         token,
@@ -549,17 +663,25 @@ impl WorkspaceWizard {
                         }
                     }
                 }
-                panel.text("← X−    → X+    ↑ Y+    ↓ Y−", 303., 14, false);
-                panel.text("XY 点动速度 · mm/min", 334., 14, false);
+                if let Ok(requested) = c.form.xy_jog_feed() {
+                    panel.text(&c.xy_jog_feed_preview('X', requested), 298., 12, false);
+                    panel.text(&c.xy_jog_feed_preview('Y', requested), 315., 12, false);
+                }
+                let caption = c.jog_source.as_ref().map_or_else(
+                    || "XY 请求速度 · mm/min".to_owned(),
+                    |source| format!("XY 请求速度 · {source}"),
+                );
+                panel.text(&caption, 334., 14, false);
+                let editing_speed = !closing && !c.busy() && !self.pending();
                 let speed_rect = panel.cell(355., 0, 2, 34.);
                 panel.ui.input(
                     panel.canvas,
                     1044,
                     speed_rect,
-                    self.jog_feed.get_or_insert_with(|| "300".into()),
-                    "40–500",
+                    &mut c.form.jog_feed,
+                    "mm/min",
                     false,
-                    ready,
+                    editing_speed,
                 );
                 let key_area = panel.cell(355., 1, 2, 34.);
                 self.keyboard_button = Some(key_area);
@@ -578,7 +700,7 @@ impl WorkspaceWizard {
                 }
 
                 panel.report(
-                    "按住方向键或轴按钮移动。松开停止续发，已发段最多 2 mm。",
+                    "长按或方向键使用 40–500 mm/min，每段最多 2 mm，松开停止续发。",
                     490.,
                 );
                 if panel.pair(
@@ -603,7 +725,26 @@ impl WorkspaceWizard {
                         return Outcome::Secondary;
                     }
                 } else if panel.pair(1043, 405., 0, "重新记录左上角", false, ready) {
-                    *self = Self::default();
+                    self.discard(c);
+                }
+            }
+            Step::VerifyDraft => {
+                panel.report(
+                    "角点草稿只记录纸面位置。核对完成后继续，正式校准仍需单独保存。",
+                    85.,
+                );
+                if panel.pair(
+                    1060,
+                    193.,
+                    0,
+                    "放弃草稿，重新记录",
+                    false,
+                    !c.busy() && !self.pending(),
+                ) {
+                    self.discard(c);
+                }
+                if panel.pair(1061, 193., 1, "重新核对草稿", true, ready) {
+                    self.verify_when_idle = true;
                 }
             }
             Step::Mount => {
@@ -641,12 +782,38 @@ impl WorkspaceWizard {
             Step::Restore => {
                 panel.report("已找到档案。确认纸张、笔和机器实体原点仍与保存时一致，再使用。载入不会移动机器。", 85.);
                 if panel.pair(1052, 193., 0, "重新校准", false, ready) {
-                    *self = Self::default();
+                    self.discard(c);
                 }
                 if panel.pair(1053, 193., 1, "确认原点，使用档案", true, ready) {
                     self.read(Request::Apply { restore: true }, c);
                 }
             }
+        }
+        let coords = self
+            .draft
+            .as_ref()
+            .map(|d| [Some(d.top), d.bottom])
+            .or_else(|| {
+                self.plan
+                    .as_ref()
+                    .map(|p| [Some(p.corner_a), Some(p.corner_b)])
+            })
+            .unwrap_or(self.corners);
+        if let Some([x, y]) = coords[0] {
+            panel.text(
+                &format!("{}  X {x:.3}  Y {y:.3} mm", crate::locale::text("左上角")),
+                473.,
+                14,
+                false,
+            );
+        }
+        if let Some([x, y]) = coords[1] {
+            panel.text(
+                &format!("{}  X {x:.3}  Y {y:.3} mm", crate::locale::text("右下角")),
+                495.,
+                14,
+                false,
+            );
         }
         panel.report(
             if self.notice.is_empty() {
@@ -663,6 +830,130 @@ impl WorkspaceWizard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn corner_round_trip_with_external_jobs_and_window_restart() {
+        use std::{fs, os::unix::fs::PermissionsExt, process::Command, thread};
+        if std::env::var_os("ZUSE_CORNER_TEST_CHILD").is_none() {
+            let root = std::env::temp_dir().join(format!(
+                "zuse-corner-test-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&root).unwrap();
+            let bin = root.join("mock-zuse");
+            fs::write(&bin, include_str!("../tests/corner_session.py")).unwrap();
+            fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+            for stage in ["capture", "reopen-left", "reopen-both"] {
+                let result = Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "workspace_wizard::tests::corner_round_trip_with_external_jobs_and_window_restart", "--nocapture"])
+                    .env("ZUSE_CORNER_TEST_CHILD",stage)
+                    .env("ZUSE_CORNER_DAEMON_PID",std::process::id().to_string())
+                    .env("ZUSE_BIN",&bin)
+                    .env("ZUSE_WRITER_SESSION","corner-test")
+                    .env("XDG_CONFIG_HOME",&root)
+                    .output().unwrap();
+                if !result.status.success() {
+                    let _ = fs::remove_dir_all(&root);
+                    panic!(
+                        "{} {}",
+                        String::from_utf8_lossy(&result.stdout),
+                        String::from_utf8_lossy(&result.stderr)
+                    );
+                }
+            }
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let advance =
+            |c: &mut Controller,
+             w: &mut WorkspaceWizard,
+             until: &dyn Fn(&Controller, &WorkspaceWizard) -> bool| {
+                let end = Instant::now() + Duration::from_secs(12);
+                loop {
+                    c.poll();
+                    w.poll(c);
+                    if until(c, w) {
+                        return;
+                    }
+                    assert!(
+                        Instant::now() < end,
+                        "{} / {} / step {}",
+                        c.status,
+                        w.notice,
+                        w.step as u8
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+            };
+        let inject = |ops: &[&str]| {
+            assert!(
+                Command::new(std::env::var_os("ZUSE_BIN").unwrap())
+                    .arg("inject")
+                    .args(ops)
+                    .status()
+                    .unwrap()
+                    .success()
+            )
+        };
+        let (mut c, mut w) = (Controller::default(), WorkspaceWizard::default());
+        let stage = std::env::var("ZUSE_CORNER_TEST_CHILD").unwrap();
+        if stage == "capture" {
+            advance(&mut c, &mut w, &|c, _| c.connected() && !c.busy());
+            w.read(Request::Corner(0), &mut c);
+            advance(&mut c, &mut w, &|_, w| {
+                w.step == Step::BottomRight && !w.pending()
+            });
+            assert_eq!(w.corners, [Some([0., 0.]), None]);
+            let first = w.draft.as_ref().unwrap().stamp.job;
+            inject(&["plotter.jog"]);
+            advance(&mut c, &mut w, &|_, w| {
+                w.step == Step::BottomRight
+                    && !w.pending()
+                    && w.draft.as_ref().is_some_and(|d| d.stamp.job > first)
+            });
+            let one = w.draft.as_ref().unwrap().stamp.job;
+            inject(&["plotter.jog", "plotter.jog_held", "plotter.status"]);
+            inject(&["plotter.status"]);
+            inject(&["plotter.jog"]);
+            advance(&mut c, &mut w, &|_, w| {
+                w.step == Step::BottomRight
+                    && !w.pending()
+                    && w.draft.as_ref().is_some_and(|d| d.stamp.job > one)
+            });
+            assert_eq!(w.corners, [Some([0., 0.]), None]);
+            return;
+        }
+        if stage == "reopen-left" {
+            advance(&mut c, &mut w, &|_, w| {
+                w.step == Step::BottomRight && !w.pending()
+            });
+            assert_eq!(w.corners, [Some([0., 0.]), None]);
+            w.read(Request::Corner(1), &mut c);
+            advance(&mut c, &mut w, &|_, w| {
+                w.step == Step::Mount && !w.pending()
+            });
+            assert_eq!(w.corners, [Some([0., 0.]), Some([6., 2.])]);
+            assert!(load_profile(w.binding.as_ref().unwrap()).unwrap().is_none());
+            return;
+        }
+        assert_eq!(stage, "reopen-both");
+        advance(&mut c, &mut w, &|_, w| {
+            w.step == Step::Mount && !w.pending()
+        });
+        assert_eq!(w.corners, [Some([0., 0.]), Some([6., 2.])]);
+        inject(&["plotter.reset", "plotter.status"]);
+        advance(&mut c, &mut w, &|_, w| {
+            w.step == Step::VerifyDraft && !w.pending() && !w.verify_when_idle
+        });
+        assert_eq!(w.corners, [None, None]);
+        assert!(c.paper.is_none());
+        assert!(w.notice.contains("plotter.reset"), "{}", w.notice);
+    }
 
     fn arrow(code: i32) -> Event {
         Event::Key {

@@ -284,6 +284,7 @@ fn inspect_port<P: Port>(
         firmware,
         device_id,
     } = c.identify()?;
+    let mut axis_rates = [None; 2];
     let (unit, frame, coords, probe_state) = if view == StatusView::Raw {
         let coords = Positions::parse(&first)?;
         (None, first, coords, None)
@@ -292,7 +293,9 @@ fn inspect_port<P: Port>(
         if first_generation == c.port.generation() {
             probe.observe(&firmware, device_id.as_deref(), &first);
         }
-        let scale = c.report_scale()?;
+        let settings = c.read_settings()?;
+        let scale = Connection::<P>::scale_from_settings(&settings)?;
+        axis_rates = [110, 111].map(|key| settings.get(&key).copied().filter(|n| *n > 0.));
         loop {
             let frame = c.query_status(false)?;
             let coords = Positions::parse(&frame)?;
@@ -329,6 +332,13 @@ fn inspect_port<P: Port>(
         quote(state)
     );
     if let Some(scale) = unit {
+        for (name, rate) in ["x_max_feed_mm_min", "y_max_feed_mm_min"]
+            .into_iter()
+            .zip(axis_rates)
+        {
+            let value = rate.map_or_else(|| "null".into(), |x| x.to_string());
+            result.push_str(&format!(r#","{name}":{value}"#));
+        }
         result.push_str(&format!(
             r#","units":"mm","report_units":"{}""#,
             if scale == 1. { "mm" } else { "inch" }
@@ -1047,7 +1057,13 @@ fn jog_segment<P: Port>(
         'Z' => 2,
         _ => return Err("invalid jog axis".into()),
     };
-    if !(delta.is_finite() && delta != 0. && feed > 0. && feed <= 500.) {
+    let single_xy = reference.is_none() && index < 2;
+    if !delta.is_finite()
+        || delta == 0.
+        || !(feed as f32).is_finite()
+        || feed <= 0.
+        || (!single_xy && feed > 500.)
+    {
         return Err("invalid bounded plotter jog".into());
     }
     let mut c = Connection {
@@ -1066,15 +1082,37 @@ fn jog_segment<P: Port>(
     }
     let settings = c.read_settings()?;
     let scale = Connection::<P>::scale_from_settings(&settings)?;
-    let report_tolerance = if scale == 1. { 0.000_501 } else { 0.001_271 };
-    let axis_tolerance = if reference.is_some() {
-        let steps = settings.get(&(100 + index as u16)).copied()
-            .filter(|steps| *steps >= 1. && *steps * delta.abs() >= 1.)
-            .ok_or("held jog requires at least one step at the reported axis resolution; no motion sent")?;
-        0.5 / steps + report_tolerance
+    let requested_feed = feed;
+    let rate_setting = 110 + index as u16;
+    let axis_max = settings
+        .get(&rate_setting)
+        .copied()
+        .filter(|rate| *rate > 0.);
+    let feed = if single_xy {
+        match axis_max {
+            Some(limit) => requested_feed.min(limit),
+            None if requested_feed > 500. => {
+                return Err(format!(
+                    "requested {requested_feed} mm/min for {axis}; no positive ${rate_setting} reported; no motion sent"
+                ));
+            }
+            None => requested_feed,
+        }
     } else {
-        report_tolerance
+        requested_feed
     };
+    let report_tolerance = if scale == 1. { 0.000_501 } else { 0.001_271 };
+    let steps = settings
+        .get(&(100 + index as u16))
+        .copied()
+        .filter(|steps| *steps >= 1. && *steps * delta.abs() >= 1.);
+    if reference.is_some() && steps.is_none() {
+        return Err(
+            "held jog requires at least one step at the reported axis resolution; no motion sent"
+                .into(),
+        );
+    }
+    let axis_tolerance = steps.map_or(report_tolerance, |n| 0.5 / n + report_tolerance);
     let pose = c.idle_pose_scaled(bounds.is_some() || reference.is_some(), scale)?;
     if let Some(r) = reference
         && (generation != c.port.generation()
@@ -1100,6 +1138,21 @@ fn jog_segment<P: Port>(
             wire_target.parse().map_err(|_| "invalid jog target")?,
         )?;
     }
+    if single_xy {
+        let travel_ms = (delta.abs() * 60_000. / feed).ceil();
+        let remaining = end.saturating_duration_since(Instant::now());
+        // A negotiated lower feed must still fit the authorized job deadline.
+        if travel_ms >= 300_000.
+            || (feed < requested_feed && travel_ms >= remaining.as_secs_f64() * 1000.)
+        {
+            return Err(format!(
+                "requested {requested_feed} mm/min, effective {feed} mm/min on {axis}; the full {delta} mm move exceeds the available deadline; no motion sent"
+            ));
+        }
+        let motion_ms = (travel_ms + 5_000.).clamp(15_000., 300_000.) as u64;
+        c.end = end.min(Instant::now() + Duration::from_millis(motion_ms));
+    }
+    let end = c.end;
     let block = format!("$J=G21G90{axis}{wire_target}F{feed:.6}\n");
     if block.len() > 80 || feed < 0.0000005 || (target - from).abs() < 0.0000005 {
         return Err("jog exceeds GRBL block precision or length".into());
@@ -1115,12 +1168,14 @@ fn jog_segment<P: Port>(
             .map_err(|e| format!("jog acknowledged; final state unverified: {e}"))?;
         match state(&report) {
             Some("Idle") => {
-                if reference.is_none() {
+                if reference.is_none() && !single_xy {
                     break None;
                 }
                 let coords = Positions::parse(&report)
                     .map_err(|e| format!("jog sent; final pose unknown: {e}"))?;
-                if let Some(observed) = coords.metric_pose(scale, true)? {
+                if let Some(observed) =
+                    coords.metric_pose(scale, reference.is_some() || bounds.is_some())?
+                {
                     break Some(observed);
                 }
                 c.cancel
@@ -1139,17 +1194,21 @@ fn jog_segment<P: Port>(
         })?;
     }
     if let Some(after) = final_pose {
-        let verified_id = c
-            .identify()
-            .map_err(|e| format!("jog sent; final identity unknown: {e}"))?;
-        let offset = after.offset.ok_or("jog sent; final work origin unknown")?;
+        if reference.is_some() {
+            let verified_id = c
+                .identify()
+                .map_err(|e| format!("jog sent; final identity unknown: {e}"))?;
+            if verified_id != id {
+                return Err("jog sent; observed controller identity changed; do not replay".into());
+            }
+        }
         let expected =
             std::array::from_fn::<_, 3, _>(|i| if i == index { target } else { pose.work[i] });
         if generation != c.port.generation()
-            || id != verified_id
             || pose
                 .offset
-                .is_none_or(|wco| !bounds::same_offset(wco, offset))
+                .zip(after.offset)
+                .is_some_and(|(from, to)| !bounds::same_offset(from, to))
             || after.work[index] == from
             || expected
                 .iter()
@@ -1174,6 +1233,15 @@ fn jog_segment<P: Port>(
                 format!("jog sent; observed endpoint is outside its verified bounds: {e}")
             })?;
         }
+        if single_xy {
+            let limit = axis_max.map_or_else(|| "null".into(), |v| v.to_string());
+            return Ok(format!(
+                r#"{{"state":"Idle","units":"mm","work_position":{:?},"axis":{},"from_mm":{from},"target_mm":{target},"requested_feed_mm_min":{requested_feed},"feed_mm_min":{feed},"axis_max_feed_mm_min":{limit},"axis_max_feed_setting":"${rate_setting}","axis_tolerance_mm":{axis_tolerance}}}"#,
+                after.work,
+                quote(&axis.to_string())
+            ));
+        }
+        let offset = after.offset.ok_or("jog sent; final work origin unknown")?;
         return Ok(format!(
             r#"{{"state":"Idle","axis_tolerance_mm":{axis_tolerance},"units":"mm","report_units":"{}","controller":"{}","firmware":{},"device_id":{},"work_position":{:?},"work_offset":{offset:?},"axis":{},"from_mm":{from},"target_mm":{target},"feed_mm_min":{feed}}}"#,
             if scale == 1. { "mm" } else { "inch" },
@@ -1189,7 +1257,7 @@ fn jog_segment<P: Port>(
         ));
     }
     Ok(format!(
-        r#"{{"state":"Idle","axis":{},"from_mm":{from},"target_mm":{target},"feed_mm_min":{feed}}}"#,
+        r#"{{"state":"Idle","axis":{},"from_mm":{from},"target_mm":{target},"feed_mm_min":{feed},"axis_tolerance_mm":{axis_tolerance}}}"#,
         quote(&axis.to_string())
     ))
 }
@@ -1770,7 +1838,7 @@ mod tests {
             let mut m = sample(GRBL_ID, &frame);
             if allowed {
                 m.expect(&format!("$J=G21G90X{target}F20.000000\n"), &["ok\n"]);
-                m.expect("?", &[&frame]);
+                m.expect("?", &[&format!("<Idle|WPos:{target},0,0|WCO:0,0,0>\n")]);
             }
             let result = jog_on_port(
                 &mut m,
@@ -2273,6 +2341,41 @@ mod tests {
             assert!(result.is_err(), "{reason}");
             assert!(port.inner.commands.is_empty());
             assert!(port.inner.writes.iter().all(|w| !w.starts_with("$J")));
+        }
+    }
+
+    #[test]
+    fn custom_single_xy_uses_fresh_axis_rate_and_confirms_the_full_endpoint() {
+        for (finish, confirmed) in [
+            ("<Idle|WPos:35.5,0,0>\n", true),
+            ("<Idle|WPos:35,0,0>\n", false),
+            ("<Idle|WPos:35.5,1,0>\n", false),
+        ] {
+            let mut mock = Mock::default();
+            mock.expect("?", &[ORIGIN]);
+            mock.expect("$I\n", &[GRBL_ID]);
+            mock.expect("$$\n", &["$13=0\n$100=80\n$110=6000\n$111=12000\nok\n"]);
+            mock.expect("?", &["<Idle|WPos:0,0,0>\n"]);
+            mock.expect("$J=G21G90X35.500000F6000.000000\n", &["ok\n"]);
+            mock.expect("?", &[finish]);
+            let result = jog_on_port(
+                &mut mock,
+                'X',
+                35.5,
+                8000.,
+                deadline(2000).unwrap(),
+                &Cancellation::default(),
+                None,
+            );
+            if confirmed {
+                let receipt = result.unwrap();
+                assert!(receipt.contains(r#""requested_feed_mm_min":8000"#));
+                assert!(receipt.contains(r#""axis_max_feed_setting":"$110""#));
+                assert!(receipt.contains(r#""work_position":[35.5, 0.0, 0.0]"#));
+            } else {
+                assert!(result.unwrap_err().contains("do not replay"));
+            }
+            assert!(mock.commands.is_empty());
         }
     }
 

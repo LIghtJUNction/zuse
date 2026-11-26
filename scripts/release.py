@@ -56,6 +56,7 @@ def package(target):
     if target in WRITER_TARGETS:
         writer = ROOT / "apps" / "writer"
         files.append((built_binary(writer, target, "zuse-writer"), "zuse-writer", 0o755))
+        files.append((writer / "install-writer", "install-writer", 0o755))
         files.append((writer / "README.md", "apps/writer/README.md", 0o644))
         files.append((writer / "zuse-writer.desktop", "apps/writer/zuse-writer.desktop", 0o644))
     for pattern in ("web/*", "README*.md", "LICENSE", "CHANGELOG.md", "docs/*.md", "examples/*.zuse", "examples/*.py", "skills/**/*"):

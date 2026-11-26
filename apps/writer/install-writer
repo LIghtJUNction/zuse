@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Install the Linux release's matched Writer and engine for the current user."""
+import fcntl
+import hashlib
+import os
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+
+PAYLOAD = ("zuse", "zuse-writer", "scripts/import_gfont.py", "apps/writer/zuse-writer.desktop")
+
+
+def desktop_argument(path):
+    text = str(path)
+    if any(ord(ch) < 32 for ch in text):
+        raise ValueError("the desktop launcher path contains a control character")
+    # The desktop file's string escaping is applied before Exec argument quoting.
+    quoted = "".join("\\" + ch if ch in '\\"$`' else ch for ch in text)
+    return '"' + quoted.replace("\\", "\\\\").replace("%", "%%") + '"'
+
+
+def replace_link(link, target):
+    with tempfile.TemporaryDirectory(dir=link.parent) as staging:
+        temporary = Path(staging) / "new"
+        temporary.symlink_to(target)
+        temporary.replace(link)
+
+
+def install(source):
+    home = Path.home()
+    data_env = Path(os.environ.get("XDG_DATA_HOME") or ".")
+    data = data_env if data_env.is_absolute() else home / ".local/share"
+    root = data / "zuse-writer"
+    versions = root / "versions"
+    versions.mkdir(parents=True, exist_ok=True)
+    current = root / "current"
+    launcher = current / "zuse-writer"
+    desktop_text = (source / PAYLOAD[-1]).read_text(encoding="utf-8")
+    if desktop_text.splitlines().count("Exec=zuse-writer") != 1:
+        raise ValueError("the bundle's desktop entry is incomplete")
+    desktop_text = desktop_text.replace("Exec=zuse-writer", "Exec=" + desktop_argument(launcher))
+    for binary in PAYLOAD[:2]:
+        if not (source / binary).is_file() or not os.access(source / binary, os.X_OK):
+            raise ValueError(f"missing executable {binary}; run this installer in the extracted bundle")
+
+    with (root / ".install.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with tempfile.TemporaryDirectory(dir=versions) as staging:
+            bundle = Path(staging) / "bundle"
+            digest = hashlib.sha256()
+            for item in PAYLOAD:
+                dest = bundle / item
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source / item, dest)
+                with dest.open("rb") as src:
+                    file_hash = hashlib.sha256()
+                    for chunk in iter(lambda: src.read(1024 * 1024), b""):
+                        file_hash.update(chunk)
+                    digest.update(file_hash.digest())
+            version = versions / digest.hexdigest()[:20]
+            if not version.exists():
+                bundle.rename(version)
+        replace_link(current, version)
+        apps = data / "applications"
+        apps.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=apps) as staging:
+            temporary = Path(staging) / "zuse-writer.desktop"
+            temporary.write_text(desktop_text, encoding="utf-8")
+            temporary.chmod(0o644)
+            temporary.replace(apps / temporary.name)
+        command = home / ".local/bin/zuse-writer"
+        command.parent.mkdir(parents=True, exist_ok=True)
+        managed_roots = (root.resolve(), (home / ".local/share/zuse-writer").resolve())
+        managed = command.is_symlink() and any(
+            command.resolve().is_relative_to(parent) for parent in managed_roots
+        )
+        if not os.path.lexists(command) or managed:
+            replace_link(command, launcher)
+        else:
+            print(f"Kept existing command {command}. The application menu uses {launcher}.")
+    print(f"Installed Zuse Writer. Open it from the application menu or run {launcher}")
+
+
+if __name__ == "__main__":
+    try:
+        install(Path(__file__).resolve().parent)
+    except (OSError, ValueError) as error:
+        sys.exit(str(error))

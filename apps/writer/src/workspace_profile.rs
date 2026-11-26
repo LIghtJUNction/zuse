@@ -1,4 +1,5 @@
 //! Operator-measured limits and pen installation heights. Loading a profile only reads data.
+pub(crate) mod draft;
 use std::{
     env,
     fs::{self, File, OpenOptions},
@@ -221,7 +222,7 @@ impl WorkspaceProfile {
     }
 }
 
-fn config_root() -> Result<PathBuf> {
+pub(crate) fn config_root() -> Result<PathBuf> {
     let absolute_env = |name| {
         env::var_os(name)
             .map(PathBuf::from)
@@ -299,7 +300,7 @@ pub(crate) fn save_axes(device: &str, axes: [bool; 3]) -> Result<()> {
     write_atomic(&axis_path(device)?, &format!("{swap}{x}{y}\n"))
 }
 
-fn write_atomic(path: &Path, body: &str) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, body: &str) -> Result<()> {
     let parent = path.parent().expect("profile directory");
     let mut dirs = fs::DirBuilder::new();
     dirs.recursive(true);

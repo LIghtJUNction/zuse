@@ -3,6 +3,7 @@ use crate::article::Article;
 use crate::controller::{Action, Controller, Form};
 use crate::devices::{self, DeviceCandidate};
 use crate::font_picker::FontPicker;
+use crate::kuixiang_selector::{Choice, Menu};
 use crate::screen_output::ScreenOutput;
 use crate::workspace_wizard::{Outcome, WorkspaceWizard};
 use std::io::Read;
@@ -16,6 +17,7 @@ const PAPER: u32 = 0xf0f4faff;
 // Keep partially typed numbers in the editor. Validate and transfer them as
 // a group when building a plan, never on each digit of a keyboard event.
 pub struct WriterView {
+    sources: Option<Menu>,
     screen_output: ScreenOutput,
     screen_mode: bool,
     show_origin_hint: bool,
@@ -34,7 +36,7 @@ pub struct WriterView {
     confirm_cancel: Option<(u64, u64, u64)>,
     file_path: String,
     baud: String,
-    step: String,
+    z_step: String,
     seed: String,
     notice: String,
     scroll_y: f32,
@@ -145,6 +147,7 @@ impl WriterView {
         c.dispatch(Action::Refresh);
         let f = &c.form;
         Self {
+            sources: None,
             screen_mode: false,
             show_origin_hint: false,
             screen_output: ScreenOutput::default(),
@@ -187,7 +190,7 @@ impl WriterView {
             confirm_cancel: None,
             file_path: String::new(),
             baud: f.baud.to_string(),
-            step: f.jog_step.to_string(),
+            z_step: "1".into(),
             seed: f.seed.to_string(),
             notice: String::new(),
             scroll_y: 0.0,
@@ -209,6 +212,10 @@ impl WriterView {
             return true;
         }
         false
+    }
+    pub(crate) fn set_sources(&mut self, sources: Menu, message: String) {
+        self.sources = (!sources.sources.choices.is_empty()).then_some(sources);
+        self.notice = message;
     }
     pub fn dark(&self) -> bool {
         self.dark
@@ -429,7 +436,8 @@ impl WriterView {
                 } else {
                     0.
                 }
-                + if aligning { 370. } else { 749. }
+                + if self.sources.is_some() { 70. } else { 0. }
+                + if aligning { 370. } else { 877. }
         };
         let panel_min = if let Some(alignment) = &self.alignment {
             alignment.height(right_width)
@@ -680,6 +688,12 @@ impl WriterView {
         }
         let linked = c.connected_device().is_some();
         let editing = !c.busy() && !linked && !closing;
+        let y = if self.sources.is_some() {
+            self.draw_sources(f, c, x, y + 37., w, closing);
+            y + 70.
+        } else {
+            y
+        };
         let height = self.device_list(f, c, x, y + 40., w, closing);
         let mut y = y + height;
         if let Some((port, baud, firmware)) = c.connected_device() {
@@ -784,13 +798,28 @@ impl WriterView {
         }
         f.canvas.line((x, y + 353.), (x + w, y + 353.), 1., RULE);
         f.heading("手动调节", x, y + 369.);
-        f.field(
+        let half = (w - 8.) / 2.;
+        let edit_distance = !c.busy() && !closing;
+        if f.field(
             6,
             x,
             y + 407.,
-            w,
-            "点动步长 mm",
-            &mut self.step,
+            half,
+            "单次 XY 距离 · mm",
+            &mut c.jog_distance_text,
+            "1",
+            edit_distance,
+        ) && let Err(error) = c.edited_jog_distance()
+        {
+            self.notice = error;
+        }
+        f.field(
+            7,
+            x + half + 8.,
+            y + 407.,
+            half,
+            "单次 Z 距离 · mm",
+            &mut self.z_step,
             "1",
             !c.busy() && !closing,
         );
@@ -810,9 +839,13 @@ impl WriterView {
                     false,
                     enabled,
                 ) {
-                    match number(&self.step, "点动步长") {
+                    let distance = if axis == 'Z' {
+                        number(&self.z_step, "Z 点动距离")
+                    } else {
+                        crate::jog_settings::parse_distance(&c.jog_distance_text)
+                    };
+                    match distance {
                         Ok(n) if n > 0. => {
-                            c.form.jog_step = n;
                             self.act(
                                 c,
                                 Action::Jog {
@@ -821,7 +854,8 @@ impl WriterView {
                                 },
                             );
                         }
-                        _ => self.notice = "点动步长需为正数。".into(),
+                        Ok(_) => self.notice = "点动步长需为正数。".into(),
+                        Err(error) => self.notice = error,
                     }
                 }
             }
@@ -900,6 +934,141 @@ impl WriterView {
                 }
             }
         }
+        let label = c.jog_source.as_ref().map_or_else(
+            || "XY 请求速度 · mm/min".to_owned(),
+            |source| format!("XY 请求速度 · {source}"),
+        );
+        let editing_speed = !c.busy() && !closing;
+        f.field(
+            7041,
+            x,
+            y + 744.,
+            w,
+            &label,
+            &mut c.form.jog_feed,
+            "mm/min",
+            editing_speed,
+        );
+        match c.form.xy_jog_feed() {
+            Ok(requested) => {
+                for (idx, axis) in ['X', 'Y'].into_iter().enumerate() {
+                    f.note(
+                        &c.xy_jog_feed_preview(axis, requested),
+                        x,
+                        y + 807. + idx as f32 * 21.,
+                        w,
+                    );
+                }
+            }
+            Err(error) => f.note(&error, x, y + 807., w),
+        }
+    }
+    fn draw_sources(
+        &mut self,
+        frame: &mut Frame<'_, '_>,
+        c: &mut Controller,
+        x: f32,
+        y: f32,
+        w: f32,
+        closing: bool,
+    ) {
+        let Some(menu) = &self.sources else { return };
+        let active = menu.sources.active;
+        let label = active.map_or("指定目录", Choice::label);
+        frame.note(&format!("奎享来源 · {label}"), x, y, w);
+        let choices = &menu.sources.choices;
+        let width = (w - 6. * (choices.len() - 1) as f32) / choices.len() as f32;
+        let mut selected = None;
+        for (i, choice) in choices.iter().copied().enumerate() {
+            if frame.button(
+                7190 + i as u64,
+                Rect::new(x + i as f32 * (width + 6.), y + 22., width, 31.),
+                choice.label(),
+                active == Some(choice),
+                !closing && !c.busy(),
+            ) {
+                selected = Some(choice);
+            }
+        }
+        if let Some(choice) = selected {
+            self.notice = match self.switch_source(c, choice) {
+                Ok(message) | Err(message) => message,
+            };
+        }
+    }
+
+    fn switch_source(&mut self, c: &mut Controller, choice: Choice) -> Result<String, String> {
+        if c.busy() {
+            return Err("请等待当前作业结束后再切换来源。".into());
+        }
+        let menu = self.sources.as_mut().ok_or("未发现奎享配置")?;
+        let incoming = menu.sources.load(choice)?;
+        let saved_step = crate::jog_settings::load()?;
+        // All reading/validation precedes the atomic save. Update the live form only on success.
+        menu.sources.persist(choice)?;
+        let old = &menu.previous;
+        let new = &incoming.form;
+        let before = c.form.clone();
+        if c.connected_device().is_none()
+            && self.baud.trim().parse::<u32>().ok() == Some(old.baud)
+            && c.form.baud == old.baud
+        {
+            c.form.baud = new.baud;
+            self.baud = new.baud.to_string();
+        }
+        if saved_step.is_none()
+            && c.jog_distance_text.trim().parse::<f64>().ok() == Some(old.jog_step)
+            && c.form.jog_step == old.jog_step
+        {
+            c.form.jog_step = new.jog_step;
+            c.jog_distance_text = new.jog_step.to_string();
+        }
+        if c.form.xy_jog_feed().ok() == old.xy_jog_feed().ok() {
+            c.form.jog_feed = new.jog_feed.clone();
+        }
+        c.jog_source = incoming.source;
+        fn update(current: &mut f64, editor: &mut String, old: f64, new: f64) {
+            if *current == old && editor.trim().parse::<f64>().ok() == Some(old) {
+                *current = new;
+                *editor = new.to_string();
+            }
+        }
+        update(&mut c.form.feed, &mut self.geometry[5], old.feed, new.feed);
+        if c.form.lift_feed == old.lift_feed {
+            c.form.lift_feed = new.lift_feed;
+        }
+        if c.paper.is_none() {
+            update(
+                &mut c.form.area_width,
+                &mut self.mapping[4],
+                old.area_width,
+                new.area_width,
+            );
+            update(
+                &mut c.form.area_height,
+                &mut self.mapping[5],
+                old.area_height,
+                new.area_height,
+            );
+            for i in 0..4 {
+                update(
+                    &mut c.form.margins[i],
+                    &mut self.mapping[8 + i],
+                    old.margins[i],
+                    new.margins[i],
+                );
+            }
+        }
+        menu.sources.active = Some(choice);
+        menu.previous = incoming.form;
+        if c.form != before {
+            c.invalidate_plan();
+        }
+        Ok(format!(
+            "奎享来源已保存为{}。{}",
+            choice.label(),
+            incoming.summary
+        ))
     }
     fn device_list(
         &mut self,

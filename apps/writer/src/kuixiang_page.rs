@@ -1,16 +1,26 @@
 //! Import the six millimetre fields in a KuiXiang page_settings.json preset.
 use crate::controller::Form;
-use std::{fs::File, io::Read, path::Path};
+use std::path::Path;
 use zuse::{json, motion::MAX_COORDINATE};
 
+#[derive(Debug, PartialEq)]
 pub struct Preset {
     pub name: String,
-    size_mm: [f64; 2],
-    margins_mm: [f64; 4],
+    pub(crate) size_mm: [f64; 2],
+    pub(crate) margins_mm: [f64; 4],
 }
 
 impl Preset {
     pub fn apply(&self, form: &mut Form, calibrated: bool) -> Result<(), String> {
+        self.apply_fields(form, !calibrated, true)
+    }
+
+    pub(crate) fn apply_fields(
+        &self,
+        form: &mut Form,
+        use_size: bool,
+        use_margins: bool,
+    ) -> Result<(), String> {
         let scale = form.reference_distance / form.reference_units;
         if form.reference_distance <= 0.
             || form.reference_units <= 0.
@@ -19,12 +29,16 @@ impl Preset {
         {
             return Err("纸张参考比例无效".into());
         }
-        let size = if calibrated {
-            [form.area_width, form.area_height]
-        } else {
+        let size = if use_size {
             self.size_mm.map(|v| v / scale)
+        } else {
+            [form.area_width, form.area_height]
         };
-        let margins = self.margins_mm.map(|v| v / scale);
+        let margins = if use_margins {
+            self.margins_mm.map(|v| v / scale)
+        } else {
+            form.margins
+        };
         if !fits(size, margins) {
             return Err("页边距超出当前书写范围，或换算后的页面尺寸无效".into());
         }
@@ -44,15 +58,34 @@ fn fits([width, height]: [f64; 2], margins: [f64; 4]) -> bool {
 }
 
 pub fn load(path: &Path, name: Option<&str>) -> Result<Preset, String> {
-    const LIMIT: u64 = 2 * 1024 * 1024;
-    let mut input = String::new();
-    File::open(path)
-        .and_then(|f| f.take(LIMIT + 1).read_to_string(&mut input))
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    if input.len() as u64 > LIMIT {
-        return Err("奎享纸张文件超过 2 MiB".into());
-    }
+    let input = crate::kuixiang_config::read_file(path)?;
     parse(&input, name).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+pub(crate) fn default_preset(input: &str) -> Result<Preset, String> {
+    let name = json::with_value(input, |root| {
+        let mut name = None;
+        let mut has_flags = false;
+        for row in root.elements() {
+            let mut flags = row.members().filter(|(key, _)| key.matches("isDefault"));
+            let flag = flags.next().map(|(_, value)| value.raw());
+            if flags.next().is_some() || !matches!(flag, None | Some("true" | "false")) {
+                return Err("isDefault 需要唯一的布尔值".into());
+            }
+            has_flags |= flag.is_some();
+            if flag == Some("true") {
+                if name.is_some() {
+                    return Err("存在多份默认纸张".into());
+                }
+                name = Some(json::text(row.get("name").ok_or("默认纸张缺少名称")?)?);
+            }
+        }
+        if has_flags && name.is_none() {
+            return Err("配置未选中默认纸张".into());
+        }
+        Ok(name)
+    })?;
+    parse(input, name.as_deref())
 }
 
 fn parse(input: &str, wanted: Option<&str>) -> Result<Preset, String> {

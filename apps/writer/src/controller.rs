@@ -1,4 +1,8 @@
 //! Writer UI adapter. Motion and controller ownership live in the named Zuse session.
+use crate::workspace_profile::{
+    Binding,
+    draft::{self, Draft, Stamp},
+};
 use std::{
     env, fs,
     io::Write,
@@ -43,9 +47,22 @@ pub struct Form {
     pub pen_up: f64,
     pub pen_down: f64,
     pub feed: f64,
+    pub lift_feed: Option<f64>,
+    pub jog_feed: String,
     pub jog_step: f64,
     pub seed: u64,
 }
+impl Form {
+    pub(crate) fn xy_jog_feed(&self) -> Result<f64> {
+        self.jog_feed
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v >= 0.001 && (*v as f32).is_finite())
+            .ok_or_else(|| "请输入有效的 XY 请求速度（至少 0.001 mm/min）".into())
+    }
+}
+
 impl Default for Form {
     fn default() -> Self {
         Self {
@@ -73,6 +90,8 @@ impl Default for Form {
             pen_up: 3.,
             pen_down: 0.,
             feed: 300.,
+            lift_feed: None,
+            jog_feed: "300".into(),
             jog_step: 1.,
             seed: 1,
         }
@@ -176,19 +195,25 @@ impl MountAction {
             Self::MoveZ(_) => Err("安装高度必须是有效的毫米工作坐标".into()),
             Self::Jog { axis, delta, feed } => {
                 let axis = axis.to_ascii_lowercase();
-                let limit = match axis {
-                    'x' | 'y' => 10.,
-                    'z' => 0.5,
-                    _ => return Err("示教点动只支持 X、Y、Z".into()),
-                };
-                if !delta.is_finite() || !(0.001..=limit).contains(&delta.abs()) {
-                    return Err(format!("该轴每次点动限 0.001–{limit} mm"));
+                if !matches!(axis, 'x' | 'y' | 'z') {
+                    return Err("示教点动只支持 X、Y、Z".into());
                 }
-                if !(40. ..=500.).contains(&feed) || (axis == 'z' && feed != 40.) {
-                    return Err("点动速度需为 40–500 mm/min".into());
+                if axis == 'z' {
+                    if !(0.001..=0.5).contains(&delta.abs()) || feed != 40. {
+                        return Err("Z 示教点动限 0.001–0.5 mm、40 mm/min".into());
+                    }
+                } else {
+                    crate::jog_settings::distance_mm(delta.abs())?;
                 }
+                if !feed.is_finite() || !(feed as f32).is_finite() || feed <= 0. {
+                    return Err("单次 XY 点动速度须为有限正数".into());
+                }
+                if delta.abs() * 60_000. / feed >= 300_000. {
+                    return Err("单次点动达到 300 秒时限，请缩短距离或调整速度。".into());
+                }
+                // Read the actual axis limit before choosing the wire feed and deadline.
                 Ok(format!(
-                    "plotter.jog(axis=\"{axis}\",delta={delta},feed={feed},timeout=20000)"
+                    "plotter.jog(axis=\"{axis}\",delta={delta},feed={feed},timeout=300000)"
                 ))
             }
             Self::ApplyBounds(bounds) => {
@@ -241,7 +266,7 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
     let text = match action {
         Action::Screen(screen) => screen.source.clone(),
         Action::Preview => format!(
-            "write.gcode(text={},font={},size={},advance={},line_height={},area_width={},area_height={},margin_left={},margin_top={},margin_right={},margin_bottom={},x={},y={},offset_x_ratio={},offset_y_ratio={},tilt_degrees={},size_ratio={},reference_units={},reference_distance={},swap_xy={},flip_x={},flip_y={},seed={},pen_up={},pen_down={},feed={feed},travel_feed={feed},lift_feed={feed})",
+            "write.gcode(text={},font={},size={},advance={},line_height={},area_width={},area_height={},margin_left={},margin_top={},margin_right={},margin_bottom={},x={},y={},offset_x_ratio={},offset_y_ratio={},tilt_degrees={},size_ratio={},reference_units={},reference_distance={},swap_xy={},flip_x={},flip_y={},seed={},pen_up={},pen_down={},feed={feed},travel_feed={feed},lift_feed={lift_feed})",
             quote(&f.text),
             quote(&f.font),
             f.size,
@@ -267,7 +292,8 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
             f.seed,
             f.pen_up,
             f.pen_down,
-            feed = f.feed
+            feed = f.feed,
+            lift_feed = f.lift_feed.unwrap_or(f.feed)
         ),
         Action::Connect => format!("plotter.connect(port={},baud={})", quote(&f.port), f.baud),
         Action::Refresh => "plotter.status()".into(),
@@ -284,8 +310,12 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
             if !matches!(a, 'x' | 'y' | 'z') || !delta.is_finite() || *delta == 0. {
                 return Err("请输入非零的单轴点动距离".into());
             }
-            let feed = if a == 'z' { 40. } else { 300. };
-            format!("plotter.jog(axis=\"{a}\",delta={delta},feed={feed})")
+            if a == 'z' {
+                format!("plotter.jog(axis=\"z\",delta={delta},feed=40)")
+            } else {
+                let feed = f.xy_jog_feed()?;
+                format!("plotter.jog(axis=\"{a}\",delta={delta},feed={feed},timeout=300000)")
+            }
         }
         Action::PenUp | Action::PenDown => {
             let z = if matches!(action, Action::PenUp) {
@@ -374,17 +404,20 @@ struct Session {
     bin: std::ffi::OsString,
     name: String,
 }
+pub(crate) fn engine_binary() -> std::ffi::OsString {
+    env::var_os("ZUSE_BIN")
+        .or_else(|| {
+            let peer = env::current_exe()
+                .ok()?
+                .with_file_name(format!("zuse{}", env::consts::EXE_SUFFIX));
+            peer.is_file().then(|| peer.into_os_string())
+        })
+        .unwrap_or_else(|| "zuse".into())
+}
 impl Default for Session {
     fn default() -> Self {
         Self {
-            bin: env::var_os("ZUSE_BIN")
-                .or_else(|| {
-                    let peer = env::current_exe()
-                        .ok()?
-                        .with_file_name(format!("zuse{}", env::consts::EXE_SUFFIX));
-                    peer.is_file().then(|| peer.into_os_string())
-                })
-                .unwrap_or_else(|| "zuse".into()),
+            bin: engine_binary(),
             name: env::var("ZUSE_WRITER_SESSION").unwrap_or_else(|_| "writer".into()),
         }
     }
@@ -837,6 +870,126 @@ fn sole_operation(receipt: &str) -> Option<String> {
     })
     .ok()
 }
+// XY corners survive a change in carriage position. Pressure/pen samples still
+// use the stricter calibration epoch. Only attest to every intervening session
+// job, including every executed step of a compound script, before resuming.
+fn valid_corner_step(
+    op: &str,
+    data: &str,
+    device: &Device,
+    generation: u64,
+    offset: [f64; 3],
+) -> Result<()> {
+    if matches!(
+        op,
+        "write.preview" | "write.mouse" | "write.touchscreen" | "write.touchpad"
+    ) {
+        return Ok(());
+    }
+    if !matches!(op, "plotter.jog" | "plotter.jog_held" | "plotter.status") {
+        return Err(format!("包含 {op}"));
+    }
+    // A normal jog reports its axis and the retained link generation. Held jogs
+    // and status also report hardware identity. A fresh full read follows the journal.
+    let identities = [
+        ("device_id", &device.id),
+        ("controller", &device.model),
+        ("firmware", &device.firmware),
+    ];
+    if !device_envelope(data, device)
+        || reported_generation(data)? != Some(generation)
+        || field(data, "state").as_deref() != Some("Idle")
+        || raw(data, "bounds_stale").as_deref() == Some("true")
+        || identities.into_iter().any(|(k, known)| {
+            (op != "plotter.jog" || raw(data, k).is_some())
+                && field(data, k).as_ref() != known.as_ref()
+        })
+        || Coordinates::parse(data)?
+            .offset
+            .is_some_and(|wco| !same_xyz(wco, offset, 0.000_001))
+    {
+        return Err("设备、固件或坐标参考不符".into());
+    }
+    if op != "plotter.status"
+        && (!matches!(field(data, "axis").as_deref(), Some("X" | "Y"))
+            || ["from_mm", "target_mm", "feed_mm_min"]
+                .into_iter()
+                .any(|k| {
+                    raw(data, k)
+                        .and_then(|v| v.parse::<f64>().ok())
+                        .is_none_or(|v| !v.is_finite())
+                }))
+    {
+        return Err("缺少可核对的 XY 点动结果".into());
+    }
+    Ok(())
+}
+
+fn corner_job(
+    id: u64,
+    receipt: &str,
+    device: &Device,
+    generation: u64,
+    offset: [f64; 3],
+) -> Result<()> {
+    if num(receipt, "job_id") != Some(id)
+        || field(receipt, "status").as_deref() != Some("completed")
+        || raw(receipt, "result_truncated").as_deref() != Some("false")
+    {
+        return Err("缺少完整作业".into());
+    }
+    let body = raw(receipt, "result").ok_or("缺少作业内容")?;
+    if field(&body, "status").as_deref() != Some("completed") {
+        return Err("作业未完成".into());
+    }
+    json::with_value(&body, |v| {
+        let mut count = 0u64;
+        for step in v.get("results").ok_or("缺少操作序列")?.elements() {
+            if num(step.raw(), "step") != Some(count) {
+                return Err("操作序号不连续".into());
+            }
+            let op = json::text(step.get("operation").ok_or("缺少操作")?)?;
+            valid_corner_step(
+                &op,
+                step.get("value").ok_or("缺少结果")?.raw(),
+                device,
+                generation,
+                offset,
+            )?;
+            count += 1;
+        }
+        if count == 0 || num(&body, "completed") != Some(count) {
+            return Err("作业操作记录不完整".into());
+        }
+        Ok(())
+    })
+}
+
+fn corner_history(
+    saved: &Stamp,
+    now: &Snapshot,
+    mut fetch: impl FnMut(u64) -> Result<String>,
+    device: &Device,
+    offset: [f64; 3],
+) -> Result<()> {
+    let last = now.last.ok_or("缺少会话作业编号")?;
+    let count = last.checked_sub(saved.job).ok_or("会话作业编号已倒退")?;
+    if saved.pid != now.pid
+        || now.active.is_some()
+        || device.reference_generation != Some(saved.generation)
+        || count > zuse::session::MAX_RESULTS as u64
+        || saved.revision.checked_add(2 * count) != Some(now.rev)
+    {
+        return Err("后台会话、参考代号或作业历史已变化，无法恢复角点".into());
+    }
+    for i in 1..=count {
+        let id = saved.job + i;
+        corner_job(id, &fetch(id)?, device, saved.generation, offset)
+            .map_err(|e| format!("作业 #{id} 无法证明角点仍有效：{e}"))?;
+    }
+    Ok(())
+}
+
 fn observed_operation(previous: &Snapshot, current: &Snapshot, receipt: &str) -> Option<String> {
     let job = num(receipt, "job_id")?;
     contiguous_completion(previous, current, job)
@@ -846,6 +999,7 @@ fn observed_operation(previous: &Snapshot, current: &Snapshot, receipt: &str) ->
 
 #[derive(Clone, Debug)]
 struct Device {
+    axis_max_feed: [Option<f64>; 2],
     reference_generation: Option<u64>,
     offset: Option<[f64; 3]>,
     id: Option<String>,
@@ -898,6 +1052,31 @@ fn check_bound_receipt(data: &str, b: MachineBounds, reference: [f64; 3]) -> Res
         return Err("控制器未确认边界绑定的工作偏移".into());
     }
     Ok(())
+}
+
+fn scalar(payload: &str, key: &str) -> Option<f64> {
+    raw(payload, key)?
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite() && *v > 0.)
+}
+
+fn jog_feedback(payload: &str) -> Option<String> {
+    let axis = field(payload, "axis")?;
+    let requested = scalar(payload, "requested_feed_mm_min")?;
+    let sent = scalar(payload, "feed_mm_min")?;
+    let mut message = format!(
+        "{axis}  {} {requested} / {} {sent} mm/min",
+        crate::locale::text("请求"),
+        crate::locale::text("实发")
+    );
+    if let (Some(rate), Some(setting)) = (
+        scalar(payload, "axis_max_feed_mm_min"),
+        field(payload, "axis_max_feed_setting"),
+    ) {
+        message.push_str(&format!(" ({setting} {rate})"));
+    }
+    Some(message)
 }
 
 fn device_envelope(data: &str, selected: &Device) -> bool {
@@ -1107,12 +1286,30 @@ fn mount_job(
         .any(|key| field(&before.payload, key) != field(&confirmed.payload, key))
         || before.reference_generation != confirmed.reference_generation
         || !same_xyz(before.offset, confirmed.offset, 0.000_001)
-        || !same_xyz(target, confirmed.work, tolerance)
+        || !(0..3).all(|i| {
+            let axis_tolerance = match kind {
+                MountAction::Jog { axis, delta, .. } if ['X', 'Y', 'Z'][i] == *axis => {
+                    scalar(&receipt, "axis_tolerance_mm")
+                        .filter(|mm| *mm <= delta.abs() * 0.5 + tolerance)
+                        .unwrap_or(tolerance)
+                }
+                _ => tolerance,
+            };
+            (target[i] - confirmed.work[i]).abs() <= axis_tolerance
+        })
         || (0..3).any(|i| target[i] != before.work[i] && confirmed.work[i] == before.work[i])
     {
         return Err("命令已收到回执，最终工作位置或偏移与预期不符，请核对写字机".into());
     }
-    Ok(confirmed.completed())
+    let (mut payload, snapshot) = confirmed.completed();
+    if matches!(kind, MountAction::Jog { .. }) && jog_feedback(&receipt).is_some() {
+        let object = payload
+            .trim_end()
+            .strip_suffix('}')
+            .ok_or("无效的坐标回执")?;
+        payload = format!(r#"{object},"jog_receipt":{receipt}}}"#);
+    }
+    Ok((payload, snapshot))
 }
 
 pub struct Controller {
@@ -1120,7 +1317,10 @@ pub struct Controller {
     screen_running: bool,
     screen_job: Option<Snapshot>,
     pub form: Form,
+    pub(crate) jog_distance_text: String,
+    saved_jog_distance: Option<f64>,
     pub paper: Option<crate::workspace_profile::WorkspaceProfile>,
+    pub jog_source: Option<String>,
     pub strokes: Strokes,
     pub gcode: String,
     pub status: String,
@@ -1131,6 +1331,7 @@ pub struct Controller {
     calibration: Option<CalibrationReceipt>,
     calibration_epoch: u64,
     mount: Option<MountReceipt>,
+    mount_error: Option<(u64, String)>,
     work_offset: Option<[f64; 3]>,
     session: Session,
     snapshot: Option<Snapshot>,
@@ -1150,16 +1351,36 @@ pub struct Controller {
 }
 impl Default for Controller {
     fn default() -> Self {
+        Self::with_form(Form::default())
+    }
+}
+impl Controller {
+    pub(crate) fn with_form(mut form: Form) -> Self {
+        let mut status = "就绪".to_owned();
+        if crate::jog_settings::distance_mm(form.jog_step).is_err() {
+            form.jog_step = 1.;
+        }
+        let saved_jog_distance = crate::jog_settings::load().unwrap_or_else(|error| {
+            status = format!("读取单次 XY 距离设置失败：{error}");
+            None
+        });
+        if let Some(saved) = saved_jog_distance {
+            form.jog_step = saved;
+        }
+        let jog_distance_text = form.jog_step.to_string();
         let (tx, events) = mpsc::channel();
         Self {
             screen: None,
             screen_running: false,
             screen_job: None,
-            form: Form::default(),
+            form,
+            jog_distance_text,
+            saved_jog_distance,
             paper: None,
+            jog_source: None,
             strokes: vec![],
             gcode: String::new(),
-            status: "就绪".into(),
+            status,
             mpos: None,
             wpos: None,
             pressure_sample: None,
@@ -1167,6 +1388,7 @@ impl Default for Controller {
             calibration: None,
             calibration_epoch: 0,
             mount: None,
+            mount_error: None,
             work_offset: None,
             session: Session::default(),
             snapshot: None,
@@ -1188,6 +1410,46 @@ impl Default for Controller {
 }
 
 impl Controller {
+    pub(crate) fn set_jog_distance_mm(&mut self, mm: f64) -> Result<()> {
+        let mm = crate::jog_settings::distance_mm(mm)?;
+        if self.saved_jog_distance != Some(mm) {
+            crate::jog_settings::save(mm)?;
+            self.saved_jog_distance = Some(mm);
+        }
+        self.form.jog_step = mm;
+        // Preserve intermediate spellings such as "35." while typing.
+        if crate::jog_settings::parse_distance(&self.jog_distance_text).ok() != Some(mm) {
+            self.jog_distance_text = mm.to_string();
+        }
+        Ok(())
+    }
+    pub(crate) fn edited_jog_distance(&mut self) -> Result<f64> {
+        let mm = crate::jog_settings::parse_distance(&self.jog_distance_text)?;
+        self.set_jog_distance_mm(mm)?;
+        Ok(mm)
+    }
+
+    pub(crate) fn xy_jog_feed_preview(&self, axis: char, requested: f64) -> String {
+        let (i, setting) = if axis == 'X' { (0, 110) } else { (1, 111) };
+        let limit = self
+            .link
+            .as_ref()
+            .filter(|_| self.connected() && !self.needs_device_status)
+            .and_then(|d| d.axis_max_feed[i]);
+        match limit {
+            Some(rate) => format!(
+                "{axis}  {} {requested} / {} {} mm/min (${setting} {rate})",
+                crate::locale::text("请求"),
+                crate::locale::text("预计"),
+                requested.min(rate)
+            ),
+            None => format!(
+                "{axis}  {} {requested} mm/min · {} ${setting}",
+                crate::locale::text("请求"),
+                crate::locale::text("待核实")
+            ),
+        }
+    }
     pub fn session_name(&self) -> &str {
         &self.session.name
     }
@@ -1299,6 +1561,12 @@ impl Controller {
             self.mount.as_ref()
         }
     }
+    pub(crate) fn mount_error(&self, request: u64) -> Option<&str> {
+        self.mount_error
+            .as_ref()
+            .filter(|(id, _)| *id == request)
+            .map(|(_, e)| e.as_str())
+    }
     fn dispatch_mount(&mut self, what: MountAction, reference: Option<[f64; 3]>) -> Option<u64> {
         let before = self.generation;
         self.dispatch(Action::Mount(what, reference));
@@ -1307,6 +1575,30 @@ impl Controller {
     pub fn refresh_mount_reference(&mut self) -> Option<u64> {
         self.dispatch_mount(MountAction::Status, None)
     }
+    pub(crate) fn corner_stamp(&self) -> Option<Stamp> {
+        let snap = self.snapshot.as_ref()?;
+        let device = self.link.as_ref()?;
+        if self.busy() || self.needs_device_status || !self.connected() {
+            return None;
+        }
+        Some(Stamp {
+            pid: snap.pid,
+            revision: snap.rev,
+            job: snap.last?,
+            generation: device.reference_generation?,
+            incarnation: draft::incarnation(snap.pid).unwrap_or_default(),
+        })
+    }
+
+    pub(crate) fn verify_corners(&mut self, draft: Draft) -> Option<u64> {
+        if self.needs_device_status || !self.connected() || self.busy() {
+            return None;
+        }
+        let before = self.generation;
+        self.dispatch_inner(Action::Mount(MountAction::Status, None), None, Some(draft));
+        (self.generation != before).then_some(self.generation)
+    }
+
     pub fn move_mount_z(&mut self, z: f64) -> Option<u64> {
         self.dispatch_mount(
             MountAction::MoveZ(z),
@@ -1336,6 +1628,7 @@ impl Controller {
         self.dispatch_inner(
             Action::Mount(MountAction::Jog { axis, delta, feed }, device.offset),
             Some(script),
+            None,
         );
         (self.generation != before).then_some(self.generation)
     }
@@ -1396,16 +1689,21 @@ impl Controller {
         }
         self.clear_samples();
     }
-    fn invalidate_plan(&mut self) {
+    pub(crate) fn invalidate_plan(&mut self) {
         self.plan = None;
         self.gcode.clear();
         self.strokes.clear();
     }
     pub fn dispatch(&mut self, action: Action) {
-        self.dispatch_inner(action, None);
+        self.dispatch_inner(action, None, None);
     }
 
-    fn dispatch_inner(&mut self, action: Action, held_program: Option<String>) {
+    fn dispatch_inner(
+        &mut self,
+        action: Action,
+        held_program: Option<String>,
+        draft: Option<Draft>,
+    ) {
         if matches!(action, Action::Cancel) {
             if self.cancel_pending {
                 return;
@@ -1521,11 +1819,56 @@ impl Controller {
         );
         self.status = "处理中…".into();
         thread::spawn(move || {
-            let result = match &action {
-                Action::Export(path) => {
+            let result = match (&action, draft.as_ref()) {
+                (Action::Export(path), _) => {
                     export(path, &program).map(|()| (path.display().to_string(), expected))
                 }
-                Action::Mount(kind, _) if held_program.is_some() => (|| {
+                (Action::Mount(MountAction::Status, _), Some(saved)) => (|| {
+                    let initial = expected.as_ref().ok_or("缺少后台会话")?;
+                    let selected = device.as_ref().ok_or("未连接写字机")?;
+                    if initial.pid != saved.stamp.pid
+                        || draft::incarnation(initial.pid).unwrap_or_default()
+                            != saved.stamp.incarnation
+                    {
+                        return Err("后台进程已经更换，请重新记录角点".into());
+                    }
+                    corner_history(
+                        &saved.stamp,
+                        initial,
+                        |id| session.result(id),
+                        selected,
+                        saved.offset()?,
+                    )?;
+                    // The correlated read-only status is the final fence. If another job
+                    // wins this revision, submit refuses it or returns no matching snapshot.
+                    let observed = MountObservation::from_result(
+                        submit(
+                            &session,
+                            &Action::CalibrationStatus,
+                            MOUNT_STATUS,
+                            Some(initial),
+                            &stop,
+                            &tx,
+                        )?,
+                        selected,
+                    )?;
+                    let binding = Binding::new(
+                        selected.id.as_deref().ok_or("无设备标识")?,
+                        selected.model.as_deref().ok_or("无控制器型号")?,
+                        selected.firmware.as_deref().ok_or("无固件标识")?,
+                        observed.offset,
+                    )?;
+                    if observed.reference_generation != Some(saved.stamp.generation)
+                        || !saved.matches(&binding)
+                    {
+                        return Err("设备、固件、工作偏移或坐标参考已改变，请重新记录角点".into());
+                    }
+                    if session.status()? != observed.snapshot {
+                        return Err("核对期间共享会话已变化，请再次核对角点".into());
+                    }
+                    Ok(observed.completed())
+                })(),
+                (Action::Mount(kind, _), _) if held_program.is_some() => (|| {
                     let last = expected
                         .as_ref()
                         .ok_or("连续点动需要已核实的共享会话快照")?;
@@ -1540,7 +1883,7 @@ impl Controller {
                     )?;
                     confirmed_held_jog(*kind, selected, result)
                 })(),
-                Action::Mount(..) => mount_job(
+                (Action::Mount(..), _) => mount_job(
                     &action,
                     expected.as_ref(),
                     device.as_ref(),
@@ -1627,6 +1970,15 @@ impl Controller {
         let model = model.or_else(|| previous.and_then(|d| d.model.clone()));
         let firmware = firmware.or_else(|| previous.and_then(|d| d.firmware.clone()));
         let offset = xyz.offset.or_else(|| previous.and_then(|d| d.offset));
+        let axis_max_feed =
+            ["x_max_feed_mm_min", "y_max_feed_mm_min"].map(|key| scalar(payload, key));
+        let axis_max_feed = if raw(payload, "x_max_feed_mm_min").is_some()
+            || raw(payload, "y_max_feed_mm_min").is_some()
+        {
+            axis_max_feed
+        } else {
+            previous.map_or([None; 2], |d| d.axis_max_feed)
+        };
         if let Some(new_id) = id.as_deref()
             && self.link.as_ref().and_then(|device| device.id.as_deref()) != Some(new_id)
             && let Ok(Some([swap, x, y])) = crate::workspace_profile::load_axes(new_id)
@@ -1637,6 +1989,7 @@ impl Controller {
             self.invalidate_plan();
         }
         self.link = Some(Device {
+            axis_max_feed,
             reference_generation,
             id,
             model,
@@ -1804,10 +2157,16 @@ impl Controller {
                     work,
                     work_offset: Some(offset),
                 });
-                Ok(format!(
+                let feed = raw(payload, "jog_receipt").and_then(|j| jog_feedback(&j));
+                let mut summary = format!(
                     "示教回执 · X={:.3} Y={:.3} Z={:.3} mm",
                     work[0], work[1], work[2]
-                ))
+                );
+                if let Some(feed) = feed {
+                    summary.push_str(" · ");
+                    summary.push_str(&feed);
+                }
+                Ok(summary)
             }
             Action::Export(_) => Ok(format!("已导出 {payload}")),
             Action::Check => {
@@ -1821,7 +2180,7 @@ impl Controller {
                 } else {
                     self.operation_reference(payload)?;
                 }
-                Ok(format!("控制器回执 · {payload}"))
+                Ok(jog_feedback(payload).unwrap_or_else(|| format!("控制器回执 · {payload}")))
             }
             Action::Cancel => unreachable!(),
         }
@@ -1858,6 +2217,12 @@ impl Controller {
                         .unwrap_or_else(|e| e);
                 }
                 Event::Done(action, f, r) => {
+                    if matches!(action, Action::Mount(..))
+                        && let Err(e) = &r
+                    {
+                        self.mount_error = Some((self.generation, e.clone()));
+                    }
+
                     let cancelled = self
                         .stop
                         .take()
@@ -2060,6 +2425,108 @@ impl Controller {
 mod tests {
     use super::*;
     const PROGRAM: &str = "G21 G17 G90 G94\nG0 Z3.000\nG0 X10.000 Y20.000\nG1 Z0.000 F300.000\nG1 X12.500 Y18.500\nG0 Z3.000\nM2\n";
+
+    #[test]
+    fn corner_history_rejects_missing_jobs_unknown_steps_and_reference_changes() {
+        let frame = with_generation(MOUNT_FRAME, "5");
+        let mut c = Controller::default();
+        c.position(&frame).unwrap();
+        let device = c.link.as_ref().unwrap();
+        let stamp = Stamp {
+            pid: 24,
+            revision: 8,
+            job: 4,
+            generation: 5,
+            incarnation: "test".into(),
+        };
+        let end = Snapshot {
+            pid: 24,
+            rev: 12,
+            active: None,
+            last: Some(6),
+        };
+        let good = |job: u64| {
+            format!(
+                r#"{{"job_id":{job},"status":"completed","result_truncated":false,"result":{{"status":"completed","completed":1,"results":[{{"step":0,"operation":"plotter.status","value":{frame}}}]}}}}"#
+            )
+        };
+        let mut ids = Vec::new();
+        corner_history(
+            &stamp,
+            &end,
+            |id| {
+                ids.push(id);
+                Ok(good(id))
+            },
+            device,
+            [1., 2., 3.],
+        )
+        .unwrap();
+        assert_eq!(ids, [5, 6]);
+        assert!(
+            corner_history(
+                &stamp,
+                &end,
+                |id| if id == 5 {
+                    Err("receipt evicted".into())
+                } else {
+                    Ok(good(id))
+                },
+                device,
+                [1., 2., 3.]
+            )
+            .is_err()
+        );
+        for altered in [
+            Snapshot {
+                pid: 25,
+                ..end.clone()
+            },
+            Snapshot {
+                rev: 11,
+                ..end.clone()
+            },
+            Snapshot {
+                active: Some(7),
+                ..end.clone()
+            },
+            Snapshot {
+                rev: 74,
+                last: Some(37),
+                ..end.clone()
+            },
+        ] {
+            assert!(
+                corner_history(&stamp, &altered, |id| Ok(good(id)), device, [1., 2., 3.]).is_err()
+            );
+        }
+        let ok = good(5);
+        for bad in [
+            ok.replace(r#""job_id":5"#, r#""job_id":4"#),
+            ok.replace("unit-a", "unit-b"),
+            ok.replace("1.3a.20221114", "1.3b"),
+            ok.replace("writer-sim", "other"),
+            ok.replace(r#""reference_generation":5"#, r#""reference_generation":6"#),
+            ok.replace("[1,2,3]", "[0,0,0]"),
+            ok.replace(r#""step":0"#, r#""step":1"#),
+            ok.replace(r#""completed":1"#, r#""completed":2"#),
+            ok.replace("Idle", "Alarm"),
+            ok.replace("plotter.status", "plotter.reset"),
+            ok.replace("false", "true"),
+            ok.replace(r#""status":"completed""#, r#""status":"cancelled""#),
+        ] {
+            assert!(
+                corner_job(5, &bad, device, 5, [1., 2., 3.]).is_err(),
+                "{bad}"
+            );
+        }
+        let z = frame.replace(
+            r#""state":"Idle""#,
+            r#""state":"Idle","axis":"Z","from_mm":0,"target_mm":1,"feed_mm_min":40"#,
+        );
+        assert!(valid_corner_step("plotter.jog", &z, device, 5, [1., 2., 3.]).is_err());
+        assert!(valid_corner_step("plotter.jog_held", &z, device, 5, [1., 2., 3.]).is_err());
+    }
 
     #[test]
     fn applying_paper_profile_sets_origin_orientation_dimensions_and_heights_together() {
@@ -2536,7 +3003,13 @@ mod tests {
 
     #[test]
     fn teaching_jogs_use_one_linear_axis_and_the_calibration_feed() {
-        for (axis, delta) in [('x', -10.), ('Y', 0.001), ('z', 0.5)] {
+        for (axis, delta) in [
+            ('x', -35.5),
+            ('X', 50.),
+            ('Y', 100.),
+            ('Y', 0.001),
+            ('z', 0.5),
+        ] {
             let feed = if axis.eq_ignore_ascii_case(&'z') {
                 40.
             } else {
@@ -2556,7 +3029,7 @@ mod tests {
         for (axis, delta) in [
             ('a', 0.1),
             ('Z', 0.501),
-            ('X', 10.001),
+            ('X', 200.),
             ('y', f64::NAN),
             ('z', 0.),
         ] {
@@ -2985,5 +3458,49 @@ esac
         for malformed in ["null", "-1", "3.2", "\"2\"", "9223372036854775808"] {
             assert!(reported_generation(&with_generation(ACK, malformed)).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod imported_speed_tests {
+    use super::*;
+
+    #[test]
+    fn imported_xy_feed_does_not_propagate_to_pen_or_z_jog() {
+        let form = Form {
+            feed: 8000.,
+            lift_feed: Some(300.),
+            jog_feed: "8000".into(),
+            ..Form::default()
+        };
+        let xy = source(
+            &Action::Jog {
+                axis: 'X',
+                delta: 1.,
+            },
+            &form,
+            "",
+        )
+        .unwrap();
+        assert!(xy.contains("feed=8000,timeout=300000"));
+        assert!(
+            source(
+                &Action::Jog {
+                    axis: 'Z',
+                    delta: 0.1
+                },
+                &form,
+                ""
+            )
+            .unwrap()
+            .contains("feed=40)")
+        );
+        let preview = source(&Action::Preview, &form, "").unwrap();
+        assert!(preview.contains("feed=8000,travel_feed=8000,lift_feed=300)"));
+        let result = zuse::runtime::Runtime::new()
+            .execute(&preview, zuse::runtime::Options::default())
+            .unwrap();
+        assert!(result.contains("F8000.000"));
+        assert!(result.contains("F300.000"));
     }
 }

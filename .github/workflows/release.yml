@@ -92,7 +92,10 @@ jobs:
         run: |
           bundle="zuse-${ZUSE_TAG}-${TARGET}"
           stage="$(mktemp -d)"
-          tar -xzf "dist/$bundle.tar.gz" -C "$stage" "$bundle/zuse" "$bundle/zuse-writer" "$bundle/apps/writer/README.md" "$bundle/scripts/import_gfont.py" "$bundle/docs/handwriting.md"
+          tar -xzf "dist/$bundle.tar.gz" -C "$stage" "$bundle/zuse" "$bundle/zuse-writer" "$bundle/install-writer" "$bundle/apps/writer/zuse-writer.desktop" "$bundle/apps/writer/README.md" "$bundle/scripts/import_gfont.py" "$bundle/docs/handwriting.md"
+          HOME="$stage/test-home" XDG_DATA_HOME="$stage/user data" "$stage/$bundle/install-writer"
+          cmp "$stage/$bundle/zuse" "$stage/user data/zuse-writer/current/zuse"
+          cmp "$stage/$bundle/zuse-writer" "$stage/test-home/.local/bin/zuse-writer"
           test -s "$stage/$bundle/apps/writer/README.md"
           version="$("$stage/$bundle/zuse" --version)"
           test "$version" = "zuse ${ZUSE_TAG#v}"

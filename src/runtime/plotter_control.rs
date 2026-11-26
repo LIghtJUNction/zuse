@@ -136,14 +136,28 @@ impl Command {
                 if !delta.is_finite() || delta == 0. {
                     return Err("plotter.jog delta must be finite and nonzero".into());
                 }
-                let feed = feed(call)?;
+                let single_xy = call.name == "plotter.jog" && axis != 'Z';
+                let feed = if single_xy {
+                    let value = number(call, "feed", 100.);
+                    if !value.is_finite() || !(value as f32).is_finite() || value <= 0. {
+                        return Err("XY jog feed must be finite and positive in mm/min".into());
+                    }
+                    value
+                } else {
+                    feed(call)?
+                };
                 let travel_ms = (delta.abs() * 60_000.0 / feed).ceil();
                 if travel_ms >= MAX_TIMEOUT_MS as f64 && call.get("timeout").is_none() {
                     return Err("plotter.jog travel reaches the 300 s deadline; shorten the move or increase the feed".into());
                 }
                 // Leave time for the initial queries, acceleration and final Idle report.
-                let default_ms =
-                    (travel_ms + 5_000.0).clamp(15_000.0, MAX_TIMEOUT_MS as f64) as i64;
+                // A fast request can be limited by a much slower real axis. Allow
+                // time to read its rate; jog_segment narrows the motion deadline.
+                let default_ms = if single_xy && feed > 500. {
+                    MAX_TIMEOUT_MS
+                } else {
+                    (travel_ms + 5_000.).clamp(15_000., MAX_TIMEOUT_MS as f64) as i64
+                };
                 let reference = if call.name == "plotter.jog_held" {
                     if axis == 'Z'
                         || !(0.001..=2.).contains(&delta.abs())

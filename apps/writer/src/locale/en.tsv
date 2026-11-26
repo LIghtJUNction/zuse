@@ -84,6 +84,12 @@
 接触探针	Contact probe
 读取工作 Z	Read work Z
 当前工作 Z	Work Z
+请求	Requested
+预计	Expected
+实发	Sent
+待核实	Awaiting
+单次 XY 距离 · mm	XY single jog · mm
+单次 Z 距离 · mm	Z single jog · mm
 单次点动步长	Jog distance
 记录落笔位置	Record contact position
 记录抬笔位置	Record lift position
@@ -179,3 +185,17 @@ USB 设备	USB devices
 按住方向键或轴按钮移动。松开停止续发，已发段最多 2 mm。	Hold an arrow key or axis button to jog. Release to stop sending. One segment of up to 2 mm may finish.
 点动回执与请求不符，请核对位置。	The jog receipt differs from the request. Check the position.
 XY 点动速度 · mm/min	XY jog speed · mm/min
+左上角	Top left
+右下角	Bottom right
+核对未完成的角点草稿	Verify unfinished corners
+角点草稿只记录纸面位置。核对完成后继续，正式校准仍需单独保存。	The draft contains paper corners. Verify it to continue. Save the calibration after fitting the pen.
+放弃草稿，重新记录	Discard and measure again
+重新核对草稿	Verify draft again
+角点草稿已保留，等待核对后台会话和工作坐标。	Corner draft retained. Waiting to verify the session and work coordinates.
+已核实并恢复角点。请确认纸张仍固定在原位。	Corners verified and restored. Confirm the paper is still fixed in place.
+坐标基准无法核实，请重新记录角点。	The work reference could not be verified. Measure the corners again.
+XY 请求速度 · mm/min	Requested XY speed · mm/min
+长按或方向键使用 40–500 mm/min，每段最多 2 mm，松开停止续发。	Hold or arrow-key jogging uses 40–500 mm/min, up to 2 mm per segment. Release to stop sending moves.
+本地 .zfont / .gfont 文件	Local .zfont / .gfont file
+仅导入当前文章用字	Only import characters in this article
+正在导入字体…	Importing font…

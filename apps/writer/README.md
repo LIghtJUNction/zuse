@@ -18,14 +18,13 @@ zuse-writer
 
 从 [GitHub Releases](https://github.com/LIghtJUNction/zuse/releases) 下载与机器架构匹配的 `x86_64-unknown-linux-gnu` 或 `aarch64-unknown-linux-gnu` 压缩包。解压后进入含有 `zuse` 和 `zuse-writer` 的目录，运行 `./zuse-writer` 即可打开桌面程序。两个文件放在一起，Writer 可以找到同一版本的引擎。
 
-要从应用菜单启动，将程序和菜单项安装到当前用户的目录。桌面会话的 `PATH` 需要包含 `$HOME/.local/bin`。
+在解压目录运行以下命令，即可为当前用户安装桌面菜单和配套引擎。需要 Python 3.9 或更新版本。
 
 ~~~sh
-install -Dm755 zuse "$HOME/.local/bin/zuse"
-install -Dm755 zuse-writer "$HOME/.local/bin/zuse-writer"
-install -Dm644 apps/writer/zuse-writer.desktop \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/applications/zuse-writer.desktop"
+./install-writer
 ~~~
+
+安装后，应用菜单直接指向这次安装的 Writer。升级时在新版解压目录再次运行同一命令。原来指向 Writer 安装目录的 `~/.local/bin/zuse-writer` 链接会随之更新，单独安装的 `zuse` 命令可以继续使用。
 
 在应用菜单搜索 **Zuse Writer** 或 **Zuse 写字机**。需要保留旧会话时，在解压目录运行 `ZUSE_BIN="$PWD/zuse" ZUSE_WRITER_SESSION=writer-new ./zuse-writer`，并将 `writer-new` 换成尚未使用的会话名。新会话与原会话分别管理各自的作业和设备连接。
 
@@ -42,6 +41,8 @@ install -Dm644 apps/writer/zuse-writer.desktop \
 1. 取下笔或松开笔夹。用低速 XY 点动把笔夹移到纸张可写范围的左上角，留出夹具间隙，点「记录左上角」。
 2. 移到可写范围的右下角，点「记录右下角」。程序用两个角点设定共享会话的 XY 边界、纸张起点、宽高及反转方向。
 3. 在当前 XY 点「定位装笔」。已识别且使用零工作偏移的 BtWriter 只沿 Z 低速移动到 Z=5 mm。到位后放下笔尖至刚好贴纸，锁紧笔夹，点「已装笔，保存校准」。抬笔位为 Z=0 mm。
+
+记录后，向导会同时显示已记的纸面角点与当前笔头位置。在同一后台会话中，用另一个客户端点动 XY 或重开 Writer 后，向导会核对设备、工作偏移和中间作业，再恢复上次的步骤。若控制器复位、设备更换或作业回执缺失，界面会保留草稿并说明复核原因。角点草稿和已完成的装笔校准分别保存。
 
 下次点「载入已保存的校准」。只需确认实体原点、纸张和笔的位置未变，再应用档案，载入期间机器不会移动。撞边、断电、移纸或松动笔夹后，重新核对实体位置。坐标偏移读数相同也可能对应不同的实体位置。
 
@@ -87,7 +88,7 @@ AI 可在相同的 `write.gcode` 和 `write.export` 操作中传入 `area_width`
 
 ## 字体、文章与纸张
 
-点「字体库」浏览已安装的字体，或从 [Zuse 字体 Release](https://github.com/LIghtJUNction/zuse/releases/tag/fonts) 一键安装中文楷体和两款英文单线字体。本地字体使用 UTF-8 `.zfont` 笔画文件，在同一页填写名称和路径即可导入。混排按所选字体的顺序补齐缺字。例如先选择 `hanzi-kaiti`，再选择 `latin-script`。使用 `zuse font available` 枚举官方字体，`zuse font install` 安装，`zuse font list` 检查本地字体。
+点「字体库」浏览已安装的字体，或从 [Zuse 字体 Release](https://github.com/LIghtJUNction/zuse/releases/tag/fonts) 一键安装中文楷体和两款英文单线字体。在同一页填写本机 `.zfont` 或 `.gfont`（版本 5、6 或 9）的路径与字体名称即可导入。字体名称使用小写英文字母开头，可包含数字、连字符和下划线。导入奎享字库时可选「仅导入当前文章用字」，转换完成后会自动选用新字体。混排按所选字体的顺序补齐缺字。例如先选择 `hanzi-kaiti`，再选择 `latin-script`。使用 `zuse font available` 枚举官方字体，`zuse font install` 安装，`zuse font list` 检查本地字体。
 
 在 Linux 发布包目录中，可以用 Python 3 将有权使用的本机未加密字库（`.gfont` 版本 5、6 或 9）导入 Writer。以下命令生成新字体，再用同一发布包里的 Zuse 安装。
 
@@ -107,6 +108,10 @@ GUI 使用同一个进给值控制走笔、空移和抬落笔。通过 AI 接口
 
 「回到左上角」先抬笔再返回标定的左上角，并回读到位坐标。需要本次会话已应用机台行程，并确认抬笔 Z 和纸张起点。AI 可使用 `plotter.park(x=…,y=…,z=…)`。
 
-记录左上角或右下角时，先填入 XY 点动速度（40–500 mm/min），再点「启用键盘方向键」。按住 ← / → 沿 X 轴负向 / 正向移动，按住 ↑ / ↓ 沿 Y 轴正向 / 负向移动。使用系统键盘自动重复，松键后停止续发。点击速度框或按 Tab 会停用方向键，修改后可再次启用。
+在书写页或对笔向导的「单次 XY 距离」输入毫米数，例如 `35.5`、`50` 或 `100`。单击轴按钮会提交一次完整的移动；超出已教范围时显示原因。Writer 保存手工输入的有效距离，重新打开后继续使用。
 
-每段点动都等待实际坐标回执。松键时已经提交的一段仍可能完成，40、300、500 mm/min 分别对应 0.16、1.2、2 mm 指令行程。单击屏幕轴按钮使用所选步长，长按则使用同样的小段，移出按钮也会停止续发。校准时请通过软件移动笔头，使两角之间的距离计入控制器坐标。
+「XY 请求速度」使用 mm/min。Writer 在发送前读取当前轴的固件额定值（X 轴 `$110`，Y 轴 `$111`），回执列出请求值和实际发给固件的进给值。点「启用键盘方向键」后，按住 ← / → 沿 X 轴负向 / 正向移动，按住 ↑ / ↓ 沿 Y 轴正向 / 负向移动。键盘和长按按钮采用独立的 40–500 mm/min 分段点动；松开后停止续发，已发的一段最多 2 mm。
+
+### 读取奎享默认配置
+
+Writer 会读取本机原生 Bottles 与 Flatpak Bottles 中已安装的奎享配置，包括单次 XY 距离、XY 请求速度、书写进给和波特率。两个安装同时存在时，首次仅采用一致的设置。来源有差异时，可在设备设置中选择，或运行 `zuse-writer --kuixiang-config native`、`zuse-writer --kuixiang-config flatpak`。运行 `zuse-writer --show-defaults` 可在不打开窗口的情况下查看来源和生效值；已保存的手工步长优先。纸张预设用于排版，机台可写范围取自实测校准。源配置中的字库须先导入字体库。
