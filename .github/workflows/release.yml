@@ -77,7 +77,27 @@ jobs:
           test -x "$linker"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
       - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Build Writer with the Linux software renderer
+        if: endsWith(matrix.target, '-unknown-linux-gnu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libx11-dev libfreetype-dev libfontconfig-dev
+          cargo build --locked --release --manifest-path apps/writer/Cargo.toml --features linux-software --target ${{ matrix.target }}
       - run: python scripts/release.py package ${{ matrix.target }}
+      - name: Verify both executables from the Linux archive
+        if: endsWith(matrix.target, '-unknown-linux-gnu')
+        env:
+          ZUSE_TAG: ${{ needs.identity.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          bundle="zuse-${ZUSE_TAG}-${TARGET}"
+          stage="$(mktemp -d)"
+          tar -xzf "dist/$bundle.tar.gz" -C "$stage" "$bundle/zuse" "$bundle/zuse-writer" "$bundle/apps/writer/README.md"
+          test -s "$stage/$bundle/apps/writer/README.md"
+          version="$("$stage/$bundle/zuse" --version)"
+          test "$version" = "zuse ${ZUSE_TAG#v}"
+          env -u DISPLAY -u WAYLAND_DISPLAY "$stage/$bundle/zuse-writer" --help > "$stage/writer-help"
+          grep -F -- '--align' "$stage/writer-help"
       - uses: actions/upload-artifact@v7
         with:
           name: zuse-${{ matrix.target }}

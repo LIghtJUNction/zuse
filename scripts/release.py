@@ -19,6 +19,7 @@ TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
 )
+WRITER_TARGETS = {"x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"}
 
 def git(*args):
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
@@ -37,17 +38,25 @@ def verify(tag):
         raise ValueError("release tag does not point to the checked-out commit")
     return {"tag": tag, "version": version, "commit": commit}
 
+def built_binary(project, target, name):
+    cargo = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"], cwd=project, text=True))
+    executable = pathlib.Path(cargo["target_directory"]) / target / "release" / name
+    if not executable.is_file():
+        raise FileNotFoundError("build the release target first: " + str(executable))
+    return executable
+
 def package(target):
     if not re.fullmatch(r"[A-Za-z0-9_-]+", target):
         raise ValueError("invalid Rust target")
     version = metadata()["version"]
-    cargo = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"], cwd=ROOT, text=True))
     name = "zuse.exe" if "windows" in target else "zuse"
-    executable = pathlib.Path(cargo["target_directory"]) / target / "release" / name
-    if not executable.is_file():
-        raise FileNotFoundError("build the release target first: " + str(executable))
     prefix = "zuse-v" + version + "-" + target
-    files = [(executable, name, 0o755)]
+    files = [(built_binary(ROOT, target, name), name, 0o755)]
+    if target in WRITER_TARGETS:
+        writer = ROOT / "apps" / "writer"
+        files.append((built_binary(writer, target, "zuse-writer"), "zuse-writer", 0o755))
+        files.append((writer / "README.md", "apps/writer/README.md", 0o644))
+        files.append((writer / "zuse-writer.desktop", "apps/writer/zuse-writer.desktop", 0o644))
     for pattern in ("web/*", "README*.md", "LICENSE", "CHANGELOG.md", "docs/*.md", "examples/*.zuse", "examples/*.py", "skills/**/*"):
         for path in sorted(ROOT.glob(pattern)):
             if path.is_file():

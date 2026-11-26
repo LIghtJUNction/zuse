@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Zuse Writer
+Name[zh_CN]=Zuse 写字机
+Comment=Write on paper or screen with single-line fonts
+Comment[zh_CN]=用单线字体在纸上或屏幕上书写
+Exec=zuse-writer
+Icon=input-tablet
+Terminal=false
+Categories=Utility;
+StartupWMClass=Zuse

@@ -28,6 +28,28 @@ def next_version(current, requested):
         raise ValueError("new version must be a greater stable MAJOR.MINOR.PATCH version")
     return version
 
+def bump_lockfile(original, package, current, version):
+    # Cargo owns the lockfile syntax. Edit only the local package's version;
+    # a registry or Git package with the same name has its own source and pin.
+    records = re.split(r"(?m)(?=^\[\[package\]\][ \t]*\r?$)", original)
+    found = 0
+    for index, record in enumerate(records[1:], 1):
+        entry = tomllib.loads(record)["package"][0]
+        if entry["name"] != package or "source" in entry:
+            continue
+        if entry["version"] != current:
+            raise ValueError(f"expected local {package} {current}, found {entry['version']}")
+        pattern = rf'(?m)^(version[ \t]*=[ \t]*"){re.escape(current)}(")'
+        records[index], count = re.subn(pattern, lambda m: m[1] + version + m[2], record)
+        if count != 1:
+            raise ValueError(f"expected one local version field for {package}")
+        found += 1
+    if found != 1:
+        raise ValueError(f"expected one local {package} lockfile entry, found {found}")
+    # Cargo may disambiguate dependencies by version when a second source uses this name.
+    dependency = rf'(?m)^([ \t]+"){re.escape(package + " " + current)}("[ \t]*,?[ \t]*\r?$)'
+    return re.sub(dependency, lambda m: m[1] + package + " " + version + m[2], "".join(records))
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("version", help="patch, minor, major or an explicit version")
@@ -41,8 +63,9 @@ def main():
     if args.push and not (args.commit and args.tag):
         parser.error("--push requires --commit and --tag")
     manifest = ROOT / "Cargo.toml"
-    original = manifest.read_text()
-    current = tomllib.loads(original)["package"]["version"]
+    original = manifest.read_bytes().decode("utf-8")
+    package = tomllib.loads(original)["package"]
+    current = package["version"]
     version = next_version(current, args.version)
     tag = "v" + version
     if args.dry_run:
@@ -65,21 +88,31 @@ def main():
             changes += 1
     if changes != 1:
         raise RuntimeError("expected exactly one package version")
-    lock = ROOT / "Cargo.lock"
-    previous_lock = lock.read_bytes() if lock.exists() else None
-    manifest.write_text("".join(lines))
+    paths = ("Cargo.toml", "Cargo.lock", "apps/writer/Cargo.lock")
+    originals = {path: (ROOT / path).read_bytes() for path in paths}
+    outputs = {"Cargo.toml": "".join(lines).encode("utf-8")}
+    for path in paths[1:]:
+        try:
+            outputs[path] = bump_lockfile(originals[path].decode("utf-8"), package["name"], current, version).encode("utf-8")
+        except ValueError as error:
+            raise ValueError(f"{path}: {error}") from error
+    head = git("rev-parse", "HEAD") if args.commit else None
     try:
-        subprocess.run(["cargo", "generate-lockfile"], cwd=ROOT, check=True)
+        for path in paths:
+            (ROOT / path).write_bytes(outputs[path])
+        if args.commit:
+            git("add", "--", *paths)
+            git("commit", "-m", "chore: release " + tag)
     except BaseException:
-        manifest.write_text(original)
-        if previous_lock is None:
-            lock.unlink(missing_ok=True)
-        else:
-            lock.write_bytes(previous_lock)
+        # A successful commit is a recovery point for a later tag/push retry.
+        if not args.commit or git("rev-parse", "HEAD") == head:
+            for path, content in originals.items():
+                target = ROOT / path
+                if not target.exists() or target.read_bytes() != content:
+                    target.write_bytes(content)
+            if args.commit:
+                git("reset", "--quiet", "HEAD", "--", *paths)
         raise
-    if args.commit:
-        subprocess.run(["git", "add", "--", "Cargo.toml", "Cargo.lock"], cwd=ROOT, check=True)
-        subprocess.run(["git", "commit", "-m", "chore: release " + tag], cwd=ROOT, check=True)
     if args.tag:
         subprocess.run(["git", "tag", "-a", tag, "-m", "zuse " + version], cwd=ROOT, check=True)
     if args.push:

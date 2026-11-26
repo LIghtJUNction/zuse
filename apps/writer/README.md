@@ -14,6 +14,21 @@ zuse-writer
 
 也可在源码目录编译。设置 `ZUSE_BIN` 可指定本次构建的 `zuse` 绝对路径。引擎默认按环境变量、应用程序同目录、系统 PATH 的顺序查找。若程序提示没有 `plotter.*` 操作，请使用与此桌面程序配套的引擎。
 
+### 从 Linux 发布包安装
+
+从 [GitHub Releases](https://github.com/LIghtJUNction/zuse/releases) 下载与机器架构匹配的 `x86_64-unknown-linux-gnu` 或 `aarch64-unknown-linux-gnu` 压缩包。解压后进入含有 `zuse` 和 `zuse-writer` 的目录，运行 `./zuse-writer` 即可打开桌面程序。两个文件放在一起，Writer 可以找到同一版本的引擎。
+
+要从应用菜单启动，将程序和菜单项安装到当前用户的目录。桌面会话的 `PATH` 需要包含 `$HOME/.local/bin`。
+
+~~~sh
+install -Dm755 zuse "$HOME/.local/bin/zuse"
+install -Dm755 zuse-writer "$HOME/.local/bin/zuse-writer"
+install -Dm644 apps/writer/zuse-writer.desktop \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/applications/zuse-writer.desktop"
+~~~
+
+在应用菜单搜索 **Zuse Writer** 或 **Zuse 写字机**。需要保留旧会话时，在解压目录运行 `ZUSE_BIN="$PWD/zuse" ZUSE_WRITER_SESSION=writer-new ./zuse-writer`，并将 `writer-new` 换成尚未使用的会话名。新会话与原会话分别管理各自的作业和设备连接。
+
 ## 连接第一台写字机
 
 把写字机插入 USB 并打开 Zuse Writer。设备区会列出系统识别到的 USB 串口。只有一个候选时，界面会预先选中它；有多个候选时，可以按设备名称、端口和 USB 标识选择。插拔后可重新扫描，也可以手动输入设备路径。
