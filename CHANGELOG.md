@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0 — 2026-11-26
+
+- Add Zuse Writer to the native GNU/Linux archives, alongside its matching Zuse engine. The window reflows its settings and uses available height for the paper preview. Open the application from its desktop entry or run `zuse-writer`.
+- Draw the same single-line glyphs with a mouse, a virtual touchscreen, a virtual touchpad or an XY pen plotter. Preview the layout, set reproducible per-glyph variation, and export the plotter program as G-code.
+- Discover USB plotters and teach two XY corners, both Z endpoints and the pen installation height in `zuse-writer --align`. The shared session checks the complete trajectory against taught travel and invalidates the reference after an observed controller restart.
+- Add paper and article editing, light and dark themes, Chinese and English controls, and single-line font selection. The [Writer guide](apps/writer/README.md) covers the graphical workflow.
+
 ## 0.8.0 — 2026-11-26
 
 - Add a native loopback touch workbench, an embeddable Web Component and an Android arm64 release archive.

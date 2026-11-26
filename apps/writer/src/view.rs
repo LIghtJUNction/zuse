@@ -6,12 +6,12 @@ use crate::font_picker::FontPicker;
 use crate::screen_output::ScreenOutput;
 use crate::workspace_wizard::{Outcome, WorkspaceWizard};
 use std::io::Read;
-use zgpui::native::{ButtonStyle, Canvas, Event, Rect, Ui};
+use zgpui::native::{ButtonStyle, Canvas, Event, GridLayout, PaneLayout, Rect, Ui, colors};
 
 const INK: u32 = 0x202124ff;
 const MUTED: u32 = 0x5f6368ff;
 const RULE: u32 = 0xe8eaedff;
-const PAPER: u32 = 0xf1f3f4ff;
+const PAPER: u32 = 0xf0f4faff;
 
 // Keep partially typed numbers in the editor. Validate and transfer them as
 // a group when building a plan, never on each digit of a keyboard event.
@@ -256,6 +256,10 @@ impl WriterView {
         }
     }
     pub fn scroll(&mut self, delta: i32) {
+        if let Some(fonts) = &mut self.fonts {
+            fonts.scroll(delta);
+            return;
+        }
         self.scroll_y = (self.scroll_y + delta.signum() as f32 * 56.0).clamp(0.0, self.max_scroll);
     }
     fn dirty(&mut self, c: &mut Controller) {
@@ -322,7 +326,9 @@ impl WriterView {
     ) {
         if let Some(article) = self.article.as_mut() {
             let width = (w - 32.).min(940.);
-            if article.draw(canvas, ui, Rect::new((w - width) / 2., 24., width, h - 32.)) {
+            let area = Rect::new((w - width) / 2., 24., width, h - 32.);
+            canvas.rect(area.inset(-8.), 12., colors::SURFACE);
+            if article.draw(canvas, ui, area) {
                 c.form.text = self.article.take().expect("open article").finish();
                 self.dirty(c);
                 self.screen_output.deactivate();
@@ -333,6 +339,7 @@ impl WriterView {
             let width = (w - 32.).min(740.);
             let mut frame = Frame { canvas, ui };
             let area = Rect::new((w - width) / 2., 24., width, h - 24.);
+            frame.canvas.rect(area.inset(-8.), 12., colors::SURFACE);
             let previous = c.form.font.clone();
             if picker.draw(&mut frame, area, &mut c.form) {
                 self.fonts = None;
@@ -343,60 +350,76 @@ impl WriterView {
             }
             return;
         }
-        let wide = w >= 830.0;
-        let pad = if wide { 38.0 } else { 16.0 };
-        let gap = if wide { 38.0 } else { 18.0 };
-        let width = (w - 2.0 * pad).max(200.);
-        let left = if wide {
-            (width * 0.30).clamp(242., 338.)
-        } else {
-            width
-        };
-        let device_extra = self.picker.height()
-            + if c.connected_device().is_some() {
-                56.0
-            } else {
-                0.0
-            };
+        let pad = (16. + (w - 740.).max(0.) * 0.08).min(38.);
+        let width = (w - 2. * pad).max(1.);
+        let gap = (width * 0.035).clamp(16., 38.);
         let aligning = self.aligning();
-        let stacked_target = !wide && !aligning;
-        let top = if w < 520. { 112. } else { 94. } + if stacked_target { 48. } else { 0. };
-        let machine_height = if self.screen_mode {
-            445.
+        let title_width = canvas.measure("Zuse Writer", 30, true);
+        let nav_width = if aligning { 108. } else { 92. };
+        let nav_x = w - pad - nav_width;
+        let target_width = 230.;
+        let wrapped_targets = !aligning && width < title_width + nav_width + target_width + 64.;
+        let inline_targets = !aligning && !wrapped_targets;
+        let target_x = if inline_targets {
+            nav_x - 12. - target_width
         } else {
-            device_extra + if aligning { 370. } else { 657. }
+            pad
         };
-        let (rx, right) = if wide {
-            (pad + left + gap, width - left - gap)
+        let details_right = if inline_targets {
+            target_x - 12.
         } else {
-            (pad, width)
+            nav_x - 16.
         };
-        let panel_height = self
-            .alignment
-            .as_ref()
-            .map(|a| a.height(right))
-            .or_else(|| self.workspace.as_ref().map(|m| m.height(right)))
-            .unwrap_or_else(|| {
-                if self.screen_mode {
-                    self.screen_output.height(right)
+        let inline_details = details_right - (pad + title_width + 18.) >= 230.;
+        let top = match (inline_details, wrapped_targets) {
+            (_, true) => 151.,
+            (false, false) => 111.,
+            (true, false) => 94.,
+        };
+        let layout = PaneLayout::new(
+            Rect::new(pad, top, width, (h - top - 16.).max(0.)),
+            (width * 0.30).clamp(252., 350.),
+            456.,
+            gap,
+        );
+        let (_, right_width) = layout.widths();
+        let sidebar_min = if self.screen_mode {
+            412.
+        } else {
+            self.picker.height()
+                + if c.connected_device().is_some() {
+                    56.
                 } else {
-                    if self.advanced { 981. } else { 860. }
+                    0.
                 }
-            });
-        // A connected narrow window opens directly on the calibration controls.
-        let panel_first = aligning && c.connected_device().is_some();
-        let (my, ry) = if wide {
-            (top, top)
-        } else if panel_first {
-            (top + panel_height + gap, top)
-        } else {
-            (top, top + machine_height + gap)
+                + if aligning { 370. } else { 657. }
         };
-        let content_h = (ry + panel_height).max(my + machine_height);
-        self.max_scroll = (content_h + 20. - h).max(0.);
-        self.scroll_y = self.scroll_y.min(self.max_scroll);
-        let y = -self.scroll_y;
-        let title_width = canvas.text("Zuse Writer", pad, y + 15., 30, true, INK);
+        let panel_min = if let Some(alignment) = &self.alignment {
+            alignment.height(right_width)
+        } else if let Some(workspace) = &self.workspace {
+            workspace.height(right_width)
+        } else if self.screen_mode {
+            self.screen_output.height(right_width)
+        } else {
+            Self::writing_height(right_width, self.advanced)
+        };
+        let panes = layout.arrange(
+            sidebar_min,
+            panel_min,
+            self.scroll_y,
+            aligning && c.connected_device().is_some(),
+        );
+        self.scroll_y = panes.scroll_y;
+        self.max_scroll = panes.max_scroll;
+        let y = -panes.scroll_y;
+        // Paint the same rectangles used for input; both header and surfaces scroll together.
+        canvas.rect(panes.main.inset(-8.), 12., colors::SURFACE);
+        if layout.stacked() {
+            canvas.rect(panes.sidebar.inset(-8.), 12., colors::SURFACE);
+        }
+        canvas.rect(Rect::new(0., y, w, top - 24.), 0., colors::SURFACE);
+        canvas.text("Zuse Writer", pad, y + 15., 30, true, INK);
+        let connected = c.connected_device().is_some();
         let state = if closing {
             "正在取消并关闭"
         } else if c.busy() {
@@ -405,9 +428,7 @@ impl WriterView {
             } else {
                 "共享作业中"
             }
-        } else if self.screen_mode {
-            "屏幕输入"
-        } else if c.connected_device().is_some() {
+        } else if connected {
             "已连接"
         } else {
             "未连接"
@@ -418,61 +439,70 @@ impl WriterView {
             .active_job()
             .map(|id| format!("{state}  #{id}"))
             .unwrap_or_else(|| state.to_owned());
-        let state = job.as_str();
-        let nav_width = if aligning { 100. } else { 78. };
-        let nav_x = w - pad - nav_width;
-        let nav_y = y + 16.;
-        let sw = canvas.measure(state, 14, false);
-        let state_right = if wide && !aligning {
-            nav_x - 244.
+        let state = if c.busy() || closing {
+            let link = crate::locale::text(if connected { "已连接" } else { "未连接" });
+            format!("{link} · {job}")
         } else {
-            nav_x - 16.
+            job
         };
-        if w < 520. {
-            canvas.ellipsis(
-                &session,
-                pad,
-                y + 62.,
-                (width - sw - 14.).max(0.),
-                13,
-                false,
-                MUTED,
-            );
-            canvas.text(state, w - pad - sw, y + 62., 13, false, MUTED);
+        let state = state.as_str();
+        let nav_y = y + 16.;
+        let (status_x, status_right, status_y) = if inline_details && !wrapped_targets {
+            (pad + title_width + 18., details_right, y + 29.)
         } else {
-            let sx = pad + title_width + 22.;
-            canvas.ellipsis(
-                &session,
-                sx,
-                y + 29.,
-                (state_right - 16. - sw - sx).max(0.),
-                14,
-                false,
-                MUTED,
-            );
-            canvas.text(state, state_right - sw, y + 29., 14, false, MUTED);
+            (pad, w - pad, y + 61.)
+        };
+        let status_space = (status_right - status_x).max(0.);
+        let state_width = (canvas.measure(state, 14, false) + 16.).min(status_space * 0.58);
+        let dot = Rect::new(status_right - state_width, status_y + 5., 8., 8.);
+        canvas.rect(
+            dot,
+            4.,
+            if connected {
+                colors::BLUE
+            } else {
+                colors::MUTED
+            },
+        );
+        if !connected {
+            canvas.rect(dot.inset(1.5), 3., colors::SURFACE);
         }
-        canvas.line((pad, y + top - 28.), (w - pad, y + top - 28.), 1., RULE);
+        canvas.ellipsis(
+            &session,
+            status_x,
+            status_y,
+            (status_space - state_width - 14.).max(0.),
+            14,
+            false,
+            MUTED,
+        );
+        canvas.ellipsis(
+            state,
+            dot.x + 14.,
+            status_y,
+            (state_width - 14.).max(0.),
+            14,
+            false,
+            INK,
+        );
+        canvas.line((0., y + top - 24.), (w, y + top - 24.), 1., RULE);
         let mut frame = Frame { canvas, ui };
         if !aligning {
-            let tx = if wide { nav_x - 229. } else { pad };
-            let ty = if wide { nav_y } else { y + top - 73. };
+            let tx = target_x;
+            let ty = if wrapped_targets { y + 87. } else { nav_y };
             frame.caption("输出到", tx, ty + 9.);
+            frame
+                .canvas
+                .rect(Rect::new(tx + 56., ty - 2., 176., 36.), 12., colors::BG);
             for (i, label) in ["写字机", "屏幕输入"].iter().enumerate() {
                 let selected = i == 1;
-                let r = Rect::new(
-                    tx + 47. + i as f32 * 77.,
-                    ty,
-                    if selected { 90. } else { 72. },
-                    33.,
-                );
-                if frame.button(
-                    180 + i as u64,
-                    r,
-                    label,
-                    self.screen_mode == selected,
-                    !closing && !c.busy(),
-                ) && self.screen_mode != selected
+                let r = Rect::new(tx + 58. + i as f32 * 86., ty, 84., 32.);
+                let active = self.screen_mode == selected;
+                if active {
+                    frame.canvas.rect(r, 10., colors::BLUE_PALE);
+                }
+                if frame.quiet_button(180 + i as u64, r, label, !closing && !c.busy())
+                    && self.screen_mode != selected
                 {
                     self.screen_output.deactivate();
                     self.screen_mode = selected;
@@ -484,7 +514,7 @@ impl WriterView {
             }
         }
         if !self.screen_mode
-            && frame.button(
+            && frame.quiet_button(
                 170,
                 Rect::new(nav_x, nav_y, nav_width, 35.),
                 if self.alignment.is_some() {
@@ -494,7 +524,6 @@ impl WriterView {
                 } else {
                     "对笔"
                 },
-                !aligning,
                 !closing && !c.busy() && self.can_navigate(),
             )
         {
@@ -509,33 +538,24 @@ impl WriterView {
             return;
         }
         if self.screen_mode {
-            let valid = self.screen_form(
-                &mut frame,
-                c,
-                Rect::new(pad, y + my, left, machine_height),
-                closing,
-            );
+            let valid = self.screen_form(&mut frame, c, panes.sidebar, closing);
             if !valid {
                 self.screen_output.deactivate();
             }
-            self.screen_output.draw(
-                frame.canvas,
-                frame.ui,
-                c,
-                Rect::new(rx, y + ry, right, panel_height),
-                closing || !valid,
-            );
+            self.screen_output
+                .draw(frame.canvas, frame.ui, c, panes.main, closing || !valid);
             return;
         }
-        self.machine(&mut frame, c, pad, y + my, left, closing);
+        self.machine(
+            &mut frame,
+            c,
+            panes.sidebar.x,
+            panes.sidebar.y,
+            panes.sidebar.w,
+            closing,
+        );
         if let Some(alignment) = &mut self.alignment {
-            if alignment.draw(
-                frame.canvas,
-                frame.ui,
-                c,
-                Rect::new(rx, y + ry, right, panel_height),
-                closing,
-            ) {
+            if alignment.draw(frame.canvas, frame.ui, c, panes.main, closing) {
                 let message = format!(
                     "已应用对笔结果，抬笔 {:.3} mm，落笔 {:.3} mm。请更新预览。",
                     c.form.pen_up, c.form.pen_down
@@ -543,13 +563,7 @@ impl WriterView {
                 self.finish_alignment(c, message);
             }
         } else if let Some(workspace) = &mut self.workspace {
-            match workspace.draw(
-                frame.canvas,
-                frame.ui,
-                c,
-                Rect::new(rx, y + ry, right, panel_height),
-                closing,
-            ) {
+            match workspace.draw(frame.canvas, frame.ui, c, panes.main, closing) {
                 Outcome::Done(message) => {
                     self.show_origin_hint = true;
                     self.finish_alignment(c, message)
@@ -561,7 +575,7 @@ impl WriterView {
                 Outcome::Stay => {}
             }
         } else {
-            self.writing(&mut frame, c, rx, y + ry, right, closing);
+            self.writing(&mut frame, c, panes.main, closing);
         }
     }
     fn machine(
@@ -575,11 +589,10 @@ impl WriterView {
     ) {
         f.heading("设备", x, y);
         let appearance = if self.dark { "浅色" } else { "深色" };
-        if f.button(
+        if f.quiet_button(
             702,
             Rect::new(x + w - 140., y, 66., 28.),
             appearance,
-            false,
             !closing,
         ) {
             self.dark = !self.dark;
@@ -589,13 +602,7 @@ impl WriterView {
         } else {
             "English"
         };
-        if f.button(
-            703,
-            Rect::new(x + w - 70., y, 70., 28.),
-            language,
-            false,
-            !closing,
-        ) {
+        if f.quiet_button(703, Rect::new(x + w - 70., y, 70., 28.), language, !closing) {
             self.english = !self.english;
             crate::locale::set_english(self.english);
         }
@@ -605,7 +612,11 @@ impl WriterView {
         let mut y = y + height;
         if let Some((port, baud, firmware)) = c.connected_device() {
             f.canvas.ellipsis(
-                &format!("已连接 · {}", firmware.unwrap_or("固件未报告型号")),
+                &format!(
+                    "{} · {}",
+                    crate::locale::text("已连接"),
+                    firmware.unwrap_or(crate::locale::text("固件未报告型号"))
+                ),
                 x,
                 y + 41.,
                 w,
@@ -696,10 +707,10 @@ impl WriterView {
             }
         }
         if self.aligning() {
-            f.canvas
-                .ellipsis(&c.status, x, y + 350., w, 13, false, MUTED);
+            f.status(705, Rect::new(x, y + 345., w, 26.), &c.status);
             return;
         }
+        f.canvas.line((x, y + 353.), (x + w, y + 353.), 1., RULE);
         f.heading("手动调节", x, y + 369.);
         f.field(
             6,
@@ -797,17 +808,11 @@ impl WriterView {
         let list = &mut self.picker;
         let count = list.candidates.len();
         let open = if list.expanded { "▾" } else { "▸" };
-        let title = format!("{open} USB 设备 ({count})");
+        let title = format!("{open} {} ({count})", crate::locale::text("USB 设备"));
         if f.button(90, Rect::new(x, y, w - 76., 32.), &title, false, count > 0) {
             list.expanded = !list.expanded;
         }
-        if f.button(
-            91,
-            Rect::new(x + w - 68., y, 68., 32.),
-            "扫描",
-            false,
-            !closing,
-        ) {
+        if f.quiet_button(91, Rect::new(x + w - 68., y, 68., 32.), "扫描", !closing) {
             list.update(devices::discover(), &mut c.form.port, editing);
             list.expanded = true;
         }
@@ -827,17 +832,21 @@ impl WriterView {
                 let selected = c.form.port == device.path;
                 let top = y + 40. + row as f32 * DEVICE_ROW;
                 let rect = Rect::new(x, top, w, DEVICE_ROW - 6.);
-                if f.button(100 + i as u64, rect, "", selected, editing) {
+                if selected {
+                    f.canvas.rect(rect, 8., colors::BLUE_PALE);
+                    f.canvas.rect(
+                        Rect::new(rect.x, rect.y + 8., 3., rect.h - 16.),
+                        1.5,
+                        colors::BLUE,
+                    );
+                }
+                if editing && f.quiet_button(100 + i as u64, rect, "", true) {
                     c.form.port.clone_from(&device.path);
                     list.edited = true;
                     list.automatic = None;
                 }
-                let ink = if selected && editing { 0xffffffff } else { INK };
-                let secondary = if selected && editing {
-                    0xddddddff
-                } else {
-                    MUTED
-                };
+                let ink = INK;
+                let secondary = MUTED;
                 let label = if selected {
                     format!("✓ {}", device.label)
                 } else {
@@ -906,14 +915,20 @@ impl WriterView {
         editing: bool,
     ) -> bool {
         let (x, y, w) = (area.x, area.y, area.w);
-        let text_w = if stacked { w } else { w * 0.60 };
-        let font_x = if stacked { x } else { x + text_w };
+        let text_w = if stacked { w } else { (w - 8.) * 0.58 };
+        let font_x = if stacked { x } else { x + text_w + 8. };
         let font_y = if stacked { y + 106. } else { y + 41. };
+        let font_w = x + w - font_x;
+        let button_width = |canvas: &mut Canvas<'_>, label: &str, group: f32| {
+            (canvas.measure(crate::locale::text(label), 14, false) + 26.).min(group * 0.56)
+        };
+        let edit_w = button_width(f.canvas, "编辑文章", text_w);
+        let library_w = button_width(f.canvas, "字体库", font_w);
         let mut changed = f.field(
             30,
             x,
             y + 41.,
-            if stacked { w - 90. } else { text_w - 98. },
+            (text_w - edit_w - 8.).max(0.),
             "文字",
             &mut c.form.text,
             "输入要书写的文字",
@@ -921,12 +936,7 @@ impl WriterView {
         );
         if f.button(
             33,
-            Rect::new(
-                x + if stacked { w } else { text_w - 8. } - 82.,
-                y + 62.,
-                82.,
-                34.,
-            ),
+            Rect::new(x + text_w - edit_w, y + 62., edit_w, 34.),
             "编辑文章",
             false,
             editing,
@@ -937,7 +947,7 @@ impl WriterView {
             31,
             font_x,
             font_y,
-            x + w - font_x - 88.,
+            (font_w - library_w - 8.).max(0.),
             "单线字体",
             &mut c.form.font,
             "builtin",
@@ -945,7 +955,7 @@ impl WriterView {
         );
         if f.button(
             32,
-            Rect::new(x + w - 80., font_y + 21., 80., 34.),
+            Rect::new(x + w - library_w, font_y + 21., library_w, 34.),
             "字体库",
             false,
             editing,
@@ -1035,39 +1045,52 @@ impl WriterView {
         ] = variation;
         Ok(())
     }
-    fn writing(
-        &mut self,
-        f: &mut Frame<'_, '_>,
-        c: &mut Controller,
-        x: f32,
-        y: f32,
-        w: f32,
-        closing: bool,
-    ) {
+    fn writing_height(width: f32, advanced: bool) -> f32 {
+        WritingLayout::new(Rect::new(0., 0., width, 0.), advanced).minimum_height
+    }
+
+    fn writing(&mut self, f: &mut Frame<'_, '_>, c: &mut Controller, area: Rect, closing: bool) {
+        let (x, y, w) = (area.x, area.y, area.w);
         let editing = !c.busy() && !closing;
-        f.heading("书写内容", x, y);
+        let layout = WritingLayout::new(area, self.advanced);
+        let switch_label = if self.advanced {
+            "书写参数"
+        } else {
+            "纸张与字迹"
+        };
+        let switch_width = (f
+            .canvas
+            .measure(crate::locale::text(switch_label), 14, false)
+            + 26.)
+            .min(w * 0.55);
+        f.canvas.ellipsis(
+            crate::locale::text("书写内容"),
+            x,
+            y,
+            (w - switch_width - 8.).max(0.),
+            21,
+            true,
+            INK,
+        );
         if f.button(
             35,
-            Rect::new(x + w - 110., y - 2., 110., 32.),
-            if self.advanced {
-                "书写参数"
-            } else {
-                "纸张与字迹"
-            },
+            Rect::new(x + w - switch_width, y - 2., switch_width, 32.),
+            switch_label,
             false,
             editing,
         ) {
             self.advanced = !self.advanced;
+            return;
         }
-        let mut changed = self.text_font(f, c, Rect::new(x, y, w, 0.), false, editing);
-        let pw = (w - 16.) / 3.;
+        let mut changed = self.text_font(f, c, area, layout.stack_text, editing);
         if self.advanced {
             for (i, label) in MAP_LABELS.iter().enumerate() {
+                let field = layout.parameter(i);
                 changed |= f.field(
                     200 + i as u64,
-                    x + (i % 3) as f32 * (pw + 8.),
-                    y + 114. + (i / 3) as f32 * 66.,
-                    pw,
+                    field.x,
+                    field.y,
+                    field.w,
                     label,
                     &mut self.mapping[i],
                     "",
@@ -1083,35 +1106,31 @@ impl WriterView {
             .enumerate()
             {
                 let label = format!("{label} · {}", if *value { "开" } else { "关" });
-                if f.button(
-                    220 + i as u64,
-                    Rect::new(x + i as f32 * (pw + 8.), y + 380., pw, 34.),
-                    &label,
-                    *value,
-                    editing,
-                ) {
+                if f.button(220 + i as u64, layout.flip(i), &label, *value, editing) {
                     *value = !*value;
                     changed = true;
                 }
             }
         } else {
-            for (i, label) in LABELS.iter().take(8).enumerate() {
+            for (i, label) in LABELS.iter().enumerate() {
+                let field = layout.parameter(i);
                 changed |= f.field(
                     40 + i as u64,
-                    x + (i % 3) as f32 * (pw + 8.),
-                    y + 114. + (i / 3) as f32 * 66.,
-                    pw,
+                    field.x,
+                    field.y,
+                    field.w,
                     label,
                     &mut self.geometry[i],
                     "",
                     editing,
                 );
             }
+            let field = layout.parameter(LABELS.len());
             changed |= f.field(
                 48,
-                x + 2. * (pw + 8.),
-                y + 246.,
-                pw,
+                field.x,
+                field.y,
+                field.w,
                 "随机种子",
                 &mut self.seed,
                 "0",
@@ -1121,22 +1140,32 @@ impl WriterView {
         if changed {
             self.dirty(c);
         }
+        let preview_title = layout.preview.y - 46.;
         if self.show_origin_hint && !self.advanced {
             f.canvas.ellipsis(
-                "起点 X/Y 请留在纸面内，默认轴向从 X 最小、Y 最大处向内留边。",
+                crate::locale::text("起点 X/Y 请留在纸面内，默认轴向从 X 最小、Y 最大处向内留边。"),
                 x,
-                y + 306.,
+                preview_title - 25.,
                 w,
                 13,
                 false,
                 MUTED,
             );
         }
-        let y = y + if self.advanced { 121. } else { 0. };
-        f.heading("笔迹预览", x, y + 331.);
+        let update_width =
+            (f.canvas.measure(crate::locale::text("更新预览"), 14, false) + 26.).min(w * 0.5);
+        f.canvas.ellipsis(
+            crate::locale::text("笔迹预览"),
+            x,
+            preview_title,
+            (w - update_width - 8.).max(0.),
+            21,
+            true,
+            INK,
+        );
         if f.button(
             50,
-            Rect::new(x + w - 110., y + 327., 110., 34.),
+            Rect::new(x + w - update_width, preview_title - 4., update_width, 34.),
             "更新预览",
             false,
             editing,
@@ -1149,13 +1178,10 @@ impl WriterView {
                 }
             }
         }
-        let area = Rect::new(x, y + 377., w, 304.);
-        paint_page(f.canvas, area, &c.form, &c.strokes);
-        let y = y + 152.;
-        let third = (w - 16.) / 3.;
+        paint_page(f.canvas, layout.preview, &c.form, &c.strokes);
         if f.button(
             53,
-            Rect::new(x, y + 548., third, 39.),
+            layout.action(0),
             "校验程序",
             false,
             editing && c.connected() && !c.gcode.is_empty(),
@@ -1164,7 +1190,7 @@ impl WriterView {
         }
         if f.button(
             51,
-            Rect::new(x + third + 8., y + 548., third, 39.),
+            layout.action(1),
             "发送到写字机",
             true,
             editing && c.connected() && !c.gcode.is_empty(),
@@ -1184,11 +1210,16 @@ impl WriterView {
         } else {
             "取消作业"
         };
-        if f.button(
+        if f.ui.button(
+            f.canvas,
             52,
-            Rect::new(x + 2. * (third + 8.), y + 548., third, 39.),
-            label,
-            confirm,
+            layout.action(2),
+            crate::locale::text(label),
+            if c.busy() {
+                ButtonStyle::Danger
+            } else {
+                ButtonStyle::Secondary
+            },
             c.busy() && !closing && (c.owns_job() || target.is_some()),
         ) {
             if c.owns_job() || (confirm && target == self.confirm_cancel) {
@@ -1202,18 +1233,17 @@ impl WriterView {
         f.field(
             81,
             x,
-            y + 630.,
-            w - 174.,
+            layout.file_y,
+            if layout.stack_file { w } else { w - 174. },
             "文本或 G-code 文件",
             &mut self.file_path,
             "输入文件路径",
             editing,
         );
-        if f.button(
+        if f.quiet_button(
             83,
-            Rect::new(x + w - 166., y + 651., 72., 34.),
+            layout.file_button(0),
             "读文本",
-            false,
             editing && !self.file_path.trim().is_empty(),
         ) {
             match read_article(self.file_path.trim()) {
@@ -1224,11 +1254,10 @@ impl WriterView {
                 Err(error) => self.notice = error,
             }
         }
-        if f.button(
+        if f.quiet_button(
             82,
-            Rect::new(x + w - 86., y + 651., 86., 34.),
+            layout.file_button(1),
             "导出",
-            false,
             editing && !c.gcode.is_empty() && !self.file_path.trim().is_empty(),
         ) {
             self.act(c, Action::Export(self.file_path.trim().into()));
@@ -1238,7 +1267,97 @@ impl WriterView {
         } else {
             &self.notice
         };
-        f.canvas.ellipsis(status, x, y + 600., w, 14, false, MUTED);
+        f.status(84, Rect::new(x, layout.file_y - 31., w, 26.), status);
+    }
+}
+
+/// The form, actions and file row use their natural height. The paper preview
+/// occupies the space left between them, including any extra window height.
+struct WritingLayout {
+    area: Rect,
+    stack_text: bool,
+    parameters: GridLayout,
+    flips: GridLayout,
+    preview: Rect,
+    actions: GridLayout,
+    file_y: f32,
+    stack_file: bool,
+    minimum_height: f32,
+}
+
+impl WritingLayout {
+    fn new(area: Rect, advanced: bool) -> Self {
+        let stack_text = area.w < 500.;
+        let stack_file = area.w < 385.;
+        let row = |y| Rect::new(area.x, y, area.w, area.h);
+        let parameters_y = area.y + if stack_text { 179. } else { 114. };
+        let parameters = GridLayout::new(row(parameters_y), 134., 3, 8.);
+        let count = if advanced {
+            MAP_LABELS.len()
+        } else {
+            LABELS.len() + 1
+        };
+        let fields_end = parameters_y + parameters.height(count, 58.) + 8.;
+        let flips_y = fields_end + 2.;
+        let flips = GridLayout::new(row(flips_y), 134., 3, 8.);
+        let heading_y = if advanced {
+            flips_y + flips.height(3, 34.) + 38.
+        } else {
+            fields_end + 19.
+        };
+        let preview_y = heading_y + 46.;
+        let actions_grid = |y| GridLayout::new(row(y), 170., 3, 8.);
+        let actions_height = actions_grid(0.).height(3, 39.);
+        let file_height = if stack_file { 97. } else { 55. };
+        let footer = 16. + actions_height + 10. + 26. + file_height;
+        let minimum_height = preview_y - area.y + 180. + footer;
+        let preview_height = 180. + (area.h - minimum_height).max(0.);
+        let preview = Rect::new(area.x, preview_y, area.w, preview_height);
+        let actions_y = preview_y + preview_height + 16.;
+        let actions = actions_grid(actions_y);
+        let file_y = actions_y + actions_height + 36.;
+        Self {
+            area,
+            stack_text,
+            parameters,
+            flips,
+            preview,
+            actions,
+            file_y,
+            stack_file,
+            minimum_height,
+        }
+    }
+
+    fn parameter(&self, index: usize) -> Rect {
+        self.parameters.cell(index, 58.)
+    }
+
+    fn flip(&self, index: usize) -> Rect {
+        self.flips.cell(index, 34.)
+    }
+
+    fn action(&self, index: usize) -> Rect {
+        let mut button = self.actions.cell(index, 39.);
+        if self.actions.columns() == 2 && index == 2 {
+            button.w = self.area.w;
+        }
+        button
+    }
+
+    fn file_button(&self, index: usize) -> Rect {
+        if self.stack_file {
+            let row = Rect::new(self.area.x, self.file_y + 63., self.area.w, 34.);
+            GridLayout::new(row, 80., 2, 8.).cell(index, 34.)
+        } else {
+            let (offset, width) = if index == 0 { (166., 72.) } else { (86., 86.) };
+            Rect::new(
+                self.area.x + self.area.w - offset,
+                self.file_y + 21.,
+                width,
+                34.,
+            )
+        }
     }
 }
 
@@ -1299,7 +1418,8 @@ impl Frame<'_, '_> {
         hint: &str,
         enabled: bool,
     ) -> bool {
-        self.caption(label, x, y);
+        self.canvas
+            .ellipsis(crate::locale::text(label), x, y, w, 13, false, MUTED);
         self.ui.input(
             self.canvas,
             id,
@@ -1310,6 +1430,32 @@ impl Frame<'_, '_> {
             enabled,
         )
     }
+    fn status(&mut self, id: u64, area: Rect, text: &str) {
+        let mut available = area.w;
+        if self.canvas.measure(text, 14, false) > area.w {
+            let label = crate::locale::text("复制状态");
+            let width = self.canvas.measure(label, 15, false) + 20.;
+            available = (area.w - width - 8.).max(0.);
+            let button = Rect::new(area.x + area.w - width, area.y, width, area.h);
+            if self.quiet_button(id, button, "复制状态", true) {
+                self.ui.clipboard = Some(text.to_owned());
+            }
+        }
+        self.canvas
+            .ellipsis(text, area.x, area.y + 5., available, 14, false, MUTED);
+    }
+
+    pub(crate) fn quiet_button(&mut self, id: u64, rect: Rect, label: &str, enabled: bool) -> bool {
+        self.ui.button(
+            self.canvas,
+            id,
+            rect,
+            crate::locale::text(label),
+            ButtonStyle::Quiet,
+            enabled,
+        )
+    }
+
     pub(crate) fn button(
         &mut self,
         id: u64,
@@ -1340,20 +1486,30 @@ fn paint_page(canvas: &mut Canvas<'_>, area: Rect, form: &Form, strokes: &[Vec<(
         paint_strokes(canvas, area, strokes);
         return;
     }
-    canvas.rect(area, 8., 0xf1f3f4ff);
+    // The surrounding workspace follows the UI palette. The sheet, guides and
+    // ink represent physical materials and keep their colors across themes.
+    const SHEET: u32 = 0xfffdf7ff;
+    const GRAPHITE: u32 = 0x272b2cff;
+    const MARGIN_GUIDE: u32 = 0x8c9086ff;
+    canvas.rect(area, 8., PAPER);
     let zoom = ((area.w - 42.) / width).min((area.h - 48.) / height);
     let page = Rect::new(
         area.x + (area.w - width * zoom) / 2.,
-        area.y + 18.,
+        area.y + 18. + (area.h - 48. - height * zoom).max(0.) * 0.5,
         width * zoom,
         height * zoom,
     );
     canvas.rect(
-        Rect::new(page.x + 3., page.y + 3., page.w, page.h),
-        2.,
-        0xe8eaedff,
+        Rect::new(page.x - 1., page.y + 2., page.w + 2., page.h + 2.),
+        3.,
+        0x17211b16,
     );
-    canvas.rect(page, 2., 0xffffffff);
+    canvas.rect(
+        Rect::new(page.x - 0.7, page.y - 0.7, page.w + 1.4, page.h + 1.4),
+        2.,
+        0x27312b29,
+    );
+    canvas.rect(page, 1.5, SHEET);
     let [left, top, right, bottom] = form.margins.map(|n| n as f32 * zoom);
     let (x0, y0, x1, y1) = (
         page.x + left,
@@ -1367,7 +1523,7 @@ fn paint_page(canvas: &mut Canvas<'_>, area: Rect, form: &Form, strokes: &[Vec<(
         ((x1, y1), (x0, y1)),
         ((x0, y1), (x0, y0)),
     ] {
-        canvas.line(a, b, 0.7, RULE);
+        canvas.line(a, b, 1., MARGIN_GUIDE);
     }
     let point = |(x, y): (f64, f64)| {
         let dx = (x - form.x) * if form.flip_x { -1. } else { 1. };
@@ -1381,7 +1537,7 @@ fn paint_page(canvas: &mut Canvas<'_>, area: Rect, form: &Form, strokes: &[Vec<(
     canvas.clip(page);
     for stroke in strokes {
         for segment in stroke.windows(2) {
-            canvas.line(point(segment[0]), point(segment[1]), 1.3, INK);
+            canvas.line(point(segment[0]), point(segment[1]), 1.45, GRAPHITE);
         }
     }
     canvas.unclip();
@@ -1403,7 +1559,7 @@ fn paint_page(canvas: &mut Canvas<'_>, area: Rect, form: &Form, strokes: &[Vec<(
 }
 
 fn paint_strokes(canvas: &mut Canvas<'_>, area: Rect, strokes: &[Vec<(f64, f64)>]) {
-    canvas.rect(area, 7., PAPER);
+    canvas.rect(area, 8., PAPER);
     let mut bounds = [
         f64::INFINITY,
         f64::INFINITY,
@@ -1420,7 +1576,17 @@ fn paint_strokes(canvas: &mut Canvas<'_>, area: Rect, strokes: &[Vec<(f64, f64)>
     }
     let [left, top, right, bottom] = bounds;
     if !left.is_finite() {
-        canvas.text("等待预览", area.x + 18., area.y + 16., 15, false, MUTED);
+        let label = crate::locale::text("等待预览");
+        let label_width = canvas.measure(label, 15, false);
+        canvas.ellipsis(
+            label,
+            area.x + ((area.w - label_width) * 0.5).max(14.),
+            area.y + area.h * 0.5 - 9.,
+            (area.w - 28.).max(0.),
+            15,
+            false,
+            MUTED,
+        );
         return;
     }
     let mut rect = area.inset(18.);

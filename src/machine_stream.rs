@@ -1235,9 +1235,8 @@ fn transmit<P: Port>(
     })();
     if let Err(error) = stream {
         if attempted_motion && cancel.is_cancelled() {
-            let stop = hold_incomplete_motion(c.port).unwrap_or_else(
-                |_| "controller stop could not be verified; stop the machine locally",
-            );
+            let stop = hold_incomplete_motion(c.port)
+                .unwrap_or("controller stop could not be verified; stop the machine locally");
             return Err(format!("{error}; {stop}"));
         }
         return Err(format!(

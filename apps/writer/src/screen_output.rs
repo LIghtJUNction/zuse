@@ -1,12 +1,9 @@
 //! Screen-coordinate handwriting, sharing the named session's submission and cancellation path.
 use crate::controller::{Action, Controller, Form};
 use std::time::{Duration, Instant};
-use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
+use zgpui::native::{ButtonStyle, Canvas, GridLayout, Rect, Ui, colors};
 use zuse::{json, pen_input};
 
-const INK: u32 = 0x202124ff;
-const MUTED: u32 = 0x5f6368ff;
-const PAPER: u32 = 0xf6f6f3ff;
 const DELAY: Duration = Duration::from_secs(3);
 type Strokes = Vec<Vec<(f64, f64)>>;
 
@@ -270,9 +267,49 @@ pub struct ScreenOutput {
     notice: String,
 }
 
+struct ScreenLayout {
+    targets: GridLayout,
+    fields: GridLayout,
+    actions: GridLayout,
+    preview: Rect,
+    minimum_height: f32,
+}
+
+impl ScreenLayout {
+    const TARGET_H: f32 = 32.;
+    const FIELD_H: f32 = 52.;
+    const ACTION_H: f32 = 34.;
+
+    fn new(area: Rect) -> Self {
+        let grid = |y, min_width, columns| {
+            GridLayout::new(Rect::new(area.x, y, area.w, area.h), min_width, columns, 8.)
+        };
+        let targets = GridLayout::new(
+            Rect::new(area.x, area.y, area.w.min(376.), area.h),
+            100.,
+            3,
+            8.,
+        );
+        let fields_y = area.y + targets.height(3, Self::TARGET_H) + 12.;
+        let fields = grid(fields_y, 139., 3);
+        let actions_y = fields_y + fields.height(6, Self::FIELD_H) + 8.;
+        let actions = grid(actions_y, 156., 2);
+        let preview_y = actions_y + actions.height(2, Self::ACTION_H) + 12.;
+        let minimum_height = preview_y - area.y + 164. + 40.;
+        let preview_h = 164. + (area.h - minimum_height).max(0.);
+        Self {
+            targets,
+            fields,
+            actions,
+            preview: Rect::new(area.x, preview_y, area.w, preview_h),
+            minimum_height,
+        }
+    }
+}
+
 impl ScreenOutput {
     pub fn height(&self, width: f32) -> f32 {
-        if width < 450. { 474. } else { 414. }
+        ScreenLayout::new(Rect::new(0., 0., width, 0.)).minimum_height
     }
     pub fn needs_tick(&self) -> bool {
         self.due.is_some()
@@ -383,24 +420,22 @@ impl ScreenOutput {
         closing: bool,
     ) {
         self.settle(c);
-        let narrow = area.w < 450.;
-        let x = area.x;
-        let mut y = area.y;
-        let w = area.w;
+        let layout = ScreenLayout::new(area);
         let editable = !closing && !c.busy() && self.due.is_none() && self.pending.is_none();
         let targets = [Output::Mouse, Output::Touchscreen, Output::Touchpad];
-        let tw = (w - 16.) / 3.;
         for (i, target) in targets.into_iter().enumerate() {
-            let style = if self.target == target {
-                ButtonStyle::Primary
-            } else {
+            let selected = self.target == target;
+            let cell = layout.targets.cell(i, ScreenLayout::TARGET_H);
+            let style = if selected {
                 ButtonStyle::Secondary
+            } else {
+                ButtonStyle::Quiet
             };
             if ui.button(
                 canvas,
                 2700 + i as u64,
-                Rect::new(x + i as f32 * (tw + 8.), y, tw, 32.),
-                target.label(),
+                cell,
+                crate::locale::text(target.label()),
                 style,
                 editable,
             ) && self.target != target
@@ -409,10 +444,21 @@ impl ScreenOutput {
                 self.preview = None;
                 self.notice.clear();
             }
+            if selected {
+                let mid = cell.x + cell.w / 2.;
+                let y = cell.y + cell.h - 4.;
+                canvas.line(
+                    (mid - 10., y),
+                    (mid + 10., y),
+                    2.,
+                    if editable {
+                        colors::BLUE
+                    } else {
+                        colors::MUTED
+                    },
+                );
+            }
         }
-        y += 44.;
-        let cols = if narrow { 2 } else { 3 };
-        let fw = (w - (cols - 1) as f32 * 10.) / cols as f32;
         let show_size = self.target != Output::Mouse;
         let inputs = [
             ("起点 X · px", &mut self.fields.x, true),
@@ -423,20 +469,26 @@ impl ScreenOutput {
             ("触摸面高 · px", &mut self.fields.height, show_size),
         ];
         for (i, (label, value, enabled)) in inputs.into_iter().enumerate() {
-            let xx = x + (i % cols) as f32 * (fw + 10.);
-            let yy = y + (i / cols) as f32 * 60.;
-            canvas.text(label, xx, yy, 13, false, MUTED);
+            let cell = layout.fields.cell(i, ScreenLayout::FIELD_H);
+            canvas.ellipsis(
+                crate::locale::text(label),
+                cell.x,
+                cell.y,
+                cell.w,
+                13,
+                false,
+                colors::MUTED,
+            );
             ui.input(
                 canvas,
                 2710 + i as u64,
-                Rect::new(xx, yy + 20., fw, 32.),
+                Rect::new(cell.x, cell.y + 20., cell.w, cell.h - 20.),
                 value,
                 "",
                 false,
                 editable && enabled,
             );
         }
-        y += (6 / cols) as f32 * 60.;
         let plan = Plan::new(&c.form, &self.fields, self.target);
         if self
             .preview
@@ -446,12 +498,11 @@ impl ScreenOutput {
             self.preview = None;
             self.notice = "参数已更改，请重新预览".into();
         }
-        let side = (w - 8.) / 2.;
         if ui.button(
             canvas,
             2720,
-            Rect::new(x, y, side, 34.),
-            "预览屏幕笔迹",
+            layout.actions.cell(0, ScreenLayout::ACTION_H),
+            crate::locale::text("预览屏幕笔迹"),
             ButtonStyle::Secondary,
             editable,
         ) {
@@ -479,8 +530,8 @@ impl ScreenOutput {
         if ui.button(
             canvas,
             2721,
-            Rect::new(x + side + 8., y, side, 34.),
-            send_label,
+            layout.actions.cell(1, ScreenLayout::ACTION_H),
+            crate::locale::text(send_label),
             ButtonStyle::Primary,
             !closing && (active || own_send || (editable && self.preview.is_some())),
         ) {
@@ -494,14 +545,12 @@ impl ScreenOutput {
         }
         // Process the cancel button before servicing a deadline on this frame.
         self.update_timer(c, plan.as_ref().ok(), closing, Instant::now());
-        y += 46.;
-        let preview_area = Rect::new(x, y, w, 164.);
+        let preview = layout.preview;
         paint(
             canvas,
-            preview_area,
+            preview,
             self.preview.as_ref().map(|p| p.strokes.as_slice()),
         );
-        y += 176.;
         let message = if let Some(due) = self.due {
             match countdown(due, Instant::now()) {
                 Timer::Waiting(s) => format!("{s} 秒后发送，请切换到目标画布"),
@@ -516,20 +565,41 @@ impl ScreenOutput {
         } else {
             self.notice.clone()
         };
-        canvas.ellipsis(&message, x, y, w, 14, false, MUTED);
+        let message = crate::locale::text(&message);
+        let y = preview.y + preview.h + 12.;
+        let mut text_width = preview.w;
+        if canvas.measure(message, 14, false) > preview.w {
+            let label = crate::locale::text("复制状态");
+            let copy_width = (canvas.measure(label, 14, false) + 24.).min(preview.w);
+            text_width = (preview.w - copy_width - 8.).max(0.);
+            if ui.button(
+                canvas,
+                2722,
+                Rect::new(preview.x + preview.w - copy_width, y - 5., copy_width, 27.),
+                label,
+                ButtonStyle::Quiet,
+                !closing,
+            ) {
+                ui.clipboard = Some(message.to_owned());
+            }
+        }
+        canvas.ellipsis(message, preview.x, y, text_width, 14, false, colors::MUTED);
     }
 }
 
 fn paint(canvas: &mut Canvas<'_>, area: Rect, strokes: Option<&[Vec<(f64, f64)>]>) {
-    canvas.rect(area, 7., PAPER);
+    canvas.rect(area, 8., colors::LINE);
+    canvas.rect(area.inset(1.), 7., colors::BG);
     let Some(strokes) = strokes else {
+        let label = crate::locale::text("等待屏幕笔迹预览");
+        let width = canvas.measure(label, 14, false);
         canvas.text(
-            "等待屏幕笔迹预览",
-            area.x + 14.,
-            area.y + 12.,
+            label,
+            area.x + ((area.w - width) / 2.).max(12.),
+            area.y + (area.h - 16.) / 2.,
             14,
             false,
-            MUTED,
+            colors::MUTED,
         );
         return;
     };
@@ -562,11 +632,11 @@ fn paint(canvas: &mut Canvas<'_>, area: Rect, strokes: Option<&[Vec<(f64, f64)>]
     canvas.clip(area);
     for stroke in strokes {
         for p in stroke.windows(2) {
-            canvas.line(xy(p[0]), xy(p[1]), 1.6, INK);
+            canvas.line(xy(p[0]), xy(p[1]), 1.6, colors::TEXT);
         }
         if let [p] = stroke.as_slice() {
             let (x, y) = xy(*p);
-            canvas.rect(Rect::new(x - 0.8, y - 0.8, 1.6, 1.6), 0.8, INK);
+            canvas.rect(Rect::new(x - 0.8, y - 0.8, 1.6, 1.6), 0.8, colors::TEXT);
         }
     }
     canvas.unclip();

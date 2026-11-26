@@ -116,3 +116,23 @@
 保持当前 XY，只沿 Z 轴低速定位。	Keep the current XY position and move only along Z at low speed.
 编辑文章	Edit article
 应用文章	Apply text
+复制状态	Copy status
+USB 设备	USB devices
+固件未报告型号	Firmware model unavailable
+等待预览	Waiting for preview
+等待屏幕笔迹预览	Waiting for screen preview
+鼠标	Mouse
+触摸屏	Touchscreen
+虚拟触摸板	Touchpad
+起点 X · px	X origin · px
+起点 Y · px	Y origin · px
+比例 · px/字形单位	Scale · px/glyph unit
+笔点间隔 · ms	Point interval · ms
+触摸面宽 · px	Surface width · px
+触摸面高 · px	Surface height · px
+预览屏幕笔迹	Preview strokes
+发送到画布	Send to canvas
+取消倒计时	Cancel timer
+停止屏幕输入	Stop output
+发送前有 3 秒切换到目标画布	Switch to the target canvas within 3 seconds of sending.
+触摸板发送间接触点，指针映射由系统决定	The system maps touchpad contacts to pointer movement.

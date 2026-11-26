@@ -11,6 +11,8 @@ pub(crate) struct FontPicker {
     path: String,
     name: String,
     mixed: bool,
+    scroll_y: f32,
+    max_scroll: f32,
     notice: String,
     installing: Option<Receiver<Result<String, String>>>,
 }
@@ -23,6 +25,8 @@ impl FontPicker {
             path: String::new(),
             name: String::new(),
             mixed: current.contains(','),
+            scroll_y: 0.,
+            max_scroll: 0.,
             notice: String::new(),
             installing: None,
         };
@@ -50,6 +54,10 @@ impl FontPicker {
         self.installing.is_some()
     }
 
+    pub(crate) fn scroll(&mut self, delta: i32) {
+        self.scroll_y = (self.scroll_y + delta.signum() as f32 * 56.).clamp(0., self.max_scroll);
+    }
+
     fn poll(&mut self) {
         let Some(receiver) = &self.installing else {
             return;
@@ -67,13 +75,21 @@ impl FontPicker {
     /// Returns true when the browser should return to the writing workspace.
     pub(crate) fn draw(&mut self, frame: &mut Frame<'_, '_>, area: Rect, form: &mut Form) -> bool {
         self.poll();
-        let Rect { x, y, w, .. } = area;
+        let Rect { x, w, h, .. } = area;
+        // Keep the pager stable across pages without reserving eight empty rows.
+        let pager_top = 162. + 36. * self.fonts.len().min(PER_PAGE) as f32;
+        let input_top = pager_top + 54.;
+        let stacked = w < 490.;
+        let name_top = input_top + if stacked { 65. } else { 0. };
+        let notice_top = name_top + 78.;
+        self.max_scroll = (notice_top + 30. - h).max(0.);
+        self.scroll_y = self.scroll_y.min(self.max_scroll);
+        let y = area.y - self.scroll_y;
         frame.heading("字体库", x, y);
-        if frame.button(
+        if frame.quiet_button(
             600,
             Rect::new(x + w - 112., y - 3., 112., 34.),
             "返回书写",
-            true,
             !self.pending(),
         ) {
             return true;
@@ -121,13 +137,14 @@ impl FontPicker {
             .enumerate()
         {
             let selected = form.font.split(',').any(|entry| entry.trim() == name);
-            if frame.button(
-                610 + i as u64,
-                Rect::new(x, y + 159. + i as f32 * 36., w, 32.),
-                name,
-                selected,
-                true,
-            ) {
+            let id = 610 + i as u64;
+            let row = Rect::new(x, y + 159. + i as f32 * 36., w, 32.);
+            let clicked = if selected {
+                frame.button(id, row, &format!("✓  {name}"), false, true)
+            } else {
+                frame.quiet_button(id, row, name, true)
+            };
+            if clicked {
                 if !self.mixed {
                     form.font.clone_from(name);
                     return true;
@@ -147,21 +164,14 @@ impl FontPicker {
                 };
             }
         }
-        let pager = y + 450.;
-        if frame.button(
-            620,
-            Rect::new(x, pager, 80., 32.),
-            "上一页",
-            false,
-            self.page > 0,
-        ) {
+        let pager = y + pager_top;
+        if frame.quiet_button(620, Rect::new(x, pager, 80., 32.), "上一页", self.page > 0) {
             self.page -= 1;
         }
-        if frame.button(
+        if frame.quiet_button(
             621,
             Rect::new(x + 88., pager, 80., 32.),
             "下一页",
-            false,
             self.page + 1 < self.pages(),
         ) {
             self.page += 1;
@@ -173,11 +183,12 @@ impl FontPicker {
             w - 180.,
         );
         let can_import = !self.pending();
-        let input_w = (w - 148.) / 2.;
+        let input_w = if stacked { w } else { (w - 148.) / 2. };
+        let name_w = if stacked { w - 140. } else { input_w };
         frame.field(
             630,
             x,
-            y + 504.,
+            y + input_top,
             input_w,
             "本地 .zfont 文件",
             &mut self.path,
@@ -186,9 +197,9 @@ impl FontPicker {
         );
         frame.field(
             631,
-            x + input_w + 8.,
-            y + 504.,
-            input_w,
+            if stacked { x } else { x + input_w + 8. },
+            y + name_top,
+            name_w,
             "字体名称",
             &mut self.name,
             "my-font",
@@ -196,7 +207,7 @@ impl FontPicker {
         );
         if frame.button(
             632,
-            Rect::new(x + w - 128., y + 525., 128., 34.),
+            Rect::new(x + w - 128., y + name_top + 21., 128., 34.),
             "导入自定义字体",
             false,
             !self.pending() && !self.name.trim().is_empty() && !self.path.trim().is_empty(),
@@ -210,7 +221,7 @@ impl FontPicker {
                 Err(error) => self.notice = error,
             }
         }
-        frame.note(&self.notice, x, y + 582., w);
+        frame.note(&self.notice, x, y + notice_top, w);
         false
     }
 }

@@ -11,9 +11,40 @@ mod workspace_wizard;
 
 use controller::{Action, Controller};
 use view::WriterView;
-use zgpui::native::{Event, Palette, Theme, Ui, Window};
+use zgpui::native::{Event, Palette, Theme, Ui, Window, colors};
 
 const HELP: &str = "Zuse Writer · 写字机\n\nzuse-writer          打开书写页\nzuse-writer --align  打开行程与装笔向导，记录机台范围和纸面高度";
+fn writer_palette(dark: bool) -> Palette {
+    let mut p = Palette::for_theme(if dark { Theme::Dark } else { Theme::Light });
+    if dark {
+        p.background = 0x191d23ff;
+        p.surface = 0x23282fff;
+        p.text = 0xe6ebf2ff;
+        p.muted = 0xa8b4c2ff;
+        p.line = 0x3b434dff;
+        p.accent = 0x9bbdffff;
+        p.accent_hover = 0xb8d0ffff;
+        p.accent_soft = 0x293e5dff;
+        p.hover = 0x303841ff;
+        p.on_accent = 0x142a46ff;
+        p.disabled_surface = 0x2b3139ff;
+        p.disabled_text = 0x88929fff;
+    } else {
+        p.background = 0xf3f5f8ff;
+        p.surface = 0xffffffff;
+        p.text = 0x212832ff;
+        p.muted = 0x586472ff;
+        p.line = 0xdce2e9ff;
+        p.accent = 0x285fc7ff;
+        p.accent_hover = 0x1c4faeff;
+        p.accent_soft = 0xe7efffff;
+        p.hover = 0xebeff5ff;
+        p.disabled_surface = 0xedf0f4ff;
+        p.disabled_text = 0x788391ff;
+    }
+    p
+}
+
 fn main() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     let align = match (args.next(), args.next()) {
@@ -26,6 +57,7 @@ fn main() -> Result<(), String> {
         _ => return Err(HELP.into()),
     };
     let mut window = Window::new("Zuse Writer · 写字机", 1120, 820)?;
+    window.set_min_size(320, 240)?;
     let mut controller = Controller::default();
     let mut view = WriterView::new(&mut controller, align);
     let mut ui = Ui::default();
@@ -97,12 +129,8 @@ fn main() -> Result<(), String> {
             let had_input = event.is_some();
             let previous_screen = view.screen();
             ui.begin(event.take());
-            window.set_palette(Palette::for_theme(if view.dark() {
-                Theme::Dark
-            } else {
-                Theme::Light
-            }));
-            let mut canvas = window.begin(0xffffffff);
+            window.set_palette(writer_palette(view.dark()));
+            let mut canvas = window.begin(colors::BG);
             view.draw(&mut canvas, &mut ui, &mut controller, w, h, closing);
             ui.end();
             drop(canvas);
