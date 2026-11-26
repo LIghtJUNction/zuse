@@ -382,11 +382,17 @@ fn inspect_port<P: Port>(
         }
         result.push_str(&format!(r#","work_offset":{offset:?}"#));
     }
-    if matches!(view, StatusView::Work | StatusView::Frame) {
+    if matches!(view, StatusView::Work | StatusView::Frame)
+        || (view == StatusView::Metric
+            && device_id.is_some()
+            && c.port.generation() == first_generation)
+    {
         result.push_str(&format!(
             r#","device_id":{}"#,
             device_id.as_deref().map_or_else(|| "null".into(), quote)
         ));
+    }
+    if matches!(view, StatusView::Work | StatusView::Frame) {
         // GRBL exposes a digital probe input on supported builds. No force reading is present.
         let value = match probe_state {
             Some(true) => "true",
