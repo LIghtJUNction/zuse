@@ -155,7 +155,7 @@ pub struct MountReceipt {
 const MOUNT_STATUS: &str = "plotter.status(work=true,offset=true,timeout=6000)";
 
 impl MountAction {
-    fn program(self, reference: Option<[f64; 3]>) -> Result<String> {
+    fn program(self, reference: Option<[f64; 3]>, generation: Option<u64>) -> Result<String> {
         match self {
             Self::Status => Ok(MOUNT_STATUS.into()),
             Self::MoveZ(z) if (-10000.0..=10000.0).contains(&z) => {
@@ -187,8 +187,11 @@ impl MountAction {
                 {
                     return Err("边界须为三组有序且有限的坐标".into());
                 }
+                let generation = generation
+                    .map(|n| format!(",expected_generation={n}"))
+                    .unwrap_or_default();
                 Ok(format!(
-                    "plotter.set_bounds(x_min={},x_max={},y_min={},y_max={},z_min={},z_max={},wco_x={},wco_y={},wco_z={})",
+                    "plotter.set_bounds(x_min={},x_max={},y_min={},y_max={},z_min={},z_max={},wco_x={},wco_y={},wco_z={}{generation})",
                     bounds.min[0],
                     bounds.max[0],
                     bounds.min[1],
@@ -245,7 +248,7 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
         ),
         Action::Connect => format!("plotter.connect(port={},baud={})", quote(&f.port), f.baud),
         Action::Refresh => "plotter.status()".into(),
-        Action::Mount(kind, reference) => kind.program(*reference)?,
+        Action::Mount(kind, reference) => kind.program(*reference, None)?,
         Action::CalibrationCapture(_)
         | Action::CalibrationStatus
         | Action::SetPenUp
@@ -804,6 +807,7 @@ fn observed_operation(previous: &Snapshot, current: &Snapshot, receipt: &str) ->
 
 #[derive(Clone, Debug)]
 struct Device {
+    reference_generation: Option<u64>,
     offset: Option<[f64; 3]>,
     id: Option<String>,
     model: Option<String>,
@@ -864,7 +868,21 @@ fn device_envelope(data: &str, selected: &Device) -> bool {
             .is_some_and(|(path, baud)| selected.matches(&path, baud))
 }
 
+// Absent on older daemons. A malformed or vanished generation from a known
+// generation-aware link must never silently downgrade a guard.
+fn reported_generation(payload: &str) -> Result<Option<u64>> {
+    raw(payload, "reference_generation")
+        .map(|n| {
+            n.parse::<u64>()
+                .ok()
+                .filter(|n| *n <= i64::MAX as u64)
+                .ok_or_else(|| "设备回执的坐标参考代号无效".to_string())
+        })
+        .transpose()
+}
+
 struct MountObservation {
+    reference_generation: Option<u64>,
     payload: String,
     snapshot: Snapshot,
     work: [f64; 3],
@@ -895,7 +913,12 @@ impl MountObservation {
             return Err("示教所选写字机身份、空闲状态或毫米单位未确认".into());
         }
         let xyz = Coordinates::parse(&payload)?;
+        let reference_generation = reported_generation(&payload)?;
+        if device.reference_generation.is_some() && reference_generation.is_none() {
+            return Err("设备回执缺少之前已报告的坐标参考代号".into());
+        }
         Ok(Self {
+            reference_generation,
             payload,
             snapshot,
             work: xyz.work.ok_or("本次回执缺少 WPos")?,
@@ -910,7 +933,6 @@ impl MountObservation {
 
 fn mount_job(
     action: &Action,
-    program: &str,
     snapshot: Option<&Snapshot>,
     device: Option<&Device>,
     mut run: impl FnMut(&Action, &str, &Snapshot) -> Result<(String, Option<Snapshot>)>,
@@ -926,6 +948,9 @@ fn mount_job(
     )?;
     if *kind == MountAction::Status {
         return Ok(before.completed());
+    }
+    if before.reference_generation != device.reference_generation {
+        return Err("控制器坐标参考已变化，命令未发送，请重新示教".into());
     }
     if reference.is_some_and(|saved| !same_xyz(saved, before.offset, 0.000_001)) {
         return Err("示教参考 WCO 已变化，命令未发送".into());
@@ -950,10 +975,14 @@ fn mount_job(
         _ => {}
     }
     // Only submit()'s read-only observation can fall back on a legacy daemon.
-    let (receipt, after) = run(action, program, &before.snapshot)?;
+    let program = kind.program(*reference, before.reference_generation)?;
+    let (receipt, after) = run(action, &program, &before.snapshot)?;
     let after = after.ok_or("命令已结束，结果被其他操作取代，请核对写字机")?;
     if !device_envelope(&receipt, device) {
         return Err("命令已结束，回执未确认所选设备，请勿重复提交".into());
+    }
+    if reported_generation(&receipt)? != before.reference_generation {
+        return Err("命令已收到回执，坐标参考已变化或未确认，请勿重复提交".into());
     }
     if let MountAction::ApplyBounds(bounds) = kind {
         check_bound_receipt(&receipt, *bounds, before.offset)?;
@@ -970,6 +999,7 @@ fn mount_job(
     if ["device_id", "controller", "firmware", "report_units"]
         .iter()
         .any(|key| field(&before.payload, key) != field(&confirmed.payload, key))
+        || before.reference_generation != confirmed.reference_generation
         || !same_xyz(before.offset, confirmed.offset, 0.000_001)
         || !same_xyz(target, confirmed.work, tolerance)
         || (0..3).any(|i| target[i] != before.work[i] && confirmed.work[i] == before.work[i])
@@ -1315,7 +1345,6 @@ impl Controller {
                 }
                 Action::Mount(..) => mount_job(
                     &action,
-                    &script,
                     expected.as_ref(),
                     device.as_ref(),
                     |request, program, last| {
@@ -1344,6 +1373,14 @@ impl Controller {
             .and_then(|n| u32::try_from(n).ok())
             .ok_or("缺少会话设备波特率")?;
         let xyz = Coordinates::parse(payload)?;
+        let reference_generation = reported_generation(payload)?;
+        if self.link.as_ref().is_some_and(|d| {
+            d.matches(&port, baud)
+                && d.reference_generation.is_some()
+                && reference_generation.is_none()
+        }) {
+            return Err("设备回执缺少之前已报告的坐标参考代号".into());
+        }
         let id = field(payload, "device_id").filter(|v| !v.trim().is_empty());
         let model = field(payload, "controller");
         let firmware = field(payload, "firmware");
@@ -1359,6 +1396,7 @@ impl Controller {
         });
         let changed = self.link.as_ref().is_none_or(|d| {
             !d.matches(&port, baud)
+                || d.reference_generation != reference_generation
                 || (d.label.is_some() && label.is_some() && d.label != label)
                 || (d.id.is_some() && model.is_some() && firmware.is_some() && d.id != id)
                 || d.offset
@@ -1393,6 +1431,7 @@ impl Controller {
         let firmware = firmware.or_else(|| previous.and_then(|d| d.firmware.clone()));
         let offset = xyz.offset.or_else(|| previous.and_then(|d| d.offset));
         self.link = Some(Device {
+            reference_generation,
             id,
             model,
             firmware,
@@ -1404,6 +1443,26 @@ impl Controller {
             label,
         });
         self.needs_device_status = false;
+        Ok(())
+    }
+
+    // Some completed commands return an envelope without XYZ. Check mode in
+    // particular can reset the retained controller even at unchanged WCO.
+    fn operation_reference(&mut self, payload: &str) -> Result<()> {
+        let Some(device) = self.link.as_mut() else {
+            return Ok(());
+        };
+        if !device_envelope(payload, device) {
+            return Ok(());
+        }
+        let observed = reported_generation(payload)?;
+        if device.reference_generation.is_some() && observed.is_none() {
+            return Err("设备回执缺少之前已报告的坐标参考代号".into());
+        }
+        if observed != device.reference_generation {
+            device.reference_generation = observed;
+            self.mark_device_stale();
+        }
         Ok(())
     }
 
@@ -1529,11 +1588,16 @@ impl Controller {
                 ))
             }
             Action::Export(_) => Ok(format!("已导出 {payload}")),
-            Action::Check => Ok(format!("控制器校验完成 · {payload}")),
+            Action::Check => {
+                self.operation_reference(payload)?;
+                Ok(format!("控制器校验完成 · {payload}"))
+            }
             Action::Send | Action::Jog { .. } | Action::PenUp | Action::PenDown => {
                 self.clear_samples();
                 if field(payload, "units").as_deref() == Some("mm") {
                     self.position(payload)?
+                } else {
+                    self.operation_reference(payload)?;
                 }
                 Ok(format!("控制器回执 · {payload}"))
             }
@@ -2122,8 +2186,16 @@ mod tests {
         reference: Option<[f64; 3]>,
         outputs: &[Result<&str>],
     ) -> (Result<String>, Vec<String>) {
+        simulate_mount_on(MOUNT_FRAME, kind, reference, outputs)
+    }
+    fn simulate_mount_on(
+        initial: &str,
+        kind: MountAction,
+        reference: Option<[f64; 3]>,
+        outputs: &[Result<&str>],
+    ) -> (Result<String>, Vec<String>) {
         let mut c = Controller::default();
-        c.position(MOUNT_FRAME).unwrap();
+        c.position(initial).unwrap();
         let snapshot = Snapshot {
             pid: 1,
             rev: 0,
@@ -2133,7 +2205,6 @@ mod tests {
         let mut calls = vec![];
         let result = mount_job(
             &Action::Mount(kind, reference),
-            &kind.program(reference).unwrap(),
             Some(&snapshot),
             c.link.as_ref(),
             |_, program, last| {
@@ -2161,7 +2232,9 @@ mod tests {
     #[test]
     fn teaching_jogs_use_one_linear_axis_and_the_calibration_feed() {
         for (axis, delta) in [('x', -10.), ('Y', 0.001), ('z', 0.5)] {
-            let p = MountAction::Jog { axis, delta }.program(None).unwrap();
+            let p = MountAction::Jog { axis, delta }
+                .program(None, None)
+                .unwrap();
             assert!(
                 p.contains("feed=40")
                     && p.contains(&format!("axis=\"{}\"", axis.to_ascii_lowercase()))
@@ -2174,16 +2247,24 @@ mod tests {
             ('y', f64::NAN),
             ('z', 0.),
         ] {
-            assert!(MountAction::Jog { axis, delta }.program(None).is_err());
+            assert!(
+                MountAction::Jog { axis, delta }
+                    .program(None, None)
+                    .is_err()
+            );
         }
-        assert!(MountAction::MoveZ(f64::INFINITY).program(None).is_err());
-        assert!(MountAction::ApplyBounds(BOX).program(None).is_err());
+        assert!(
+            MountAction::MoveZ(f64::INFINITY)
+                .program(None, None)
+                .is_err()
+        );
+        assert!(MountAction::ApplyBounds(BOX).program(None, None).is_err());
         assert!(
             MountAction::ApplyBounds(MachineBounds {
                 min: BOX.max,
                 max: BOX.min
             })
-            .program(Some([0.; 3]))
+            .program(Some([0.; 3]), None)
             .is_err()
         );
     }
@@ -2447,5 +2528,145 @@ esac
             "observe write.preview(text=\"abc\")\nscript write.mouse(text=\"abc\")\nscript write.touchpad(text=\"abc\")\n"
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+    fn with_generation(frame: &str, value: &str) -> String {
+        let rest = frame.strip_prefix('{').unwrap();
+        format!(r#"{{"reference_generation":{value},{rest}"#)
+    }
+
+    #[test]
+    fn reset_invalidates_partial_teaching_even_with_the_same_identity_wco_and_xyz() {
+        let zero = with_generation(MOUNT_FRAME, "0");
+        let one = with_generation(MOUNT_FRAME, "1");
+        let mut c = Controller::default();
+        c.apply(&Action::Refresh, &c.form.clone(), &zero).unwrap();
+        let form = c.form.clone();
+        c.apply(
+            &Action::CalibrationCapture(CalibrationStep::PenUp),
+            &form,
+            &zero,
+        )
+        .unwrap();
+        c.apply(&Action::Mount(MountAction::Status, None), &form, &zero)
+            .unwrap();
+        let epoch = c.calibration_epoch();
+        c.apply(&Action::Refresh, &form, &zero).unwrap();
+        assert_eq!(epoch, c.calibration_epoch());
+        assert!(c.mount_receipt().is_some());
+        assert!(
+            c.apply(
+                &Action::CalibrationCapture(CalibrationStep::PenDown),
+                &form,
+                &one
+            )
+            .is_err()
+        );
+        assert!(c.calibration_epoch() > epoch);
+        assert!(c.calibration_receipt().is_none() && c.mount_receipt().is_none());
+        c.apply(
+            &Action::CalibrationCapture(CalibrationStep::PenUp),
+            &form,
+            &one,
+        )
+        .unwrap();
+        let epoch = c.calibration_epoch();
+        c.apply(&Action::Check, &form, &with_generation(ACK, "2"))
+            .unwrap();
+        assert!(c.calibration_epoch() > epoch);
+        assert!(c.needs_device_status && c.calibration_receipt().is_none());
+        assert_eq!(c.form, form);
+    }
+
+    #[test]
+    fn switched_or_missing_generations_abort_before_motion_or_at_the_first_unconfirmed_receipt() {
+        let seven = with_generation(MOUNT_FRAME, "7");
+        let eight = with_generation(MOUNT_FRAME, "8");
+        let final_seven = seven.replace("[4,5,6]", "[4,5,5]");
+        let final_eight = eight.replace("[4,5,6]", "[4,5,5]");
+        let ack = with_generation(ACK, "7");
+        let kind = MountAction::MoveZ(5.);
+        let run =
+            |outputs: &[Result<&str>]| simulate_mount_on(&seven, kind, Some([1., 2., 3.]), outputs);
+        for changed in [
+            &eight,
+            &MOUNT_FRAME.to_owned(),
+            &with_generation(MOUNT_FRAME, "null"),
+        ] {
+            let (result, calls) = run(&[Ok(changed)]);
+            assert!(result.is_err());
+            assert_eq!(calls, [MOUNT_STATUS]);
+        }
+        let (out, calls) = run(&[Ok(&seven), Ok(&with_generation(ACK, "8"))]);
+        assert!(out.is_err());
+        assert_eq!(calls.len(), 2);
+        let (out, calls) = run(&[Ok(&seven), Ok(&ack), Ok(&final_eight)]);
+        assert!(out.is_err());
+        assert_eq!(calls.len(), 3);
+        let (out, calls) = run(&[Ok(&seven), Ok(&ack), Ok(&final_seven)]);
+        assert!(out.is_ok());
+        assert_eq!(calls.len(), 3);
+    }
+
+    #[test]
+    fn set_bounds_binds_the_session_generation_and_refuses_an_unconfirmed_echo() {
+        let status = with_generation(MOUNT_FRAME, "9182736450");
+        let ack = with_generation(BOUND_ACK, "9182736450");
+        let run = |outputs: &[Result<&str>]| {
+            simulate_mount_on(
+                &status,
+                MountAction::ApplyBounds(BOX),
+                Some([1., 2., 3.]),
+                outputs,
+            )
+        };
+        let (result, calls) = run(&[Ok(&status), Ok(&ack), Ok(&status)]);
+        assert!(result.is_ok());
+        assert!(calls[1].ends_with(",expected_generation=9182736450)"));
+        let (result, calls) = run(&[Ok(&status), Ok(BOUND_ACK)]);
+        assert!(result.is_err());
+        assert_eq!(calls.len(), 2);
+        let (result, calls) = run(&[
+            Ok(&status),
+            Err("reference changed before applying bounds".into()),
+        ]);
+        assert!(result.is_err());
+        assert_eq!(calls.len(), 2);
+        let (result, calls) = simulate_mount(
+            MountAction::ApplyBounds(BOX),
+            Some([1., 2., 3.]),
+            &[Ok(MOUNT_FRAME), Ok(BOUND_ACK), Ok(MOUNT_FRAME)],
+        );
+        assert!(result.is_ok());
+        assert!(!calls[1].contains("expected_generation"));
+    }
+
+    #[test]
+    fn generation_capability_changes_cannot_merge_with_legacy_samples() {
+        let mut c = Controller::default();
+        c.apply(&Action::Refresh, &c.form.clone(), MOUNT_FRAME)
+            .unwrap();
+        let form = c.form.clone();
+        c.apply(
+            &Action::CalibrationCapture(CalibrationStep::PenUp),
+            &form,
+            MOUNT_FRAME,
+        )
+        .unwrap();
+        let epoch = c.calibration_epoch();
+        let fresh = with_generation(MOUNT_FRAME, "2");
+        assert!(
+            c.apply(
+                &Action::CalibrationCapture(CalibrationStep::PenDown),
+                &form,
+                &fresh
+            )
+            .is_err()
+        );
+        assert!(c.calibration_epoch() > epoch && c.calibration_receipt().is_none());
+        assert!(c.apply(&Action::Refresh, &form, MOUNT_FRAME).is_err());
+        assert_eq!(c.link.as_ref().unwrap().reference_generation, Some(2));
+        for malformed in ["null", "-1", "3.2", "\"2\"", "9223372036854775808"] {
+            assert!(reported_generation(&with_generation(ACK, malformed)).is_err());
+        }
     }
 }

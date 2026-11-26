@@ -48,6 +48,14 @@ zuse machine grbl-send letter.nc /dev/ttyUSB0 115200 --dry-run
 
 `zuse machine grbl-check letter.nc PORT 115200` sends the trajectory to the controller's parser in its verified Check state. This mode suppresses axis motion. The preflight checks stored startup blocks before toggling the mode, since GRBL performs its own soft reset on exit. Success requires a final observed Idle state. Use `--dry-run` for a purely local syntax check.
 
+## Taught travel and work coordinates
+
+Run `zuse-writer --align` with an empty pen holder to teach two opposite XY corners and the physical upper and lower Z positions. The writer uses these measurements to position the holder for mounting. With the holder at the verified height, seat the pen tip against the working paper and clamp the pen. The installation height becomes pen-down. The lift distance follows the measured upward direction, including on machines where lifting decreases Z. The [Writer guide](../apps/writer/README.md) describes the controls.
+
+An AI client can use the same named session as the GUI. Read `plotter.status(work=true,offset=true)` for fresh millimetre coordinates and the measured work offset (WCO), and `plotter.bounds()` for active limits. Once limits are applied, the session verifies the starting position and every linear endpoint before sending the first motion block. It also checks individual jogs and pen moves. Explicit `G21` must appear on or before the first feed word so a program has a defined metric feed.
+
+The saved profile belongs to the measured device and work offset. On machines without homing, the carriage can be moved with power off while the reported WCO stays the same. Compare the physical origin and axis directions on the machine before reusing a saved profile. With an observed controller restart, re-establish the physical reference before reapplying stale limits. The active limits apply to clients using that same retained session. An independently opened serial connection has its own state.
+
 ## X/Z lathe
 
 `zuse machine lathe-check PART.ngc` checks the supported metric, absolute, linear-motion subset offline. Run `zuse machine lathe-run PART.ngc /path/to/active.ini --dry-run` to inspect that same program. Real dispatch uses an existing LinuxCNC installation through its native Python module. It requires the matching active X/Z lathe configuration, homed axes, enabled controller and idle AUTO state. The command does not home or power a machine. `--max-wait-ms` bounds observation. After a lost acknowledgement or a timeout, inspect the controller's state before issuing another run.

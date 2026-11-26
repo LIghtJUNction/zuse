@@ -30,6 +30,7 @@ enum Action {
     SetBounds {
         limits: machine_stream::TravelBounds,
         expected: Option<[f64; 3]>,
+        expected_generation: Option<u64>,
     },
     ClearBounds,
     Disconnect,
@@ -93,7 +94,19 @@ impl Command {
                 } else {
                     None
                 };
-                (Action::SetBounds { limits, expected }, 8000)
+                let expected_generation = if call.get("expected_generation").is_some() {
+                    Some(range(call, "expected_generation", 0, 0, i64::MAX)? as u64)
+                } else {
+                    None
+                };
+                (
+                    Action::SetBounds {
+                        limits,
+                        expected,
+                        expected_generation,
+                    },
+                    8000,
+                )
             }
             "plotter.disconnect" => {
                 return Ok(Self {
@@ -162,17 +175,27 @@ fn feed(call: &Call<'_>) -> Result<f64> {
 pub(super) struct Selected {
     path: String,
     baud: u32,
-    port: SerialPort,
+    port: machine_stream::WatchedPort<SerialPort>,
     probe: machine_stream::ProbeEvidence,
     bounds: Option<machine_stream::Workspace>,
 }
 
 impl Selected {
     fn envelope(&self, fields: &str) -> String {
+        let stale = if self
+            .bounds
+            .as_ref()
+            .is_some_and(|b| !b.is_current(self.port.generation()))
+        {
+            r#","bounds_stale":true"#
+        } else {
+            ""
+        };
         format!(
-            r#"{{"connected":true,"port":{},"baud":{},{}"#,
+            r#"{{"connected":true,"port":{},"baud":{},"reference_generation":{}{stale},{}"#,
             quote(&self.path),
             self.baud,
+            self.port.reference_generation(),
             &fields[1..]
         )
     }
@@ -186,7 +209,7 @@ pub(super) fn execute(
     let disconnected = || r#"{"connected":false}"#.to_owned();
     if let Action::Disconnect = command.action {
         if let Some(mut old) = selected.take() {
-            old.port.close()?;
+            old.port.inner.close()?;
         }
         return Ok(disconnected());
     }
@@ -206,7 +229,7 @@ pub(super) fn execute(
     let end = machine_stream::deadline(command.timeout_ms)?;
     if let Action::Connect { port: path, baud } = command.action {
         if let Some(old) = selected.as_mut() {
-            if old.port.matches_path(&path)? {
+            if old.port.inner.matches_path(&path)? {
                 if old.baud != baud {
                     return Err(
                         "run plotter.disconnect() before changing the selected port's baud rate"
@@ -227,12 +250,14 @@ pub(super) fn execute(
                 return Err("the selected path now identifies a different device; run plotter.disconnect() before selecting its replacement".into());
             }
         }
-        let mut port = cancel.dispatch(|| SerialPort::open_machine(&path, baud))?;
+        let mut port = machine_stream::WatchedPort::new(
+            cancel.dispatch(|| SerialPort::open_machine(&path, baud))?,
+        );
         let mut probe = machine_stream::ProbeEvidence::default();
         let status =
             machine_stream::inspect_connected(&mut port, end, cancel, false, false, &mut probe)?;
         if let Some(mut old) = selected.take() {
-            old.port.close()?;
+            old.port.inner.close()?;
         }
         let entry = Selected {
             path,
@@ -253,9 +278,19 @@ pub(super) fn execute(
         };
     };
     let result = match command.action {
-        Action::SetBounds { limits, expected } => {
-            let bounds =
-                machine_stream::bind_workspace(&mut device.port, limits, expected, end, cancel)?;
+        Action::SetBounds {
+            limits,
+            expected,
+            expected_generation,
+        } => {
+            let bounds = machine_stream::bind_workspace(
+                &mut device.port,
+                limits,
+                expected,
+                expected_generation,
+                end,
+                cancel,
+            )?;
             let receipt = bounds.receipt();
             device.bounds = Some(bounds);
             receipt
@@ -362,6 +397,8 @@ mod tests {
         assert!(check("plotter.clear_bounds()", read).is_err());
         assert!(check(&format!("{set})"), read).is_err());
         assert!(check(&format!("{set},wco_x=1)"), dry).is_err());
+        assert!(check(&format!("{set},expected_generation=-1)"), dry).is_err());
+        assert!(check(&format!("{set},expected_generation=42)"), dry).is_ok());
         assert!(check(&format!("{set},wco_x=1,wco_y=2,wco_z=3)"), dry).is_ok());
         assert!(check(&format!("{set})").replace("x_max=10", "x_max=0"), dry).is_err());
         assert!(check("plotter.status(offset=true)", read).is_ok());

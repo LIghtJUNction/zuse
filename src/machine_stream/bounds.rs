@@ -62,6 +62,7 @@ impl TravelBounds {
 pub(crate) struct Workspace {
     limits: TravelBounds,
     identity: Identity,
+    generation: std::cell::Cell<u64>,
     offset: [f64; 3],
 }
 
@@ -73,6 +74,16 @@ fn same_offset(first: [f64; 3], second: [f64; 3]) -> bool {
 }
 
 impl Workspace {
+    pub(crate) fn is_current(&self, generation: u64) -> bool {
+        self.generation.get() == generation
+    }
+    pub(super) fn require_generation(&self, generation: u64) -> Result<()> {
+        if self.is_current(generation) {
+            Ok(())
+        } else {
+            Err("controller reset observed; taught bounds remain installed but stale; physically re-reference and reapply bounds".into())
+        }
+    }
     pub(crate) fn receipt(&self) -> String {
         let [x0, y0, z0] = self.limits.min;
         let [x1, y1, z1] = self.limits.max;
@@ -172,12 +183,40 @@ impl<P: Port> Connection<'_, P> {
         bounds: Option<&Workspace>,
         id: &Identity,
         lines: &[String],
-    ) -> Result<()> {
+    ) -> Result<Option<Pose>> {
         if let Some(bounds) = bounds {
+            bounds.require_generation(self.port.generation())?;
             let pose = self.idle_pose(true)?;
+            bounds.require_generation(self.port.generation())?;
             bounds.verify(id, &pose)?;
             bounds.limits.program(lines, pose.work)?;
+            return Ok(Some(pose));
         }
+        Ok(None)
+    }
+
+    pub(super) fn verify_check_reference(
+        &mut self,
+        guard: &Workspace,
+        id: &Identity,
+        before: &Pose,
+        old: u64,
+    ) -> Result<()> {
+        guard.require_generation(old)?;
+        let after = self.port.generation();
+        // One host-initiated exit can produce zero or one banner in the verified transition.
+        if !(old + 1..=old + 2).contains(&after) {
+            return Err("unexpected controller resets during Check".into());
+        }
+        if self.identify()? != *id {
+            return Err("controller identity changed across Check".into());
+        }
+        let pose = self.idle_pose(true)?;
+        guard.verify(id, &pose)?;
+        if !same_offset(pose.work, before.work) || self.port.generation() != after {
+            return Err("position or boot generation changed across Check".into());
+        }
+        guard.generation.set(after);
         Ok(())
     }
 }
@@ -196,8 +235,12 @@ pub(super) fn bind<P: Port>(
         pending: Vec::new(),
     };
     c.require_state("Idle", true)?;
+    let generation = c.port.generation();
     let identity = c.identify()?;
     let pose = c.idle_pose(true)?;
+    if generation != c.port.generation() {
+        return Err("controller restarted during reference acquisition; physically re-reference and reapply bounds".into());
+    }
     let offset = pose
         .offset
         .ok_or("work offset unavailable; bounds not applied")?;
@@ -209,6 +252,7 @@ pub(super) fn bind<P: Port>(
     Ok(Workspace {
         limits,
         identity,
+        generation: std::cell::Cell::new(generation),
         offset,
     })
 }

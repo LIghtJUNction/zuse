@@ -7,14 +7,18 @@ mod linuxcnc;
 pub use linuxcnc::run_linuxcnc;
 mod bounds;
 pub(crate) use bounds::{TravelBounds, Workspace};
-pub(crate) fn bind_workspace(
-    port: &mut SerialPort,
+pub(crate) fn bind_workspace<P: Port>(
+    port: &mut WatchedPort<P>,
     limits: TravelBounds,
     expected: Option<[f64; 3]>,
+    expected_generation: Option<u64>,
     end: Instant,
     cancel: &Cancellation,
 ) -> Result<Workspace> {
-    bounds::bind(port, limits, expected, end, cancel)
+    port.check_reference(expected_generation)?;
+    let workspace = bounds::bind(port, limits, expected, end, cancel)?;
+    port.check_reference(expected_generation)?;
+    Ok(workspace)
 }
 
 /// Validate the complete pen program without opening a serial port.
@@ -34,9 +38,13 @@ pub(crate) fn deadline(timeout_ms: u32) -> Result<Instant> {
     Ok(Instant::now() + Duration::from_millis(timeout_ms.into()))
 }
 
-trait Port {
+pub(crate) trait Port {
     fn write(&mut self, bytes: &[u8], timeout_ms: u32) -> Result<usize>;
     fn read(&mut self, timeout_ms: u32) -> Result<ReadResult>;
+    fn generation(&self) -> u64 {
+        0
+    }
+    fn expect_reset(&mut self) {}
 }
 impl Port for SerialPort {
     fn write(&mut self, bytes: &[u8], timeout_ms: u32) -> Result<usize> {
@@ -44,6 +52,77 @@ impl Port for SerialPort {
     }
     fn read(&mut self, timeout_ms: u32) -> Result<ReadResult> {
         SerialPort::read(self, 256, timeout_ms)
+    }
+}
+
+/// Counts boot banners on the retained connection, including fragmented or queued lines
+/// which the command-level parser may reject and discard.
+pub(crate) struct WatchedPort<P> {
+    reference_generation: u64,
+    pub(crate) inner: P,
+    generation: u64,
+    prefix: usize,
+}
+// Reference tokens are unique across reconnects and retained ports in this Runtime process.
+static NEXT_REFERENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+fn next_reference() -> u64 {
+    NEXT_REFERENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+impl<P> WatchedPort<P> {
+    pub(crate) fn reference_generation(&self) -> u64 {
+        self.reference_generation
+    }
+    fn check_reference(&self, expected: Option<u64>) -> Result<()> {
+        if expected.is_some_and(|v| v != self.reference_generation) {
+            return Err("reference generation changed since capture; verify the physical reference and teach again".into());
+        }
+        Ok(())
+    }
+    fn record_reset(&mut self) {
+        self.generation += 1;
+        self.reference_generation = next_reference();
+    }
+    pub(crate) fn new(inner: P) -> Self {
+        Self {
+            inner,
+            reference_generation: next_reference(),
+            generation: 0,
+            prefix: 0,
+        }
+    }
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+    fn observe(&mut self, bytes: &[u8]) {
+        const BANNER: &[u8] = b"Grbl ";
+        for &b in bytes {
+            if b == b'\n' {
+                self.prefix = 0;
+            } else if self.prefix < BANNER.len() && b == BANNER[self.prefix] {
+                self.prefix += 1;
+            } else {
+                if self.prefix == BANNER.len() && b.is_ascii_digit() {
+                    self.record_reset();
+                }
+                self.prefix = BANNER.len() + 1;
+            }
+        }
+    }
+}
+impl<P: Port> Port for WatchedPort<P> {
+    fn write(&mut self, bytes: &[u8], ms: u32) -> Result<usize> {
+        self.inner.write(bytes, ms)
+    }
+    fn read(&mut self, ms: u32) -> Result<ReadResult> {
+        let result = self.inner.read(ms)?;
+        self.observe(&result.bytes);
+        Ok(result)
+    }
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+    fn expect_reset(&mut self) {
+        self.record_reset();
     }
 }
 
@@ -98,9 +177,16 @@ enum StatusView {
 #[derive(Default)]
 pub(crate) struct ProbeEvidence {
     active_source: Option<String>,
+    generation: u64,
 }
 
 impl ProbeEvidence {
+    fn sync(&mut self, generation: u64) {
+        if self.generation != generation {
+            self.active_source = None;
+            self.generation = generation;
+        }
+    }
     fn observe(&mut self, firmware: &str, device: Option<&str>, frame: &str) -> Option<bool> {
         let source = device.unwrap_or(firmware);
         if self
@@ -134,7 +220,7 @@ impl ProbeEvidence {
 }
 
 pub(crate) fn inspect_connected(
-    port: &mut SerialPort,
+    port: &mut WatchedPort<SerialPort>,
     end: Instant,
     cancel: &Cancellation,
     work: bool,
@@ -157,7 +243,7 @@ pub(crate) fn inspect_connected(
 }
 
 pub(crate) fn program_connected(
-    port: &mut SerialPort,
+    port: &mut WatchedPort<SerialPort>,
     lines: &[String],
     check: bool,
     end: Instant,
@@ -185,6 +271,7 @@ fn inspect_port<P: Port>(
         pending: Vec::new(),
     };
     let first = c.query_status(true)?;
+    let first_generation = c.port.generation();
     let Identity {
         firmware,
         device_id,
@@ -193,11 +280,15 @@ fn inspect_port<P: Port>(
         let coords = Positions::parse(&first)?;
         (None, first, coords, None)
     } else {
-        probe.observe(&firmware, device_id.as_deref(), &first);
+        probe.sync(c.port.generation());
+        if first_generation == c.port.generation() {
+            probe.observe(&firmware, device_id.as_deref(), &first);
+        }
         let scale = c.report_scale()?;
         loop {
             let frame = c.query_status(false)?;
             let coords = Positions::parse(&frame)?;
+            probe.sync(c.port.generation());
             let pin = probe.observe(&firmware, device_id.as_deref(), &frame);
             if !matches!(view, StatusView::Work | StatusView::Frame)
                 || (coords.work_axis(0).is_some()
@@ -315,9 +406,9 @@ pub fn check_on_grbl(
 ) -> Result<usize> {
     let end = deadline(timeout_ms)?;
     let lines = plotter_lines(program)?;
-    let mut port = cancel.dispatch(|| SerialPort::open_machine(path, baud))?;
+    let mut port = WatchedPort::new(cancel.dispatch(|| SerialPort::open_machine(path, baud))?);
     let result = check_on_port(&mut port, &lines, end, cancel, None);
-    let close = port.close();
+    let close = port.inner.close();
     let count = result?;
     close.map_err(|e| {
         format!("{count} blocks checked and Idle verified; serial close failed: {e}")
@@ -340,9 +431,11 @@ fn check_on_port<P: Port>(
     };
     c.require_state("Idle", true)?;
     let id = c.identify()?;
-    c.enforce_program(bounds, &id, lines)?;
+    let initial_pose = c.enforce_program(bounds, &id, lines)?;
+    let check_generation = c.port.generation();
     c.check_startup_blocks()?;
     c.require_state("Idle", false)?;
+    c.check_generation(check_generation)?;
     c.send(b"$C\n").and_then(|()| c.ack(false)).map_err(|e| {
         format!("Check entry not acknowledged; no program blocks sent, no toggle replayed: {e}")
     })?;
@@ -352,6 +445,7 @@ fn check_on_port<P: Port>(
     let blocks = (|| {
         for line in lines {
             c.require_state("Check", false)?;
+            c.check_generation(check_generation)?;
             attempted += 1;
             c.send(format!("{line}\n").as_bytes())?;
             c.checked_ack()?;
@@ -362,8 +456,17 @@ fn check_on_port<P: Port>(
     // This fresh status is required even after a block failed. A stale observation
     // or a timed-out/cancelled query never licenses another toggle.
     let exit = c
-        .require_state("Check", false)
+        .check_generation(check_generation)
+        .and_then(|()| c.require_state("Check", false))
+        .and_then(|()| c.check_generation(check_generation))
         .and_then(|()| c.leave_check());
+    if blocks.is_ok()
+        && exit.is_ok()
+        && let (Some(guard), Some(before)) = (bounds, initial_pose)
+    {
+        c.verify_check_reference(guard,&id,&before,check_generation).map_err(|e|
+            format!("{accepted} blocks accepted in Check and returned to Idle; travel reference stale, physically re-reference and reapply bounds: {e}"))?;
+    }
     match (blocks, exit) {
         (Ok(()), Ok(())) => Ok(accepted),
         (Ok(()), Err(e)) => Err(format!(
@@ -432,6 +535,7 @@ pub(crate) fn plotter_lines(program: &str) -> Result<Vec<String>> {
             return Err("GRBL plotter line count or 79-character block limit exceeded".into());
         }
         let mut seen = [false; 9];
+        let mut block_feed = false;
         let mut cutting_feed = false;
         let mut block_motion = false;
         let mut axes = false;
@@ -463,7 +567,7 @@ pub(crate) fn plotter_lines(program: &str) -> Result<Vec<String>> {
                         ));
                     }
                     axes |= addr != b'F';
-                    has_feed |= addr == b'F';
+                    block_feed |= addr == b'F';
                     match addr {
                         b'X' => 5,
                         b'Y' => 6,
@@ -482,6 +586,14 @@ pub(crate) fn plotter_lines(program: &str) -> Result<Vec<String>> {
             }
             seen[group] = true;
         }
+        // Grbl applies the block's units before interpreting F, regardless of word order.
+        if block_feed && !mm {
+            return Err(format!(
+                "feed on plotter line {} requires explicit G21 in this or an earlier block",
+                index + 1
+            ));
+        }
+        has_feed |= block_feed;
         if axes && !(block_motion && mm && absolute) {
             return Err(format!(
                 "plotter line {} requires explicit G0/G1, G21 and G90",
@@ -667,6 +779,13 @@ impl<P: Port> Connection<'_, P> {
         }
         units.ok_or_else(|| "missing GRBL $13 report units".into())
     }
+    fn check_generation(&self, expected: u64) -> Result<()> {
+        if self.port.generation() == expected {
+            Ok(())
+        } else {
+            Err("controller restarted; Check state no longer verified; no further block or toggle sent".into())
+        }
+    }
     fn check_startup_blocks(&mut self) -> Result<()> {
         // A reset can execute stored startup blocks. Do not enter Check unless
         // startup records are readable and contain only the allowed modal setup.
@@ -733,6 +852,9 @@ impl<P: Port> Connection<'_, P> {
         }
     }
     fn leave_check(&mut self) -> Result<()> {
+        // This transition resets Grbl even on builds which omit the banner. A failed write
+        // can still have reached the controller, so latch before sending.
+        self.port.expect_reset();
         self.send(b"$C\n")?;
         // GRBL resets its parser on the transition; firmware variants differ
         // in whether the acknowledgement or the reboot banner arrives first.
@@ -862,7 +984,7 @@ impl<P: Port> Connection<'_, P> {
 /// Calculate a work-coordinate jog from fresh reports on the already selected device.
 /// A single GRBL jog block neither latches a modal state nor resends uncertain motion.
 pub(crate) fn jog_connected(
-    port: &mut SerialPort,
+    port: &mut WatchedPort<SerialPort>,
     axis: char,
     delta: f64,
     feed: f64,
@@ -899,6 +1021,9 @@ fn jog_on_port<P: Port>(
     };
     c.require_state("Idle", true)?;
     let id = c.identify()?;
+    if let Some(guard) = bounds {
+        guard.require_generation(c.port.generation())?;
+    }
     let pose = c.idle_pose(bounds.is_some())?;
     let from = pose.work[index];
     let target = from + delta;
@@ -907,6 +1032,7 @@ fn jog_on_port<P: Port>(
     }
     let wire_target = format!("{target:.6}");
     if let Some(guard) = bounds {
+        guard.require_generation(c.port.generation())?;
         guard.jog(
             &id,
             &pose,
@@ -935,6 +1061,11 @@ fn jog_on_port<P: Port>(
             Some(s) => return Err(format!("jog acknowledged; controller state {s}")),
             None => return Err("jog acknowledged; invalid final state".into()),
         }
+    }
+    if let Some(guard) = bounds {
+        guard.require_generation(c.port.generation()).map_err(|e| {
+            format!("jog sent; final travel reference unverified; do not replay: {e}")
+        })?;
     }
     Ok(format!(
         r#"{{"state":"Idle","axis":{},"from_mm":{from},"target_mm":{target},"feed_mm_min":{feed}}}"#,
@@ -1020,6 +1151,9 @@ fn transmit<P: Port>(
         .and_then(|()| c.ack(false))
         .map_err(|e| format!("feed mode before motion: {e}"))?;
     for (i, line) in lines.iter().enumerate() {
+        if let Some(guard) = bounds {
+            guard.require_generation(c.port.generation())?;
+        }
         let block = format!("{line}\n");
         c.send(block.as_bytes()).and_then(|()| c.ack(false)).map_err(|e|
             format!("{i} previous program lines acknowledged; line {}: {e}; execution incomplete, inspect before retry",i+1))?;
@@ -1030,6 +1164,11 @@ fn transmit<P: Port>(
             lines.len()
         )
     })?;
+    if let Some(guard) = bounds {
+        guard.require_generation(c.port.generation()).map_err(|e| {
+            format!("program sent; final travel reference unverified; do not replay: {e}")
+        })?;
+    }
     Ok(lines.len())
 }
 
@@ -1238,6 +1377,185 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn retained_boot_latches_limits_and_forgets_probe_until_explicit_rebind() {
+        let cancel = Cancellation::default();
+        let limits = TravelBounds::new([0.; 3], [10.; 3]).unwrap();
+        let mut port = WatchedPort::new(sample(WRITER_ID, ORIGIN));
+        let guard = bounds::bind(&mut port, limits, None, deadline(500).unwrap(), &cancel).unwrap();
+        let mut evidence = ProbeEvidence::default();
+        evidence.observe("1.3a.20221114", None, "<Idle|WPos:1,1,1|Pn:P>");
+        port.inner = Mock::default();
+        port.inner
+            .expect("?", &["Gr", "bl ", "1.3a ['$' for help]\r\n", ORIGIN]);
+        port.inner.expect("$I\n", &[WRITER_ID]);
+        port.inner.expect("$$\n", &["$13=0\nok\n"]);
+        port.inner
+            .expect("?", &["<Idle|WPos:1,1,1|WCO:0,0,0|Pn:X>\n"]);
+        let status = inspect_port(
+            &mut port,
+            deadline(500).unwrap(),
+            &cancel,
+            StatusView::Frame,
+            &mut evidence,
+        )
+        .unwrap();
+        assert!(status.contains(r#""probe_triggered":null,"probe_seen_active":false"#));
+        let lines = plotter_lines("G21 G90\nG0 X2").unwrap();
+        for action in [0, 1, 2] {
+            port.inner = Mock::default();
+            port.inner.expect("?", &[ORIGIN]);
+            port.inner.expect("$I\n", &[WRITER_ID]);
+            let error = match action {
+                0 => transmit(
+                    &mut port,
+                    &lines,
+                    deadline(500).unwrap(),
+                    &cancel,
+                    Some(&guard),
+                )
+                .unwrap_err(),
+                1 => check_on_port(
+                    &mut port,
+                    &lines,
+                    deadline(500).unwrap(),
+                    &cancel,
+                    Some(&guard),
+                )
+                .unwrap_err(),
+                _ => jog_on_port(
+                    &mut port,
+                    'X',
+                    1.,
+                    20.,
+                    deadline(500).unwrap(),
+                    &cancel,
+                    Some(&guard),
+                )
+                .unwrap_err(),
+            };
+            assert!(error.contains("physically re-reference"), "{error}");
+            assert_eq!(port.inner.writes, ["?", "$I\n"]);
+        }
+        port.inner = sample(WRITER_ID, ORIGIN);
+        let replacement =
+            bounds::bind(&mut port, limits, None, deadline(500).unwrap(), &cancel).unwrap();
+        assert!(replacement.is_current(port.generation()));
+        assert!(!guard.is_current(port.generation()));
+    }
+
+    #[test]
+    fn reference_token_covers_reopen_and_queued_boot_during_apply() {
+        let limits = TravelBounds::new([0.; 3], [10.; 3]).unwrap();
+        let cancel = Cancellation::default();
+        let mut watched = WatchedPort::new(sample(GRBL_ID, ORIGIN));
+        let captured = watched.reference_generation();
+        let mut fresh_link = WatchedPort::new(Mock::default());
+        assert_ne!(captured, fresh_link.reference_generation());
+        assert!(
+            bind_workspace(
+                &mut fresh_link,
+                limits,
+                None,
+                Some(captured),
+                deadline(500).unwrap(),
+                &cancel
+            )
+            .is_err()
+        );
+        assert!(fresh_link.inner.writes.is_empty());
+        watched.inner.commands.front_mut().unwrap().1[0] =
+            format!("Grbl 1.1h ['$' for help]\n{ORIGIN}").into_bytes();
+        let error = bind_workspace(
+            &mut watched,
+            limits,
+            None,
+            Some(captured),
+            deadline(500).unwrap(),
+            &cancel,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("generation changed"));
+        let after = watched.reference_generation();
+        assert_ne!(after, captured);
+        watched.inner = sample(GRBL_ID, ORIGIN);
+        assert!(
+            bind_workspace(
+                &mut watched,
+                limits,
+                None,
+                Some(after),
+                deadline(500).unwrap(),
+                &cancel
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_boot_queued_with_check_status_never_licenses_geometry_or_an_exit_toggle() {
+        let mut port = WatchedPort::new(Mock::default());
+        check_entry(&mut port.inner, STARTUP);
+        toggle(&mut port.inner, "ok\n");
+        port.inner
+            .expect("?", &["<Check|WPos:0,0,0>\nGrbl 1.1h ['$' for help]\n"]);
+        let lines = plotter_lines("G21 G90\nG0 X1").unwrap();
+        let err = check_on_port(
+            &mut port,
+            &lines,
+            deadline(500).unwrap(),
+            &Cancellation::default(),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("no further block or toggle"), "{err}");
+        assert_eq!(port.inner.writes, ["?", "$I\n", "$N\n", "?", "$C\n", "?"]);
+    }
+
+    #[test]
+    fn expected_check_reset_requires_same_fresh_identity_work_position_and_origin() {
+        let cancel = Cancellation::default();
+        let lines = plotter_lines("G21 G90\nG0 X2").unwrap();
+        for (exit_ack, pose, ok) in [
+            ("ok\n", ORIGIN, true),
+            ("ok\nGrbl 1.1h ['$' for help]\n", ORIGIN, true),
+            ("ok\n", "<Idle|MPos:2,1,1|WCO:0,0,0>\n", false),
+            ("ok\n", "<Idle|MPos:2,1,1|WCO:1,0,0>\n", false),
+            ("error:3\n", ORIGIN, false),
+        ] {
+            let mut port = WatchedPort::new(sample(GRBL_ID, ORIGIN));
+            let limits = TravelBounds::new([0.; 3], [10.; 3]).unwrap();
+            let guard =
+                bounds::bind(&mut port, limits, None, deadline(500).unwrap(), &cancel).unwrap();
+            port.inner = sample(GRBL_ID, ORIGIN);
+            port.inner.expect("$N\n", &[STARTUP]);
+            toggle(&mut port.inner, "ok\n");
+            for line in &lines {
+                port.inner.expect("?", &[CHECK]);
+                port.inner.expect(&format!("{line}\n"), &["ok\n"]);
+            }
+            port.inner.expect("?", &[CHECK]);
+            port.inner.expect("$C\n", &[exit_ack]);
+            if !exit_ack.starts_with("error") {
+                port.inner.expect("?", &[ORIGIN]);
+                port.inner.expect("$I\n", &[GRBL_ID]);
+                port.inner.expect("$$\n", &["$13=0\nok\n"]);
+                port.inner.expect("?", &[pose]);
+            }
+            let result = check_on_port(
+                &mut port,
+                &lines,
+                deadline(500).unwrap(),
+                &cancel,
+                Some(&guard),
+            );
+            assert_eq!(result.is_ok(), ok, "{result:?}");
+            assert_eq!(guard.is_current(port.generation()), ok);
+            assert!(port.inner.commands.is_empty());
+        }
     }
 
     #[test]
@@ -1692,6 +2010,29 @@ mod tests {
             assert_eq!(m.writes.len(), 4);
         }
     }
+    #[test]
+    fn feed_cannot_inherit_inch_units_from_an_earlier_controller_job() {
+        let invalid = "G90\nF10\nG21 G1 X1";
+        let error = "feed on plotter line 2 requires explicit G21 in this or an earlier block";
+        assert_eq!(check_grbl(invalid).unwrap_err(), error);
+        // A cancelled dispatch makes opening a port impossible even if validation were to regress.
+        let cancel = Cancellation::default();
+        cancel.cancel();
+        for action in [stream_grbl, check_on_grbl] {
+            assert_eq!(
+                action("", 115200, invalid, 100, &cancel).unwrap_err(),
+                error
+            );
+        }
+        for valid in [
+            "F10 G21\nG90 G1 X1",
+            "G90 G1 X1 F10 G21",
+            "G21\nF10\nG90 G1 X1",
+        ] {
+            assert!(check_grbl(valid).is_ok(), "{valid}");
+        }
+    }
+
     #[test]
     fn preflight_and_cancellation() {
         for p in [

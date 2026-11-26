@@ -209,7 +209,7 @@ static SPECS: &[Spec] = &[
     spec!("plotter.status",true,["timeout":I:false,"work":B:false,"offset":B:false]),
     spec!("plotter.bounds", true, []),
     spec!("plotter.clear_bounds", false, []),
-    spec!("plotter.set_bounds",false,["x_min":N:true,"x_max":N:true,"y_min":N:true,"y_max":N:true,"z_min":N:true,"z_max":N:true,"wco_x":N:false,"wco_y":N:false,"wco_z":N:false,"timeout":I:false]),
+    spec!("plotter.set_bounds",false,["x_min":N:true,"x_max":N:true,"y_min":N:true,"y_max":N:true,"z_min":N:true,"z_max":N:true,"wco_x":N:false,"wco_y":N:false,"wco_z":N:false,"expected_generation":I:false,"timeout":I:false]),
     spec!("plotter.disconnect", false, []),
     spec!("plotter.jog",false,["axis":T:true,"delta":N:true,"feed":N:false,"timeout":I:false]),
     spec!("plotter.pen",false,["z":N:true,"feed":N:false,"timeout":I:false]),
