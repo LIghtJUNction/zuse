@@ -121,7 +121,7 @@ source = "git+https://github.com/LIghtJUNction/zsys.git#44dbc7f57ad2ba3336b95dde
 
 [[package]]
 name = "zuse-computer"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "sha1",
  "z64",
