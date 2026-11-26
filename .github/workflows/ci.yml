@@ -66,6 +66,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config libx11-dev libfreetype-dev libfontconfig-dev xvfb xauth xdotool xclip zenity imagemagick tesseract-ocr tesseract-ocr-eng fonts-noto-cjk
       - name: Build the portable application
+        id: bundle
         run: |
           set -eu
           target=x86_64-unknown-linux-gnu
@@ -78,12 +79,14 @@ jobs:
           "$RUNNER_TEMP/Zuse-Writer/Zuse Writer" --version | grep -F "$GITHUB_SHA"
           "$RUNNER_TEMP/Zuse-Writer/.zuse-writer/zuse" --version
           sha256sum "$package" | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Check the installed desktop workflows
+      - name: Exercise the paper setup and recovered corners
         run: |
-          set -eu
+          python apps/writer/tests/onboarding_gui.py "$RUNNER_TEMP/Zuse-Writer/Zuse Writer" "$RUNNER_TEMP/writer-evidence/wizard"
+      - name: Import fonts and articles through the native file chooser
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        run: |
           writer="$RUNNER_TEMP/Zuse-Writer/Zuse Writer"
           engine="$RUNNER_TEMP/Zuse-Writer/.zuse-writer/zuse"
-          python apps/writer/tests/onboarding_gui.py "$writer" "$RUNNER_TEMP/writer-evidence/wizard"
           xvfb-run -a -s '-screen 0 1440x1000x24' python tests/writer_file_picker.py "$writer" "$engine" "$PWD" "$RUNNER_TEMP/writer-evidence"
       - uses: actions/upload-artifact@v7
         if: always()

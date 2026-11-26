@@ -1847,7 +1847,8 @@ impl Controller {
                         if field(&output, "status").as_deref() == Some("completed") {
                             last_value(&output)
                         } else {
-                            Err(field(&output, "error").unwrap_or_else(|| "无法生成笔迹预览".into()))
+                            Err(field(&output, "error")
+                                .unwrap_or_else(|| "无法生成笔迹预览".into()))
                         }
                     });
                 let _ = tx.send(Event::OfflinePreview(Box::new(form), result));
@@ -2189,7 +2190,9 @@ impl Controller {
                 // Held segments already return their verified jog result directly.
                 let jog = jog_payload.as_deref().unwrap_or(payload);
                 let sent_feed_mm_min = match kind {
-                    MountAction::Jog { axis, .. } if field(jog, "axis") == Some(axis.to_string()) => {
+                    MountAction::Jog { axis, .. }
+                        if field(jog, "axis") == Some(axis.to_string()) =>
+                    {
                         scalar(jog, "feed_mm_min")
                     }
                     _ => None,

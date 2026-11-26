@@ -19,7 +19,7 @@ from pathlib import Path
 
 def command(*args):
     return subprocess.run(args, check=True, text=True, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE).stdout.strip()
+                          stderr=subprocess.PIPE).stdout.rstrip("\r\n")
 
 
 def await_value(read, description, timeout=15):
@@ -70,7 +70,7 @@ class Window:
         tsv = command("tesseract", str(img), "stdout", "-l", "eng", "--psm", "11", "tsv")
         groups = {}
         for word in csv.DictReader(io.StringIO(tsv), delimiter="\t"):
-            if not word.get("text", "").strip():
+            if not (word.get("text") or "").strip():
                 continue
             key = tuple(word[k] for k in ("page_num","block_num","par_num","line_num"))
             groups.setdefault(key, []).append(word)

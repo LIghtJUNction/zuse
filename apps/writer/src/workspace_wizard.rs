@@ -593,14 +593,29 @@ impl Panel<'_, '_> {
         self.text("每点一次移动 (mm)", y, 15, true);
         let y = y + 25.;
         let field = self.cell(y, 0, 3, 35.);
-        if self.ui.input(self.canvas, 1010, field, &mut c.jog_distance_text, "1", false, enabled)
-            && let Err(error) = c.edited_jog_distance()
+        if self.ui.input(
+            self.canvas,
+            1010,
+            field,
+            &mut c.jog_distance_text,
+            "1",
+            false,
+            enabled,
+        ) && let Err(error) = c.edited_jog_distance()
         {
             return Some(error);
         }
-        for (column, (label, mm)) in [("微调 1 mm", 1.), ("粗调 10 mm", 10.)].into_iter().enumerate() {
-            if self.button(1011 + column as u64, self.cell(y, column + 1, 3, 35.), label, false, enabled)
-                && let Err(error) = c.set_jog_distance_mm(mm)
+        for (column, (label, mm)) in [("微调 1 mm", 1.), ("粗调 10 mm", 10.)]
+            .into_iter()
+            .enumerate()
+        {
+            if self.button(
+                1011 + column as u64,
+                self.cell(y, column + 1, 3, 35.),
+                label,
+                false,
+                enabled,
+            ) && let Err(error) = c.set_jog_distance_mm(mm)
             {
                 return Some(error);
             }
@@ -648,22 +663,49 @@ impl WorkspaceWizard {
         let connected = c.connected();
         let waiting = self.step == Step::VerifyDraft;
         let (title, instruction) = if !connected {
-            ("先连接写字机", "插好 USB 线，在「设备」里选中写字机，再点「连接」。可以先设置每次移动的距离。")
+            (
+                "先连接写字机",
+                "插好 USB 线，在「设备」里选中写字机，再点「连接」。可以先设置每次移动的距离。",
+            )
         } else {
             match self.step {
-                Step::TopLeft => ("1 / 3  找到纸张左上角", "先取下笔，固定纸张。把空笔架移到想开始写字的左上角，避开纸夹，再记住这里。"),
-                Step::BottomRight => ("2 / 3  找到纸张右下角", "把空笔架移到可写区域的右下角，给纸边和纸夹留出空隙，再记住这里。"),
-                Step::Mount => ("3 / 3  移到装笔高度", "纸面的两个角都已记住。确认笔夹是空的或已经松开，再让它上下移动到装笔高度。"),
-                Step::Fit => ("3 / 3  装上笔", "笔夹已到位。放入笔，让笔尖轻轻碰到纸面，锁紧笔夹，再保存。"),
-                Step::Restore => ("使用已保存的校准", "请确认纸张、笔和机器原点仍在原位。确认后会应用档案中的范围和笔高。"),
-                Step::VerifyDraft if self.verify_when_idle || self.pending() => ("继续上次的角点记录", "正在核对上次记录使用的设备和坐标。核对通过后可以从原来的步骤继续。"),
-                Step::VerifyDraft => ("核对上次的角点", "查看下方的核对结果。可以重新核对，也可以放弃旧记录，从第一个角重新开始。"),
+                Step::TopLeft => (
+                    "1 / 3  找到纸张左上角",
+                    "先取下笔，固定纸张。把空笔架移到想开始写字的左上角，避开纸夹，再记住这里。",
+                ),
+                Step::BottomRight => (
+                    "2 / 3  找到纸张右下角",
+                    "把空笔架移到可写区域的右下角，给纸边和纸夹留出空隙，再记住这里。",
+                ),
+                Step::Mount => (
+                    "3 / 3  移到装笔高度",
+                    "纸面的两个角都已记住。确认笔夹是空的或已经松开，再让它上下移动到装笔高度。",
+                ),
+                Step::Fit => (
+                    "3 / 3  装上笔",
+                    "笔夹已到位。放入笔，让笔尖轻轻碰到纸面，锁紧笔夹，再保存。",
+                ),
+                Step::Restore => (
+                    "使用已保存的校准",
+                    "请确认纸张、笔和机器原点仍在原位。确认后会应用档案中的范围和笔高。",
+                ),
+                Step::VerifyDraft if self.verify_when_idle || self.pending() => (
+                    "继续上次的角点记录",
+                    "正在核对上次记录使用的设备和坐标。核对通过后可以从原来的步骤继续。",
+                ),
+                Step::VerifyDraft => (
+                    "核对上次的角点",
+                    "查看下方的核对结果。可以重新核对，也可以放弃旧记录，从第一个角重新开始。",
+                ),
             }
         };
         panel.text(title, 38., 18, true);
         let mut y = panel.report(instruction, 69.) + 10.;
         if connected {
-            if !c.busy() && c.work_offset().is_some() && let Some([x, y_now, _]) = c.wpos {
+            if !c.busy()
+                && c.work_offset().is_some()
+                && let Some([x, y_now, _]) = c.wpos
+            {
                 panel.text(&xy_readout("笔架现在", [x, y_now]), y, 15, true);
             } else {
                 panel.text("笔架现在 · 等待坐标回读", y, 14, false);
@@ -671,9 +713,15 @@ impl WorkspaceWizard {
             y += 24.;
         }
         let saved = if waiting {
-            self.draft.as_ref().map(|draft| [Some(draft.top), draft.bottom]).unwrap_or_default()
+            self.draft
+                .as_ref()
+                .map(|draft| [Some(draft.top), draft.bottom])
+                .unwrap_or_default()
         } else if self.step == Step::Restore {
-            self.plan.as_ref().map(|plan| [Some(plan.corner_a), Some(plan.corner_b)]).unwrap_or_default()
+            self.plan
+                .as_ref()
+                .map(|plan| [Some(plan.corner_a), Some(plan.corner_b)])
+                .unwrap_or_default()
         } else {
             self.corners
         };
@@ -699,16 +747,26 @@ impl WorkspaceWizard {
         }
         if connected && corner {
             y = panel.report("先微调一小步看方向。同一轴的「增大」和「减小」方向相反。长按连续移动，松开停止续发。", y) + 5.;
-            let controls = [('X', -1., "X 减小"), ('X', 1., "X 增大"), ('Y', -1., "Y 减小"), ('Y', 1., "Y 增大")];
+            let controls = [
+                ('X', -1., "X 减小"),
+                ('X', 1., "X 增大"),
+                ('Y', -1., "Y 减小"),
+                ('Y', 1., "Y 增大"),
+            ];
             for (i, (axis, sign, label)) in controls.into_iter().enumerate() {
                 let area = panel.cell(y, i, 4, 38.);
                 self.jog_buttons.push(JogButton { area, axis, sign });
                 if panel.button(1020 + i as u64, area, label, false, ready) && !suppress_click {
                     match crate::jog_settings::parse_distance(&c.jog_distance_text)
-                        .and_then(|mm| c.form.xy_jog_feed().map(|feed| (sign * mm, feed))) {
+                        .and_then(|mm| c.form.xy_jog_feed().map(|feed| (sign * mm, feed)))
+                    {
                         Ok((delta, feed)) => {
                             let token = c.jog_calibration(axis, delta, feed);
-                            self.request(token, Request::Jog(MountAction::Jog { axis, delta, feed }), c);
+                            self.request(
+                                token,
+                                Request::Jog(MountAction::Jog { axis, delta, feed }),
+                                c,
+                            );
                         }
                         Err(error) => self.notice = error,
                     }
@@ -716,13 +774,18 @@ impl WorkspaceWizard {
             }
             y += 49.;
             let first = self.step == Step::TopLeft;
-            let record = if first { "记为纸面左上角" } else { "记为纸面右下角" };
+            let record = if first {
+                "记为纸面左上角"
+            } else {
+                "记为纸面右下角"
+            };
             if panel.button(1041, panel.cell(y, 0, 1, 39.), record, true, ready) {
                 self.read(Request::Corner(usize::from(!first)), c);
             }
             y += 50.;
             if let Ok(requested) = c.form.xy_jog_feed() {
-                let speeds = ['X', 'Y'].map(|axis| c.xy_jog_feed_limit(axis).map(|limit| requested.min(limit)));
+                let speeds = ['X', 'Y']
+                    .map(|axis| c.xy_jog_feed_limit(axis).map(|limit| requested.min(limit)));
                 panel.text(&feed_readout("预计移动速度", speeds), y, 14, false);
                 y += 21.;
             }
@@ -730,7 +793,11 @@ impl WorkspaceWizard {
                 panel.text(&feed_readout("上次实发速度", self.last_feed), y, 14, false);
                 y += 21.;
             }
-            let label = if self.details { "收起速度和其他选项" } else { "速度和其他选项" };
+            let label = if self.details {
+                "收起速度和其他选项"
+            } else {
+                "速度和其他选项"
+            };
             if panel.button(1046, panel.cell(y, 0, 1, 32.), label, false, !closing) {
                 self.details = !self.details;
                 self.keyboard = false;
@@ -740,12 +807,30 @@ impl WorkspaceWizard {
                 panel.text("设定移动速度 (mm/min)", y, 14, true);
                 y += 23.;
                 let field = panel.cell(y, 0, 2, 34.);
-                    let feed_editable = !closing && !c.busy() && !self.pending();
-                panel.ui.input(panel.canvas, 1044, field, &mut c.form.jog_feed, "mm/min", false, feed_editable);
+                let feed_editable = !closing && !c.busy() && !self.pending();
+                panel.ui.input(
+                    panel.canvas,
+                    1044,
+                    field,
+                    &mut c.form.jog_feed,
+                    "mm/min",
+                    false,
+                    feed_editable,
+                );
                 let key_area = panel.cell(y, 1, 2, 34.);
                 self.keyboard_button = Some(key_area);
-                let key_label = if self.keyboard { "停用键盘方向键" } else { "启用键盘方向键" };
-                if panel.button(1045, key_area, key_label, self.keyboard, ready || self.keyboard) {
+                let key_label = if self.keyboard {
+                    "停用键盘方向键"
+                } else {
+                    "启用键盘方向键"
+                };
+                if panel.button(
+                    1045,
+                    key_area,
+                    key_label,
+                    self.keyboard,
+                    ready || self.keyboard,
+                ) {
                     self.keyboard = !self.keyboard;
                 }
                 y += 42.;
@@ -756,10 +841,18 @@ impl WorkspaceWizard {
                     }
                 }
                 if let Some(source) = &c.jog_source {
-                    panel.text(&format!("{}  {source}", crate::locale::text("速度来源")), y, 13, false);
+                    panel.text(
+                        &format!("{}  {source}", crate::locale::text("速度来源")),
+                        y,
+                        13,
+                        false,
+                    );
                     y += 20.;
                 }
-                y = panel.report("长按或方向键使用 40–500 mm/min，每段最多 2 mm，松开停止续发。", y) + 5.;
+                y = panel.report(
+                    "长按或方向键使用 40–500 mm/min，每段最多 2 mm，松开停止续发。",
+                    y,
+                ) + 5.;
                 if first {
                     if panel.pair(1040, y, 0, "查找已保存的校准", false, ready) {
                         self.read(Request::Load, c);
@@ -767,7 +860,13 @@ impl WorkspaceWizard {
                     if panel.pair(1042, y, 1, "单独对笔", false, ready) {
                         return Outcome::Secondary;
                     }
-                } else if panel.button(1043, panel.cell(y, 0, 1, 38.), "重新记录左上角", false, ready) {
+                } else if panel.button(
+                    1043,
+                    panel.cell(y, 0, 1, 38.),
+                    "重新记录左上角",
+                    false,
+                    ready,
+                ) {
                     self.discard(c);
                 }
                 y += 48.;
@@ -775,7 +874,14 @@ impl WorkspaceWizard {
         } else if connected {
             match self.step {
                 Step::VerifyDraft => {
-                    if panel.pair(1060, y, 0, "放弃草稿，重新记录", false, !closing && !c.busy() && !self.pending()) {
+                    if panel.pair(
+                        1060,
+                        y,
+                        0,
+                        "放弃草稿，重新记录",
+                        false,
+                        !closing && !c.busy() && !self.pending(),
+                    ) {
                         self.discard(c);
                     }
                     if panel.pair(1061, y, 1, "重新核对草稿", true, ready) {
@@ -783,12 +889,24 @@ impl WorkspaceWizard {
                     }
                 }
                 Step::Mount => {
-                    if panel.button(1050, panel.cell(y, 0, 1, 38.), "把笔夹移到装笔高度", true, ready) {
+                    if panel.button(
+                        1050,
+                        panel.cell(y, 0, 1, 38.),
+                        "把笔夹移到装笔高度",
+                        true,
+                        ready,
+                    ) {
                         self.read(Request::Position, c);
                     }
                 }
                 Step::Fit => {
-                    if panel.button(1051, panel.cell(y, 0, 1, 38.), "笔已夹紧，保存校准", true, ready) {
+                    if panel.button(
+                        1051,
+                        panel.cell(y, 0, 1, 38.),
+                        "笔已夹紧，保存校准",
+                        true,
+                        ready,
+                    ) {
                         self.read(Request::Apply { restore: false }, c);
                     }
                 }
@@ -942,8 +1060,14 @@ mod tests {
 
     #[test]
     fn coordinates_and_feed_distinguish_live_values_and_missing_receipts() {
-        assert_eq!(xy_readout("已记住的左上角", [0., -3.5]), "已记住的左上角  X 0.000   Y -3.500 mm");
-        assert_eq!(feed_readout("上次实发速度", [None, Some(280.)]), "上次实发速度  X —   Y 280 mm/min");
+        assert_eq!(
+            xy_readout("已记住的左上角", [0., -3.5]),
+            "已记住的左上角  X 0.000   Y -3.500 mm"
+        );
+        assert_eq!(
+            feed_readout("上次实发速度", [None, Some(280.)]),
+            "上次实发速度  X —   Y 280 mm/min"
+        );
     }
 
     fn arrow(code: i32) -> Event {

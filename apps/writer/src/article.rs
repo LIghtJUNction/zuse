@@ -1,6 +1,6 @@
-use crate::locale::text;
 use crate::file_dialog::{FileDialog, FileKind};
-use std::sync::mpsc::{self,Receiver,TryRecvError};
+use crate::locale::text;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use zgpui::native::{ButtonStyle, Canvas, Event, Rect, Ui, colors};
 
 const MAX_BYTES: usize = 1024 * 1024;
@@ -11,7 +11,7 @@ pub(crate) struct Article {
     first: usize,
     select_all: bool,
     dialog: Option<FileDialog>,
-    reading: Option<Receiver<Result<(String,String),String>>>,
+    reading: Option<Receiver<Result<(String, String), String>>>,
     before_open: String,
     notice: String,
 }
@@ -35,36 +35,44 @@ impl Article {
     }
 
     fn poll_file(&mut self) {
-        if let Some(answer)=self.dialog.as_ref().and_then(FileDialog::poll) {
-            self.dialog=None;
+        if let Some(answer) = self.dialog.as_ref().and_then(FileDialog::poll) {
+            self.dialog = None;
             match answer {
                 Ok(Some(path)) => {
-                    let (tx,rx)=mpsc::channel();
-                    self.reading=Some(rx);
+                    let (tx, rx) = mpsc::channel();
+                    self.reading = Some(rx);
                     std::thread::spawn(move || {
-                        let value=crate::view::read_article(&path).map(|v|(path,v));
-                        let _=tx.send(value);
+                        let value = crate::view::read_article(&path).map(|v| (path, v));
+                        let _ = tx.send(value);
                     });
                 }
                 Ok(None) => self.notice.clear(),
-                Err(error) => self.notice=error,
+                Err(error) => self.notice = error,
             }
         }
-        let Some(reader)=&self.reading else { return; };
-        self.notice=match reader.try_recv() {
-            Ok(Ok((path, value))) if self.draft==self.before_open => {
-                self.draft=value.replace("\r\n","\n").replace('\r',"\n");
-                self.first=0;
-                self.cursor=0;
-                self.select_all=false;
-                format!("已打开 {}", std::path::Path::new(&path).file_name().unwrap_or_default().to_string_lossy())
+        let Some(reader) = &self.reading else {
+            return;
+        };
+        self.notice = match reader.try_recv() {
+            Ok(Ok((path, value))) if self.draft == self.before_open => {
+                self.draft = value.replace("\r\n", "\n").replace('\r', "\n");
+                self.first = 0;
+                self.cursor = 0;
+                self.select_all = false;
+                format!(
+                    "已打开 {}",
+                    std::path::Path::new(&path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                )
             }
             Ok(Ok(_)) => "草稿已有新的编辑。请重新选择文件以替换文章。".into(),
             Ok(Err(error)) => error,
             Err(TryRecvError::Empty) => return,
             Err(TryRecvError::Disconnected) => "读取文本失败，请重试。".into(),
         };
-        self.reading=None;
+        self.reading = None;
         self.before_open.clear();
     }
 
@@ -184,12 +192,27 @@ impl Article {
         let Rect { x, y, w, h } = area;
         canvas.text(text("编辑文章"), x, y, 25, true, colors::TEXT);
         self.poll_file();
-        if ui.button(canvas,711,Rect::new(x,y+44.,128.,34.),text("打开文本文件…"),ButtonStyle::Secondary,!self.pending()) {
-            self.before_open=self.draft.clone();
-            self.dialog=Some(FileDialog::open(FileKind::Text,"选择 UTF-8 文本文件"));
+        if ui.button(
+            canvas,
+            711,
+            Rect::new(x, y + 44., 128., 34.),
+            text("打开文本文件…"),
+            ButtonStyle::Secondary,
+            !self.pending(),
+        ) {
+            self.before_open = self.draft.clone();
+            self.dialog = Some(FileDialog::open(FileKind::Text, "选择 UTF-8 文本文件"));
             self.notice.clear();
         }
-        canvas.ellipsis(&self.notice,x+140.,y+51.,(w-140.).max(1.),13,false,colors::MUTED);
+        canvas.ellipsis(
+            &self.notice,
+            x + 140.,
+            y + 51.,
+            (w - 140.).max(1.),
+            13,
+            false,
+            colors::MUTED,
+        );
         let rect = Rect::new(x, y + 90., w, (h - 108.).max(100.));
         canvas.rect(rect, 8., colors::LINE);
         canvas.rect(rect.inset(1.), 7., colors::SURFACE);

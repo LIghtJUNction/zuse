@@ -11,15 +11,24 @@ pub(crate) struct DeviceCandidate {
 
 impl DeviceCandidate {
     pub(crate) fn display_name(&self) -> &str {
-        let name = self.detail.rsplit_once(" · USB ").map_or(self.detail.as_str(), |(name, _)| name);
-        if name.is_empty() || name == "USB serial" || (name.starts_with("USB ") && name.contains(':')) {
+        let name = self
+            .detail
+            .rsplit_once(" · USB ")
+            .map_or(self.detail.as_str(), |(name, _)| name);
+        if name.is_empty()
+            || name == "USB serial"
+            || (name.starts_with("USB ") && name.contains(':'))
+        {
             crate::locale::text("USB 设备")
         } else {
             name
         }
     }
     pub(crate) fn port_name(&self) -> &str {
-        std::path::Path::new(&self.label).file_name().and_then(|s| s.to_str()).unwrap_or(&self.label)
+        std::path::Path::new(&self.label)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&self.label)
     }
 }
 
@@ -38,13 +47,23 @@ pub(crate) fn discover() -> Vec<DeviceCandidate> {
     #[cfg(target_os = "windows")]
     {
         // QueryDosDevice enumerates COM names without opening or configuring them.
-        zuse::serial::ports().and_then(|ports| zuse::json::with_value(&ports, |root| {
-            root.elements().map(|item| {
-                let path = zuse::json::text(item)?;
-                Ok(DeviceCandidate { label: path.clone(), identifier: Some(path.clone()),
-                    detail: crate::locale::text("串口设备").into(), path })
-            }).collect()
-        })).unwrap_or_default()
+        zuse::serial::ports()
+            .and_then(|ports| {
+                zuse::json::with_value(&ports, |root| {
+                    root.elements()
+                        .map(|item| {
+                            let path = zuse::json::text(item)?;
+                            Ok(DeviceCandidate {
+                                label: path.clone(),
+                                identifier: Some(path.clone()),
+                                detail: crate::locale::text("串口设备").into(),
+                                path,
+                            })
+                        })
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
@@ -112,11 +131,16 @@ mod linux {
                 vid.to_ascii_lowercase(),
                 pid.to_ascii_lowercase()
             ));
-            let identifier = attribute(parent, "serial").map(|s| format!("{} {s}", crate::locale::text("序列号"))).or_else(|| {
-                let name = parent.file_name()?.to_str()?;
-                (name.contains('-') && name.bytes().all(|c| c.is_ascii_digit() || matches!(c, b'-' | b'.')))
+            let identifier = attribute(parent, "serial")
+                .map(|s| format!("{} {s}", crate::locale::text("序列号")))
+                .or_else(|| {
+                    let name = parent.file_name()?.to_str()?;
+                    (name.contains('-')
+                        && name
+                            .bytes()
+                            .all(|c| c.is_ascii_digit() || matches!(c, b'-' | b'.')))
                     .then(|| format!("{} {name}", crate::locale::text("USB 插口")))
-            });
+                });
             return Some((fields.join(" · "), identifier));
         }
         None

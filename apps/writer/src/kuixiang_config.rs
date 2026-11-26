@@ -214,7 +214,9 @@ pub(crate) fn selected_root(
 }
 
 pub(crate) fn paper_size(root: &Path) -> Option<[f64; 2]> {
-    if !root.is_dir() { return None; }
+    if !root.is_dir() {
+        return None;
+    }
     load(root).ok().map(|p| p.page.size_mm)
 }
 
@@ -447,10 +449,17 @@ mod tests {
                 .report
                 .contains("未能读取")
         );
-        assert!(sources.paper_label(Choice::Native).starts_with("200 × 290 mm"));
+        assert!(
+            sources
+                .paper_label(Choice::Native)
+                .starts_with("200 × 290 mm")
+        );
         home.install("flatpak");
         let both = Sources::from_home(Some(&home.0));
-        assert!(both.paper_label(Choice::Flatpak).starts_with("150 × 200 mm"));
+        assert!(
+            both.paper_label(Choice::Flatpak)
+                .starts_with("150 × 200 mm")
+        );
         let preference = home.0.join("kuixiang-source.json");
         assert_eq!(sources.saved_root(&preference).unwrap(), None);
         fs::write(&preference, r#""native""#).unwrap();

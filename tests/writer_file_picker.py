@@ -42,7 +42,9 @@ def choose_file(title, path):
         if clip.poll() is None:clip.terminate();clip.wait(timeout=3)
     focus(wid)
 
+last_ocr=""
 def search_label(label):
+    global last_ocr
     """Locate the real painted English label. Works with any window size; no fixed button coordinates."""
     img=dest/"last-window.png"
     cmd("import","-window",wid,img)
@@ -52,7 +54,8 @@ def search_label(label):
     finally:
         proc.stdout.close();proc.wait()
     words=list(csv.DictReader(io.StringIO(t),delimiter="\t"))
-    def normalized(word):return re.sub(r"[^a-z0-9]","",word.lower())
+    last_ocr=" ".join(w["text"] for w in words if w["text"].strip())
+    def normalized(word):return re.sub(r"[^a-z0-9]","",(word or "").lower())
     wanted=[normalized(z) for z in label.split()]
     for i,w in enumerate(words):
         if normalized(w["text"])!=wanted[0]:continue
@@ -69,7 +72,8 @@ def search_label(label):
             return ((left+right)//4,(top+bottom)//4)
     return None
 def click_label(label):
-    pt=wait(lambda:search_label(label),timeout=20)
+    try:pt=wait(lambda:search_label(label),timeout=20)
+    except AssertionError as e:raise AssertionError(f"Could not find {label!r} in Writer: {last_ocr}") from e
     click(*pt)
 def stamp(s):print(s,flush=True)
 p=subprocess.Popen([str(writer)],cwd=d,env=env,stdout=(dest/"stdout").open("w"),stderr=(dest/"stderr").open("w"))
@@ -105,6 +109,8 @@ try:
     click_label("Apply text");stamp("article A\\nA imported and applied")
 except BaseException:
     if "wid" in globals():proof("failure.png")
+    cmd("import","-window","root",dest/"failure-desktop.png")
+    print("Windows at failure:", x("search","--onlyvisible","--name",".","getwindowname","%@"),flush=True)
     raise
 finally:
     if p.poll() is None:p.terminate();p.wait(timeout=5)

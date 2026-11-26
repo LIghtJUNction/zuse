@@ -1,7 +1,7 @@
 use crate::controller::Form;
 use crate::file_dialog::{FileDialog, FileKind};
-use std::path::Path;
 use crate::view::Frame;
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use zgpui::native::Rect;
 
@@ -19,18 +19,33 @@ fn is_gfont(path: &str) -> bool {
 }
 
 fn suggest_alias(path: &str, fonts: &[String]) -> String {
-    let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
     let mut base = String::from("local");
-    for part in stem.split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()) {
+    for part in stem
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+    {
         base.push('-');
         for ch in part.chars() {
-            if ch.is_ascii_alphanumeric() { base.push(ch.to_ascii_lowercase()); }
-            else { base.push_str(&format!("u{:x}", ch as u32)); }
-            if base.len() >= 46 { break; }
+            if ch.is_ascii_alphanumeric() {
+                base.push(ch.to_ascii_lowercase());
+            } else {
+                base.push_str(&format!("u{:x}", ch as u32));
+            }
+            if base.len() >= 46 {
+                break;
+            }
         }
-        if base.len() >= 46 { break; }
+        if base.len() >= 46 {
+            break;
+        }
     }
-    if base == "local" { base.push_str("-font"); }
+    if base == "local" {
+        base.push_str("-font");
+    }
     let mut alias = base.clone();
     let mut suffix = 2;
     while fonts.contains(&alias) {
@@ -145,8 +160,13 @@ impl FontPicker {
                     self.notice.clear();
                     self.reveal_selection = true;
                 }
-                Ok(None) => { self.notice.clear(); }
-                Err(error) => { self.manual = true; self.notice = error; }
+                Ok(None) => {
+                    self.notice.clear();
+                }
+                Err(error) => {
+                    self.manual = true;
+                    self.notice = error;
+                }
             }
         }
         let Some(receiver) = &self.installing else {
@@ -156,7 +176,13 @@ impl FontPicker {
             Ok(Ok(Installed::Official)) => "官方字体集已就绪。".into(),
             Ok(Ok(Installed::Local(name))) => {
                 form.font.clone_from(&name);
-                format!("已导入 {} · {name}", Path::new(&self.path).file_name().unwrap_or_default().to_string_lossy())
+                format!(
+                    "已导入 {} · {name}",
+                    Path::new(&self.path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                )
             }
             Ok(Err(error)) => {
                 self.refresh();
@@ -183,9 +209,17 @@ impl FontPicker {
         let input_top = pager_top + 50.;
         let name_top = input_top + if self.manual { 100. } else { 42. };
         let gfont = is_gfont(self.path.trim());
-        let notice_top = if self.path.is_empty() && !self.manual { input_top+42. } else { name_top + if gfont { 118. } else { 72. } };
+        let notice_top = if self.path.is_empty() && !self.manual {
+            input_top + 42.
+        } else {
+            name_top + if gfont { 118. } else { 72. }
+        };
         self.max_scroll = (notice_top + 30. - h).max(0.);
-        self.scroll_y = if std::mem::take(&mut self.reveal_selection) { self.max_scroll } else { self.scroll_y.min(self.max_scroll) };
+        self.scroll_y = if std::mem::take(&mut self.reveal_selection) {
+            self.max_scroll
+        } else {
+            self.scroll_y.min(self.max_scroll)
+        };
         let y = area.y - self.scroll_y;
         frame.heading("字体库", x, y);
         if frame.quiet_button(
@@ -199,8 +233,14 @@ impl FontPicker {
         let available = zuse::font_store::OFFICIAL_FONTS.join(" · ");
         frame.note(&format!("官方字体集  {available}"), x, y + 48., w);
         let button_width = ((w - 16.) / 3.).min(174.);
-        if frame.button(634, Rect::new(x,y+76., button_width,34.), "选择字体文件…", true, !self.pending()) {
-            self.dialog = Some(FileDialog::open(FileKind::Font,"选择字体文件"));
+        if frame.button(
+            634,
+            Rect::new(x, y + 76., button_width, 34.),
+            "选择字体文件…",
+            true,
+            !self.pending(),
+        ) {
+            self.dialog = Some(FileDialog::open(FileKind::Font, "选择字体文件"));
             self.notice.clear();
         }
         if frame.button(
@@ -224,7 +264,12 @@ impl FontPicker {
         };
         if frame.button(
             602,
-            Rect::new(x+2.*(button_width+8.), y+76., button_width.min(100.), 34.),
+            Rect::new(
+                x + 2. * (button_width + 8.),
+                y + 76.,
+                button_width.min(100.),
+                34.,
+            ),
             mixed,
             self.mixed,
             true,
@@ -290,23 +335,63 @@ impl FontPicker {
             w - 180.,
         );
         let can_import = !self.pending();
-        let filename=Path::new(&self.path).file_name().and_then(|s|s.to_str()).unwrap_or("");
-        frame.note(if filename.is_empty() { crate::locale::text("支持 .gfont 和 .zfont") } else { filename }, x,y+input_top+9.,(w-132.).max(1.));
-        if frame.quiet_button(635,Rect::new(x+w-126.,y+input_top,126.,32.),if self.manual {"收起文件路径"} else {"手工输入路径"},can_import) {
-            self.manual=!self.manual;
+        let filename = Path::new(&self.path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        frame.note(
+            if filename.is_empty() {
+                crate::locale::text("支持 .gfont 和 .zfont")
+            } else {
+                filename
+            },
+            x,
+            y + input_top + 9.,
+            (w - 132.).max(1.),
+        );
+        if frame.quiet_button(
+            635,
+            Rect::new(x + w - 126., y + input_top, 126., 32.),
+            if self.manual {
+                "收起文件路径"
+            } else {
+                "手工输入路径"
+            },
+            can_import,
+        ) {
+            self.manual = !self.manual;
         }
         if self.manual {
-            let previous=self.path.clone();
-            if frame.field(630,x,y+input_top+39.,w,"字体文件路径",&mut self.path,"/…/my-font.gfont",can_import)
-                && (self.name.is_empty() || self.name == suggest_alias(previous.trim(),&self.fonts)) {
-                self.name = suggest_alias(self.path.trim(),&self.fonts);
+            let previous = self.path.clone();
+            if frame.field(
+                630,
+                x,
+                y + input_top + 39.,
+                w,
+                "字体文件路径",
+                &mut self.path,
+                "/…/my-font.gfont",
+                can_import,
+            ) && (self.name.is_empty()
+                || self.name == suggest_alias(previous.trim(), &self.fonts))
+            {
+                self.name = suggest_alias(self.path.trim(), &self.fonts);
             }
         }
         if self.path.is_empty() && !self.manual {
-            frame.note(&self.notice,x,y+notice_top,w);
+            frame.note(&self.notice, x, y + notice_top, w);
             return false;
         }
-        frame.field(631,x,y+name_top,(w-137.).max(24.),"保存名称（自动生成）",&mut self.name,"local-font",can_import);
+        frame.field(
+            631,
+            x,
+            y + name_top,
+            (w - 137.).max(24.),
+            "保存名称（自动生成）",
+            &mut self.name,
+            "local-font",
+            can_import,
+        );
         if frame.button(
             632,
             Rect::new(x + w - 128., y + name_top + 21., 128., 34.),
@@ -346,13 +431,17 @@ mod tests {
     use super::*;
     #[test]
     fn proposes_legal_distinct_names_for_chinese_stems_and_conflicts() {
-        let first = suggest_alias("/home/样本/行楷.GFONT",&[]);
-        let second = suggest_alias("/home/样本/行楷.GFONT",std::slice::from_ref(&first));
+        let first = suggest_alias("/home/样本/行楷.GFONT", &[]);
+        let second = suggest_alias("/home/样本/行楷.GFONT", std::slice::from_ref(&first));
         assert!(first.starts_with("local-"));
-        assert!(first.bytes().all(|b|b.is_ascii_lowercase() || b.is_ascii_digit() || b==b'-'));
-        assert_eq!(second,format!("{first}-2"));
-        assert_ne!(first,suggest_alias("隶书.gfont",&[]));
-        assert_eq!(suggest_alias("CON.zfont",&[]),"local-con");
-        assert!(suggest_alias(&format!("{}.gfont","字".repeat(200)),&[]).len()<=64);
+        assert!(
+            first
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        );
+        assert_eq!(second, format!("{first}-2"));
+        assert_ne!(first, suggest_alias("隶书.gfont", &[]));
+        assert_eq!(suggest_alias("CON.zfont", &[]), "local-con");
+        assert!(suggest_alias(&format!("{}.gfont", "字".repeat(200)), &[]).len() <= 64);
     }
 }

@@ -90,8 +90,12 @@ impl DevicePicker {
     }
 
     fn height(&self) -> f32 {
-        if self.candidates.is_empty() { return 72.; }
-        if self.candidates.len() == 1 { return 57.; }
+        if self.candidates.is_empty() {
+            return 72.;
+        }
+        if self.candidates.len() == 1 {
+            return 57.;
+        }
         29. + self.rows().len() as f32 * DEVICE_ROW + if self.pages() > 1 { 36. } else { 0. }
     }
 }
@@ -213,7 +217,9 @@ impl WriterView {
         self.sources = (!sources.sources.choices.is_empty()).then_some(sources);
         self.notice = if message.contains("--kuixiang-config") {
             crate::locale::text("检测到两份奎享配置，可在「连接设置」中选择。").into()
-        } else { message };
+        } else {
+            message
+        };
     }
     pub fn dark(&self) -> bool {
         self.dark
@@ -429,11 +435,18 @@ impl WriterView {
         let sidebar_min = if self.screen_mode {
             412.
         } else {
-            let device = if c.connected_device().is_some() { 48. } else { self.picker.height() };
-            141. + device + if self.connection_attempted { 35. } else { 0. }
+            let device = if c.connected_device().is_some() {
+                48.
+            } else {
+                self.picker.height()
+            };
+            141. + device
+                + if self.connection_attempted { 35. } else { 0. }
                 + if self.connection_settings {
                     self.source_height() + if aligning { 371. } else { 883. }
-                } else { 0. }
+                } else {
+                    0.
+                }
         };
         let panel_min = if let Some(alignment) = &self.alignment {
             alignment.height(right_width)
@@ -514,7 +527,11 @@ impl WriterView {
         }
         let language_width = (status_space - state_width - 12.).clamp(0., 76.);
         if language_width >= 48. {
-            let language = if self.english { "简体中文" } else { "English" };
+            let language = if self.english {
+                "简体中文"
+            } else {
+                "English"
+            };
             if ui.button(
                 canvas,
                 703,
@@ -685,22 +702,47 @@ impl WriterView {
         f.heading("写字机", x, y);
         let linked = c.connected_device().is_some();
         let editing = !c.busy() && !linked && !closing;
-        if !linked && f.quiet_button(91, Rect::new(x + w - 96., y, 96., 29.), "重新查找", !closing) {
-            self.picker.update(devices::discover(), &mut c.form.port, editing);
+        if !linked
+            && f.quiet_button(
+                91,
+                Rect::new(x + w - 96., y, 96., 29.),
+                "重新查找",
+                !closing,
+            )
+        {
+            self.picker
+                .update(devices::discover(), &mut c.form.port, editing);
             self.connection_attempted = false;
         }
         let list_height = if let Some((path, _, _)) = c.connected_device() {
-            let name = self.picker.candidates.iter().find(|d| d.path == path)
+            let name = self
+                .picker
+                .candidates
+                .iter()
+                .find(|d| d.path == path)
                 .map_or(crate::locale::text("写字机"), |d| d.display_name());
-            f.note(&format!("{} · {name}", crate::locale::text("已连接")), x, y + 43., w);
+            f.note(
+                &format!("{} · {name}", crate::locale::text("已连接")),
+                x,
+                y + 43.,
+                w,
+            );
             48.
         } else {
             self.device_list(f, c, x, y + 40., w, closing)
         };
         let connect_y = y + 40. + list_height;
-        if f.button(4, Rect::new(x, connect_y, w, 36.),
-            if linked { "断开连接" } else { "连接写字机" }, !linked,
-            !closing && !c.busy() && (linked || !c.form.port.trim().is_empty())) {
+        if f.button(
+            4,
+            Rect::new(x, connect_y, w, 36.),
+            if linked {
+                "断开连接"
+            } else {
+                "连接写字机"
+            },
+            !linked,
+            !closing && !c.busy() && (linked || !c.form.port.trim().is_empty()),
+        ) {
             self.connection_attempted = !linked;
             if linked {
                 self.act(c, Action::Disconnect);
@@ -714,18 +756,34 @@ impl WriterView {
         }
         let mut settings_y = connect_y + 45.;
         if self.connection_attempted && !linked {
-            let message = if c.busy() { "正在连接写字机…" } else { "连接未成功。检查 USB 和电源后再试。" };
+            let message = if c.busy() {
+                "正在连接写字机…"
+            } else {
+                "连接未成功。检查 USB 和电源后再试。"
+            };
             f.note(message, x, settings_y + 4., w);
             settings_y += 35.;
         }
-        if f.quiet_button(7189, Rect::new(x, settings_y, w, 32.),
-            if self.connection_settings { "收起连接设置" } else { "连接设置" }, !closing) {
+        if f.quiet_button(
+            7189,
+            Rect::new(x, settings_y, w, 32.),
+            if self.connection_settings {
+                "收起连接设置"
+            } else {
+                "连接设置"
+            },
+            !closing,
+        ) {
             self.connection_settings = !self.connection_settings;
         }
-        if !self.connection_settings { return; }
+        if !self.connection_settings {
+            return;
+        }
         let mut y = settings_y + 46.;
         let appearance = if self.dark { "浅色" } else { "深色" };
-        if f.quiet_button(702, Rect::new(x, y, 70., 28.), appearance, !closing) { self.dark = !self.dark; }
+        if f.quiet_button(702, Rect::new(x, y, 70., 28.), appearance, !closing) {
+            self.dark = !self.dark;
+        }
         if self.sources.is_some() {
             self.draw_sources(f, c, x, y + 40., w, closing);
             y += self.source_height();
@@ -964,21 +1022,38 @@ impl WriterView {
         }
     }
     fn source_height(&self) -> f32 {
-        self.sources.as_ref().map_or(0., |m| 33. + m.sources.choices.len() as f32 * 37.)
+        self.sources
+            .as_ref()
+            .map_or(0., |m| 33. + m.sources.choices.len() as f32 * 37.)
     }
-    fn draw_sources(&mut self, f: &mut Frame<'_, '_>, c: &mut Controller, x: f32, y: f32, w: f32, closing: bool) {
+    fn draw_sources(
+        &mut self,
+        f: &mut Frame<'_, '_>,
+        c: &mut Controller,
+        x: f32,
+        y: f32,
+        w: f32,
+        closing: bool,
+    ) {
         let Some(menu) = &self.sources else { return };
         f.caption("奎享默认设置", x, y);
         let mut selected = None;
         for (i, choice) in menu.sources.choices.iter().copied().enumerate() {
             let label = menu.sources.paper_label(choice);
-            if f.button(7190 + i as u64, Rect::new(x, y + 22. + i as f32 * 37., w, 32.),
-                &label, menu.sources.active == Some(choice), !closing && !c.busy()) {
+            if f.button(
+                7190 + i as u64,
+                Rect::new(x, y + 22. + i as f32 * 37., w, 32.),
+                &label,
+                menu.sources.active == Some(choice),
+                !closing && !c.busy(),
+            ) {
                 selected = Some(choice);
             }
         }
         if let Some(choice) = selected {
-            self.notice = match self.switch_source(c, choice) { Ok(message) | Err(message) => message };
+            self.notice = match self.switch_source(c, choice) {
+                Ok(message) | Err(message) => message,
+            };
         }
     }
 
@@ -1077,10 +1152,24 @@ impl WriterView {
             }
         } else if let [only] = list.candidates.as_slice() {
             let selected = c.form.port == only.path;
-            f.caption(if selected { "已选设备" } else { "找到一台设备" }, x, y);
+            f.caption(
+                if selected {
+                    "已选设备"
+                } else {
+                    "找到一台设备"
+                },
+                x,
+                y,
+            );
             if selected {
                 f.note(only.display_name(), x, y + 22., w);
-            } else if f.button(100, Rect::new(x, y + 18., w, 32.), only.display_name(), false, editing) {
+            } else if f.button(
+                100,
+                Rect::new(x, y + 18., w, 32.),
+                only.display_name(),
+                false,
+                editing,
+            ) {
                 c.form.port.clone_from(&only.path);
                 list.edited = true;
                 list.automatic = None;
@@ -1092,18 +1181,34 @@ impl WriterView {
                 let selected = c.form.port == device.path;
                 let top = y + 23. + row as f32 * DEVICE_ROW;
                 let rect = Rect::new(x, top, w, DEVICE_ROW - 4.);
-                if selected { f.canvas.rect(rect, 7., colors::BLUE_PALE); }
+                if selected {
+                    f.canvas.rect(rect, 7., colors::BLUE_PALE);
+                }
                 if f.quiet_button(100 + i as u64, rect, "", editing) {
                     c.form.port.clone_from(&device.path);
                     list.edited = true;
                     list.automatic = None;
                 }
-                let label = if selected { format!("✓ {}", device.display_name()) } else { device.display_name().to_owned() };
-                f.canvas.ellipsis(&label, x + 10., top + 4., w - 20., 15, true, INK);
-                let id = device.identifier.as_deref().filter(|id| {
-                    list.candidates.iter().filter(|d| d.identifier.as_deref() == Some(*id)).count() == 1
-                }).unwrap_or_else(|| device.port_name());
-                f.canvas.ellipsis(id, x + 10., top + 25., w - 20., 12, false, MUTED);
+                let label = if selected {
+                    format!("✓ {}", device.display_name())
+                } else {
+                    device.display_name().to_owned()
+                };
+                f.canvas
+                    .ellipsis(&label, x + 10., top + 4., w - 20., 15, true, INK);
+                let id = device
+                    .identifier
+                    .as_deref()
+                    .filter(|id| {
+                        list.candidates
+                            .iter()
+                            .filter(|d| d.identifier.as_deref() == Some(*id))
+                            .count()
+                            == 1
+                    })
+                    .unwrap_or_else(|| device.port_name());
+                f.canvas
+                    .ellipsis(id, x + 10., top + 25., w - 20., 12, false, MUTED);
             }
             if list.pages() > 1 {
                 let top = y + 23. + list.rows().len() as f32 * DEVICE_ROW;
@@ -1484,18 +1589,20 @@ impl WriterView {
         } else {
             "取消作业"
         };
-        if c.busy() && f.ui.button(
-            f.canvas,
-            52,
-            layout.action(if self.advanced { 2 } else { 1 }),
-            crate::locale::text(label),
-            if c.busy() {
-                ButtonStyle::Danger
-            } else {
-                ButtonStyle::Secondary
-            },
-            c.busy() && !closing && (c.owns_job() || target.is_some()),
-        ) {
+        if c.busy()
+            && f.ui.button(
+                f.canvas,
+                52,
+                layout.action(if self.advanced { 2 } else { 1 }),
+                crate::locale::text(label),
+                if c.busy() {
+                    ButtonStyle::Danger
+                } else {
+                    ButtonStyle::Secondary
+                },
+                c.busy() && !closing && (c.owns_job() || target.is_some()),
+            )
+        {
             if c.owns_job() || (confirm && target == self.confirm_cancel) {
                 self.confirm_cancel = None;
                 self.act(c, Action::Cancel);

@@ -50,7 +50,12 @@ impl Sources {
         let mut choices = vec![];
         let mut paper_sizes = vec![];
         for choice in [Choice::Native, Choice::Flatpak] {
-            if let Some(size) = choice.root(home).ok().flatten().and_then(|p| kuixiang_config::paper_size(&p)) {
+            if let Some(size) = choice
+                .root(home)
+                .ok()
+                .flatten()
+                .and_then(|p| kuixiang_config::paper_size(&p))
+            {
                 choices.push(choice);
                 paper_sizes.push((choice, size));
             }
@@ -67,12 +72,21 @@ impl Sources {
     }
     pub fn paper_label(&self, choice: Choice) -> String {
         if choice == Choice::Common {
-            let label = if self.paper_sizes.len() > 1 { "使用两份配置的共同设置" } else { "跟随已安装的配置" };
+            let label = if self.paper_sizes.len() > 1 {
+                "使用两份配置的共同设置"
+            } else {
+                "跟随已安装的配置"
+            };
             return crate::locale::text(label).into();
         }
         let label = crate::locale::text(choice.label());
-        self.paper_sizes.iter().find(|(c, _)| *c == choice)
-            .map_or_else(|| label.to_owned(), |(_, [w, h])| format!("{w} × {h} mm · {label}"))
+        self.paper_sizes
+            .iter()
+            .find(|(c, _)| *c == choice)
+            .map_or_else(
+                || label.to_owned(),
+                |(_, [w, h])| format!("{w} × {h} mm · {label}"),
+            )
     }
 
     pub fn mark_explicit(&mut self, root: &Path) {
