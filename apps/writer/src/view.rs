@@ -27,6 +27,7 @@ pub struct WriterView {
     advanced: bool,
     fonts: Option<FontPicker>,
     article: Option<Article>,
+    choose_direction: bool,
     dark: bool,
     english: bool,
     confirm_reset: bool,
@@ -179,6 +180,7 @@ impl WriterView {
             advanced: false,
             fonts: None,
             article: None,
+            choose_direction: false,
             dark: false,
             english: false,
             confirm_reset: false,
@@ -229,6 +231,7 @@ impl WriterView {
         self.workspace.as_ref().is_none_or(|w| !w.pending())
     }
     pub fn back(&mut self) {
+        self.choose_direction = false;
         if self.alignment.take().is_none() {
             self.workspace = None;
         }
@@ -239,6 +242,12 @@ impl WriterView {
         self.workspace = None;
         self.alignment = None;
         self.scroll_y = 0.;
+        self.mapping[2] = c.form.reference_units.to_string();
+        self.mapping[3] = c.form.reference_distance.to_string();
+        self.mapping[4] = c.form.area_width.to_string();
+        self.mapping[5] = c.form.area_height.to_string();
+        self.geometry[3] = c.form.x.to_string();
+        self.geometry[4] = c.form.y.to_string();
         self.geometry[6] = c.form.pen_up.to_string();
         self.geometry[7] = c.form.pen_down.to_string();
         self.dirty(c);
@@ -392,7 +401,7 @@ impl WriterView {
                 } else {
                     0.
                 }
-                + if aligning { 370. } else { 657. }
+                + if aligning { 370. } else { 749. }
         };
         let panel_min = if let Some(alignment) = &self.alignment {
             alignment.height(right_width)
@@ -554,13 +563,48 @@ impl WriterView {
             panes.sidebar.w,
             closing,
         );
+        if self.choose_direction {
+            let (rx, y, right) = (panes.main.x, panes.main.y, panes.main.w);
+            frame.heading("纸面方向", rx, y);
+            frame.note(
+                "以正常阅读纸张的方向为准。如果字上下镜像，就选反转纸面上下。",
+                rx,
+                y + 44.,
+                right,
+            );
+            let width = (right - 8.) / 2.;
+            for (index, (reverse, label)) in [(false, "保留纸面上下"), (true, "反转纸面上下")]
+                .into_iter()
+                .enumerate()
+            {
+                if frame.button(
+                    706 + index as u64,
+                    Rect::new(rx + index as f32 * (width + 8.), y + 82., width, 37.),
+                    label,
+                    false,
+                    !closing && !c.busy(),
+                ) {
+                    match c.set_paper_direction(reverse, true) {
+                        Ok(()) => {
+                            self.choose_direction = false;
+                            self.finish_alignment(
+                                c,
+                                "对笔与纸面方向已应用。请重新生成预览。".into(),
+                            );
+                        }
+                        Err(error) => self.notice = error,
+                    }
+                    return;
+                }
+            }
+            frame.note(&self.notice, rx, y + 136., right);
+            return;
+        }
         if let Some(alignment) = &mut self.alignment {
             if alignment.draw(frame.canvas, frame.ui, c, panes.main, closing) {
-                let message = format!(
-                    "已应用对笔结果，抬笔 {:.3} mm，落笔 {:.3} mm。请更新预览。",
-                    c.form.pen_up, c.form.pen_down
-                );
-                self.finish_alignment(c, message);
+                self.choose_direction = true;
+                self.notice.clear();
+                self.scroll_y = 0.;
             }
         } else if let Some(workspace) = &mut self.workspace {
             match workspace.draw(frame.canvas, frame.ui, c, panes.main, closing) {
@@ -773,24 +817,58 @@ impl WriterView {
                 );
             }
         }
-        for (i, label) in ["移至抬笔位", "移至落笔位"].into_iter().enumerate() {
-            if f.button(
-                23 + i as u64,
-                Rect::new(x + i as f32 * (half + 8.), y + 603., half, 34.),
-                label,
-                false,
-                enabled,
-            ) {
-                if let Ok(z) = number(&self.geometry[6 + i], LABELS[6 + i]) {
-                    if i == 0 {
-                        c.form.pen_up = z;
-                        self.act(c, Action::PenUp);
-                    } else {
-                        c.form.pen_down = z;
-                        self.act(c, Action::PenDown);
-                    }
-                } else {
-                    self.notice = "笔位需为有限的 Z 坐标。".into();
+        let paper_ready = enabled && c.paper.is_some();
+        {
+            let [a, b] = c
+                .paper
+                .as_ref()
+                .map_or([[0.; 2]; 2], |paper| [paper.corner_a, paper.corner_b]);
+            let up = c.paper.as_ref().map_or(0., |paper| paper.pen_up_z);
+            let down = c.paper.as_ref().map_or(0., |paper| paper.pen_down_z);
+            let positions = [
+                ("回到左上角", a),
+                ("回到右下角", b),
+                (
+                    "回到中心",
+                    std::array::from_fn(|i| f64::midpoint(a[i], b[i])),
+                ),
+            ];
+            for (index, (label, [target_x, target_y])) in positions.into_iter().enumerate() {
+                if f.button(
+                    705 + index as u64,
+                    Rect::new(x + index as f32 * (bw + 8.), y + 650., bw, 34.),
+                    label,
+                    false,
+                    paper_ready,
+                ) {
+                    self.act(
+                        c,
+                        Action::Park {
+                            x: target_x,
+                            y: target_y,
+                            up,
+                        },
+                    );
+                }
+            }
+            for (index, label) in ["抬笔", "落笔"].into_iter().enumerate() {
+                if f.button(
+                    23 + index as u64,
+                    Rect::new(x + index as f32 * (half + 8.), y + 695., half, 34.),
+                    label,
+                    false,
+                    paper_ready,
+                ) {
+                    c.form.pen_up = up;
+                    c.form.pen_down = down;
+                    self.act(
+                        c,
+                        if index == 0 {
+                            Action::PenUp
+                        } else {
+                            Action::PenDown
+                        },
+                    );
                 }
             }
         }
@@ -1143,7 +1221,7 @@ impl WriterView {
         let preview_title = layout.preview.y - 46.;
         if self.show_origin_hint && !self.advanced {
             f.canvas.ellipsis(
-                crate::locale::text("起点 X/Y 请留在纸面内，默认轴向从 X 最小、Y 最大处向内留边。"),
+                crate::locale::text("书写起点 X/Y 对应纸张左上角。"),
                 x,
                 preview_title - 25.,
                 w,
@@ -1193,7 +1271,7 @@ impl WriterView {
             layout.action(1),
             "发送到写字机",
             true,
-            editing && c.connected() && !c.gcode.is_empty(),
+            editing && c.connected() && c.paper.is_some() && !c.gcode.is_empty(),
         ) {
             self.act(c, Action::Send);
         }

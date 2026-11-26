@@ -5,7 +5,15 @@ use std::time::{Duration, Instant};
 #[path = "linuxcnc.rs"]
 mod linuxcnc;
 pub use linuxcnc::run_linuxcnc;
+mod automatic_bounds;
 mod bounds;
+pub(crate) fn calibrate_travel<P: Port>(
+    port: &mut P,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<Workspace> {
+    automatic_bounds::home(port, end, cancel)
+}
 pub(crate) use bounds::{TravelBounds, Workspace};
 pub(crate) fn bind_workspace<P: Port>(
     port: &mut WatchedPort<P>,
@@ -374,11 +382,17 @@ fn inspect_port<P: Port>(
         }
         result.push_str(&format!(r#","work_offset":{offset:?}"#));
     }
-    if matches!(view, StatusView::Work | StatusView::Frame) {
+    if matches!(view, StatusView::Work | StatusView::Frame)
+        || (view == StatusView::Metric
+            && device_id.is_some()
+            && c.port.generation() == first_generation)
+    {
         result.push_str(&format!(
             r#","device_id":{}"#,
             device_id.as_deref().map_or_else(|| "null".into(), quote)
         ));
+    }
+    if matches!(view, StatusView::Work | StatusView::Frame) {
         // GRBL exposes a digital probe input on supported builds. No force reading is present.
         let value = match probe_state {
             Some(true) => "true",
@@ -744,40 +758,40 @@ impl<P: Port> Connection<'_, P> {
             None => Err("invalid controller status".into()),
         }
     }
-    fn report_scale(&mut self) -> Result<f64> {
-        // GRBL $13 controls realtime coordinate reporting independently of G20/G21.
-        // Read the setting without changing the firmware's reporting configuration.
+    fn read_settings(&mut self) -> Result<std::collections::BTreeMap<u16, f64>> {
         self.send(b"$$\n")?;
-        let mut units = None;
+        let mut settings = std::collections::BTreeMap::new();
         loop {
             let line = self
                 .next(self.end)?
                 .ok_or("controller settings query timed out")?;
             if line == "ok" {
-                break;
+                return Ok(settings);
             }
             let (key, value) = line
                 .split_once('=')
                 .ok_or("malformed GRBL settings reply")?;
-            if key
+            let key: u16 = key
                 .strip_prefix('$')
-                .and_then(|s| s.parse::<u16>().ok())
-                .is_none()
-            {
-                return Err("malformed GRBL settings key".into());
-            }
-            if key == "$13" {
-                if units.is_some() {
-                    return Err("duplicate GRBL report units".into());
-                }
-                units = Some(match value.trim() {
-                    "0" => 1.,
-                    "1" => 25.4,
-                    _ => return Err("unknown GRBL report units".into()),
-                });
+                .and_then(|s| s.parse().ok())
+                .ok_or("malformed GRBL settings key")?;
+            let value: f64 = value
+                .trim()
+                .parse()
+                .map_err(|_| "malformed GRBL settings value")?;
+            if !value.is_finite() || settings.insert(key, value).is_some() {
+                return Err("duplicate or invalid GRBL settings value".into());
             }
         }
-        units.ok_or_else(|| "missing GRBL $13 report units".into())
+    }
+    fn report_scale(&mut self) -> Result<f64> {
+        // Reporting units are independent of G20/G21.
+        match self.read_settings()?.get(&13) {
+            Some(0.) => Ok(1.),
+            Some(1.) => Ok(25.4),
+            Some(_) => Err("unknown GRBL report units".into()),
+            None => Err("missing GRBL $13 report units".into()),
+        }
     }
     fn check_generation(&self, expected: u64) -> Result<()> {
         if self.port.generation() == expected {
@@ -1130,6 +1144,68 @@ fn state(line: &str) -> Option<&str> {
 }
 // Sending additional trajectory blocks through the cancelled token is forbidden.
 // Feed hold is a cleanup command on the same port and never resumes the queue.
+pub(crate) fn park_connected<P: Port>(
+    port: &mut P,
+    bounds: &Workspace,
+    target: [f64; 3],
+    feed: f64,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<String> {
+    bounds.require_generation(port.generation())?;
+    let [x, y, z] = target;
+    let program = plotter_lines(&format!(
+        "G21 G90 G94\nG1 Z{z:.9} F{feed:.3}\nG1 X{x:.9} Y{y:.9} F{feed:.3}\n"
+    ))?;
+    let tolerance = {
+        let mut connection = Connection {
+            port,
+            end,
+            cancel,
+            pending: Vec::new(),
+        };
+        connection.require_state("Idle", true)?;
+        let settings = connection.read_settings()?;
+        let mut tolerance = [0.; 3];
+        for (i, value) in tolerance.iter_mut().enumerate() {
+            let steps = settings
+                .get(&(100 + i as u16))
+                .copied()
+                .filter(|n| *n >= 1.)
+                .ok_or("park requires valid axis step resolution; no motion sent")?;
+            *value = 0.51 / steps + 0.0013;
+        }
+        tolerance
+    };
+    transmit_inner(
+        port,
+        &program,
+        end,
+        cancel,
+        Some(bounds),
+        Some((z, tolerance[2])),
+    )?;
+    let mut connection = Connection {
+        port,
+        end,
+        cancel,
+        pending: Vec::new(),
+    };
+    let pose = connection.idle_pose(true)?;
+    bounds.require_generation(connection.port.generation())?;
+    bounds.verify(&bounds.identity, &pose)?;
+    if (0..3).any(|i| (pose.work[i] - [x, y, z][i]).abs() > tolerance[i]) {
+        return Err(
+            "park command sent but arrival was not verified; inspect before retrying".into(),
+        );
+    }
+    Ok(format!(
+        r#"{{"state":"Idle","work_position":{:?},"work_offset":{:?},"parked":true}}"#,
+        pose.work,
+        pose.offset.ok_or("park completed without work offset")?
+    ))
+}
+
 pub(crate) fn reset_connected<P: Port>(
     port: &mut P,
     end: Instant,
@@ -1193,6 +1269,17 @@ fn transmit<P: Port>(
     cancel: &Cancellation,
     bounds: Option<&Workspace>,
 ) -> Result<usize> {
+    transmit_inner(port, lines, end, cancel, bounds, None)
+}
+
+fn transmit_inner<P: Port>(
+    port: &mut P,
+    lines: &[String],
+    end: Instant,
+    cancel: &Cancellation,
+    bounds: Option<&Workspace>,
+    verify_lift_before_xy: Option<(f64, f64)>,
+) -> Result<usize> {
     let mut c = Connection {
         port,
         end,
@@ -1212,6 +1299,18 @@ fn transmit<P: Port>(
     let stream = (|| {
         for (i, line) in lines.iter().enumerate() {
             cancel.check()?;
+            if i == 2
+                && let Some((expected, tolerance)) = verify_lift_before_xy
+            {
+                c.idle(false)?;
+                let pose = c.idle_pose(true)?;
+                if (pose.work[2] - expected).abs() > tolerance {
+                    return Err("pen lift could not be verified; XY move was not sent".into());
+                }
+                if let Some(guard) = bounds {
+                    guard.verify(&id, &pose)?;
+                }
+            }
             if let Some(guard) = bounds {
                 guard.require_generation(c.port.generation())?;
             }
@@ -1325,6 +1424,89 @@ mod tests {
         );
         assert!(port.commands.is_empty());
         assert!(!port.writes.iter().any(|line| line.contains("X4")));
+    }
+
+    #[test]
+    fn homing_applies_work_limits_only_after_the_expected_pull_off_pose() {
+        let mut mock = Mock::default();
+        mock.expect("?", &["<Idle|MPos:0,0,0>\n"]);
+        mock.expect("$$\n", &["$20=1\n$22=1\n$23=1\n$27=1\n$100=80\n$101=80\n$102=80\n$130=300\n$131=200\n$132=40\nok\n"]);
+        mock.expect("$I\n", &[GRBL_ID]);
+        mock.expect("$N\n", &["$N0=\n$N1=\nok\n"]);
+        mock.expect("$H\n", &["ok\n"]);
+        mock.expect("$$\n", &["$13=0\nok\n"]);
+        mock.expect("?", &["<Idle|MPos:-299,-1,-1|WCO:1,2,3>\n"]);
+        let bounds = calibrate_travel(
+            &mut mock,
+            Instant::now() + Duration::from_secs(2),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert!(
+            bounds
+                .receipt()
+                .contains(r#""x_min":-300.75,"x_max":-1.25"#)
+        );
+        assert!(mock.commands.is_empty());
+    }
+
+    #[test]
+    fn controller_with_disabled_limits_receives_no_homing_command() {
+        let mut mock = Mock::default();
+        mock.expect("?", &["<Idle|MPos:0,0,0>\n"]);
+        mock.expect("$$\n", &["$20=0\n$22=0\nok\n"]);
+        let result = calibrate_travel(
+            &mut mock,
+            Instant::now() + Duration::from_secs(2),
+            &Cancellation::default(),
+        );
+        assert!(result.err().unwrap().contains("no motion sent"));
+        assert_eq!(mock.writes, ["?", "$$\n"]);
+    }
+
+    #[test]
+    fn park_lifts_before_xy_and_verifies_arrival_within_step_resolution() {
+        let cancel = Cancellation::default();
+        let mut mock = Mock::default();
+        let limits = TravelBounds::new([0.; 3], [10.; 3]).unwrap();
+        let bounds = Workspace {
+            limits,
+            identity: Identity {
+                firmware: "1.1h.2019".into(),
+                device_id: None,
+            },
+            generation: std::cell::Cell::new(0),
+            offset: [0.; 3],
+        };
+        mock.expect("?", &[ORIGIN]);
+        mock.expect("$$\n", &["$100=80\n$101=80\n$102=100\nok\n"]);
+        mock.expect("?", &[ORIGIN]);
+        mock.expect("$I\n", &[GRBL_ID]);
+        mock.expect("$$\n", &["$13=0\nok\n"]);
+        mock.expect("?", &[ORIGIN]);
+        for line in ["G94\n", "G21G90G94\n", "G1Z3.000000000F300.000\n"] {
+            mock.expect(line, &["ok\n"]);
+        }
+        let lifted = "<Idle|MPos:1,1,3|WCO:0,0,0>\n";
+        mock.expect("?", &[lifted]);
+        mock.expect("$$\n", &["$13=0\nok\n"]);
+        mock.expect("?", &[lifted]);
+        mock.expect("G1X4.004000000Y2.000000000F300.000\n", &["ok\n"]);
+        let arrived = "<Idle|MPos:4,2,3|WCO:0,0,0>\n";
+        mock.expect("?", &[arrived]);
+        mock.expect("$$\n", &["$13=0\nok\n"]);
+        mock.expect("?", &[arrived]);
+        let receipt = park_connected(
+            &mut mock,
+            &bounds,
+            [4.004, 2., 3.],
+            300.,
+            Instant::now() + Duration::from_secs(2),
+            &cancel,
+        )
+        .unwrap();
+        assert!(receipt.contains(r#""parked":true"#));
+        assert!(mock.commands.is_empty());
     }
 
     const GRBL_ID: &str = "[VER:1.1h.2019:]\nok\n";
