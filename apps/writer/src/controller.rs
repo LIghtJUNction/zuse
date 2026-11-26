@@ -658,7 +658,13 @@ fn submit(
         if Instant::now() > until {
             return Err("等待作业超时，结果未知；未重发".into());
         }
-        thread::sleep(Duration::from_millis(160));
+        thread::sleep(Duration::from_millis(
+            if script.starts_with("plotter.jog_held(") {
+                40
+            } else {
+                160
+            },
+        ));
     }
 }
 
@@ -964,6 +970,73 @@ impl MountObservation {
     }
 }
 
+fn held_jog_program(axis: char, delta: f64, feed: f64, device: &Device) -> Result<String> {
+    if !matches!(axis, 'X' | 'Y')
+        || !(0.001..=2.).contains(&delta.abs())
+        || !(40. ..=500.).contains(&feed)
+    {
+        return Err("长按只支持 XY 轴，每段最多 2 mm，速度 40–500 mm/min".into());
+    }
+    let generation = device
+        .reference_generation
+        .ok_or("连续点动需要支持参考代号的控制器服务")?;
+    let firmware = device
+        .firmware
+        .as_deref()
+        .ok_or("连续点动前请刷新固件身份")?;
+    let id = device
+        .id
+        .as_ref()
+        .map(|id| format!(",device_id={}", quote(id)))
+        .unwrap_or_default();
+    let offset = device
+        .offset
+        .map(|[x, y, z]| format!(",wco_x={x},wco_y={y},wco_z={z}"))
+        .unwrap_or_default();
+    Ok(format!(
+        "plotter.jog_held(axis=\"{}\",delta={delta},feed={feed},expected_generation={generation},firmware={}{}{},timeout=12000)",
+        axis.to_ascii_lowercase(),
+        quote(firmware),
+        id,
+        offset
+    ))
+}
+
+fn confirmed_held_jog(
+    kind: MountAction,
+    device: &Device,
+    result: (String, Option<Snapshot>),
+) -> Result<(String, Option<Snapshot>)> {
+    let MountAction::Jog { axis, delta, feed } = kind else {
+        return Err("无效的持续点动请求".into());
+    };
+    let observed = MountObservation::from_result(result, device)?;
+    let metric = |key| {
+        raw(&observed.payload, key)
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+    };
+    let start = metric("from_mm").ok_or("点动回执缺少实际起点")?;
+    let target = metric("target_mm").ok_or("点动回执缺少目标")?;
+    let tolerance = metric("axis_tolerance_mm")
+        .filter(|mm| (0. ..=delta.abs() * 0.5 + 0.001_271).contains(mm))
+        .ok_or("点动回执缺少可核实的轴分辨率")?;
+    let i = if axis == 'X' { 0 } else { 1 };
+    if observed.reference_generation != device.reference_generation
+        || device
+            .offset
+            .is_some_and(|offset| !same_xyz(offset, observed.offset, 0.000_001))
+        || field(&observed.payload, "axis").as_deref() != Some(if axis == 'X' { "X" } else { "Y" })
+        || metric("feed_mm_min") != Some(feed)
+        || (start + delta - target).abs() > 0.000_001
+        || (observed.work[i] - target).abs() > tolerance
+        || observed.work[i] == start
+    {
+        return Err("点动回执的设备参考、方向、速度或终点不符，请核对设备".into());
+    }
+    Ok(observed.completed())
+}
+
 fn mount_job(
     action: &Action,
     snapshot: Option<&Snapshot>,
@@ -1250,6 +1323,23 @@ impl Controller {
             self.link.as_ref().and_then(|d| d.offset),
         )
     }
+    pub(crate) fn jog_held(&mut self, axis: char, delta: f64, feed: f64) -> Option<u64> {
+        let device = self.link.as_ref()?;
+        let script = match held_jog_program(axis, delta, feed, device) {
+            Ok(script) => script,
+            Err(e) => {
+                self.status = e;
+                return None;
+            }
+        };
+        let before = self.generation;
+        self.dispatch_inner(
+            Action::Mount(MountAction::Jog { axis, delta, feed }, device.offset),
+            Some(script),
+        );
+        (self.generation != before).then_some(self.generation)
+    }
+
     pub fn apply_calibration_bounds_at(&mut self, b: MachineBounds, wco: [f64; 3]) -> Option<u64> {
         self.dispatch_mount(MountAction::ApplyBounds(b), Some(wco))
     }
@@ -1312,6 +1402,10 @@ impl Controller {
         self.strokes.clear();
     }
     pub fn dispatch(&mut self, action: Action) {
+        self.dispatch_inner(action, None);
+    }
+
+    fn dispatch_inner(&mut self, action: Action, held_program: Option<String>) {
         if matches!(action, Action::Cancel) {
             if self.cancel_pending {
                 return;
@@ -1431,6 +1525,21 @@ impl Controller {
                 Action::Export(path) => {
                     export(path, &program).map(|()| (path.display().to_string(), expected))
                 }
+                Action::Mount(kind, _) if held_program.is_some() => (|| {
+                    let last = expected
+                        .as_ref()
+                        .ok_or("连续点动需要已核实的共享会话快照")?;
+                    let selected = device.as_ref().ok_or("连续点动需要已连接的写字机")?;
+                    let result = submit(
+                        &session,
+                        &action,
+                        held_program.as_deref().unwrap(),
+                        Some(last),
+                        &stop,
+                        &tx,
+                    )?;
+                    confirmed_held_jog(*kind, selected, result)
+                })(),
                 Action::Mount(..) => mount_job(
                     &action,
                     expected.as_ref(),
@@ -2336,6 +2445,45 @@ mod tests {
         max: [5., 6., 7.],
     };
     const BOUND_ACK: &str = r#"{"connected":true,"port":"writer-sim","baud":115200,"bounds":{"x_min":0,"x_max":5,"y_min":1,"y_max":6,"z_min":2,"z_max":7},"work_offset":[1,2,3]}"#;
+
+    #[test]
+    fn held_jog_correlates_observed_endpoint_and_single_axis_with_retained_device() {
+        let frame = MOUNT_FRAME.replace(
+            r#""baud":115200"#,
+            r#""baud":115200,"reference_generation":12"#,
+        );
+        let mut c = Controller::default();
+        c.position(&frame).unwrap();
+        let device = c.link.as_ref().unwrap();
+        let program = held_jog_program('Y', -0.16, 40., device).unwrap();
+        assert_eq!(
+            program,
+            r#"plotter.jog_held(axis="y",delta=-0.16,feed=40,expected_generation=12,firmware="1.3a.20221114",device_id="unit-a",wco_x=1,wco_y=2,wco_z=3,timeout=12000)"#
+        );
+        let held = MountAction::Jog {
+            axis: 'Y',
+            delta: -0.16,
+            feed: 40.,
+        };
+        let receipt=frame.replace(r#""state":"Idle""#,r#""state":"Idle","axis":"Y","from_mm":5.163,"target_mm":5.003,"axis_tolerance_mm":0.006751,"feed_mm_min":40"#);
+        let snapshot = Some(Snapshot {
+            pid: 1,
+            rev: 2,
+            active: None,
+            last: Some(7),
+        });
+        assert!(confirmed_held_jog(held, device, (receipt.clone(), snapshot.clone())).is_ok());
+        for bad in [
+            receipt.replace(r#""axis":"Y""#, r#""axis":"X""#),
+            receipt.replace("5.163", "5.3"),
+            receipt.replace("5.003", "5.03"),
+            receipt.replace("generation\":12", "generation\":13"),
+            receipt.replace("0.006751", "2.0"),
+        ] {
+            assert!(confirmed_held_jog(held, device, (bad, snapshot.clone())).is_err());
+        }
+        assert!(confirmed_held_jog(held, device, (receipt, None)).is_err());
+    }
 
     // Simulate a named-session CLI's correlated, contiguous finished jobs without a port.
     fn simulate_mount(

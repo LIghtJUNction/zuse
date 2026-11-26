@@ -232,6 +232,22 @@ impl WriterView {
         }
     }
 
+    pub fn calibration_key(
+        &mut self,
+        event: &Event,
+        fresh: bool,
+        c: &mut Controller,
+    ) -> Option<bool> {
+        if self.alignment.is_some()
+            || self.article.is_some()
+            || self.fonts.is_some()
+            || self.choose_direction
+        {
+            return None;
+        }
+        self.workspace.as_mut()?.keyboard_input(event, fresh, c)
+    }
+
     pub fn screen(&self) -> (bool, bool, bool) {
         (
             self.workspace.is_some(),

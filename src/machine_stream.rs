@@ -785,8 +785,11 @@ impl<P: Port> Connection<'_, P> {
         }
     }
     fn report_scale(&mut self) -> Result<f64> {
+        Self::scale_from_settings(&self.read_settings()?)
+    }
+    fn scale_from_settings(settings: &std::collections::BTreeMap<u16, f64>) -> Result<f64> {
         // Reporting units are independent of G20/G21.
-        match self.read_settings()?.get(&13) {
+        match settings.get(&13) {
             Some(0.) => Ok(1.),
             Some(1.) => Ok(25.4),
             Some(_) => Err("unknown GRBL report units".into()),
@@ -997,18 +1000,26 @@ impl<P: Port> Connection<'_, P> {
 }
 /// Calculate a work-coordinate jog from fresh reports on the already selected device.
 /// A single GRBL jog block neither latches a modal state nor resends uncertain motion.
-pub(crate) fn jog_connected(
-    port: &mut WatchedPort<SerialPort>,
-    axis: char,
-    delta: f64,
-    feed: f64,
+pub(crate) struct JogReference {
+    pub(crate) generation: u64,
+    pub(crate) firmware: String,
+    pub(crate) device_id: Option<String>,
+    pub(crate) offset: Option<[f64; 3]>,
+}
+
+pub(crate) fn jog_connected<P: Port>(
+    port: &mut WatchedPort<P>,
+    segment: (char, f64, f64),
+    reference: Option<&JogReference>,
     end: Instant,
     cancel: &Cancellation,
     bounds: Option<&Workspace>,
 ) -> Result<String> {
-    jog_on_port(port, axis, delta, feed, end, cancel, bounds)
+    port.check_reference(reference.map(|r| r.generation))?;
+    jog_segment(port, segment, reference, end, cancel, bounds)
 }
 
+#[cfg(test)]
 fn jog_on_port<P: Port>(
     port: &mut P,
     axis: char,
@@ -1018,6 +1029,18 @@ fn jog_on_port<P: Port>(
     cancel: &Cancellation,
     bounds: Option<&Workspace>,
 ) -> Result<String> {
+    jog_segment(port, (axis, delta, feed), None, end, cancel, bounds)
+}
+
+fn jog_segment<P: Port>(
+    port: &mut P,
+    (axis, delta, feed): (char, f64, f64),
+    reference: Option<&JogReference>,
+    end: Instant,
+    cancel: &Cancellation,
+    bounds: Option<&Workspace>,
+) -> Result<String> {
+    let generation = port.generation();
     let index = match axis {
         'X' => 0,
         'Y' => 1,
@@ -1038,7 +1061,30 @@ fn jog_on_port<P: Port>(
     if let Some(guard) = bounds {
         guard.require_generation(c.port.generation())?;
     }
-    let pose = c.idle_pose(bounds.is_some())?;
+    if reference.is_some_and(|r| r.firmware != id.firmware || r.device_id != id.device_id) {
+        return Err("held jog device identity changed; no motion sent".into());
+    }
+    let settings = c.read_settings()?;
+    let scale = Connection::<P>::scale_from_settings(&settings)?;
+    let report_tolerance = if scale == 1. { 0.000_501 } else { 0.001_271 };
+    let axis_tolerance = if reference.is_some() {
+        let steps = settings.get(&(100 + index as u16)).copied()
+            .filter(|steps| *steps >= 1. && *steps * delta.abs() >= 1.)
+            .ok_or("held jog requires at least one step at the reported axis resolution; no motion sent")?;
+        0.5 / steps + report_tolerance
+    } else {
+        report_tolerance
+    };
+    let pose = c.idle_pose_scaled(bounds.is_some() || reference.is_some(), scale)?;
+    if let Some(r) = reference
+        && (generation != c.port.generation()
+            || r.offset.is_some_and(|want| {
+                pose.offset
+                    .is_none_or(|actual| !bounds::same_offset(want, actual))
+            }))
+    {
+        return Err("held jog work reference changed; no motion sent".into());
+    }
     let from = pose.work[index];
     let target = from + delta;
     if !(target as f32).is_finite() || target as f32 == from as f32 {
@@ -1063,23 +1109,84 @@ fn jog_on_port<P: Port>(
         .map_err(|e| {
             format!("jog attempted; motion result unconfirmed, inspect before retry: {e}")
         })?;
-    loop {
+    let final_pose = loop {
         let report = c
             .query_status(false)
             .map_err(|e| format!("jog acknowledged; final state unverified: {e}"))?;
         match state(&report) {
-            Some("Idle") => break,
+            Some("Idle") => {
+                if reference.is_none() {
+                    break None;
+                }
+                let coords = Positions::parse(&report)
+                    .map_err(|e| format!("jog sent; final pose unknown: {e}"))?;
+                if let Some(observed) = coords.metric_pose(scale, true)? {
+                    break Some(observed);
+                }
+                c.cancel
+                    .sleep(QUERY_INTERVAL.min(end.saturating_duration_since(Instant::now())))?;
+            }
             Some("Jog" | "Run") => c
                 .cancel
                 .sleep(QUERY_INTERVAL.min(end.saturating_duration_since(Instant::now())))?,
             Some(s) => return Err(format!("jog acknowledged; controller state {s}")),
             None => return Err("jog acknowledged; invalid final state".into()),
         }
-    }
+    };
     if let Some(guard) = bounds {
         guard.require_generation(c.port.generation()).map_err(|e| {
             format!("jog sent; final travel reference unverified; do not replay: {e}")
         })?;
+    }
+    if let Some(after) = final_pose {
+        let verified_id = c
+            .identify()
+            .map_err(|e| format!("jog sent; final identity unknown: {e}"))?;
+        let offset = after.offset.ok_or("jog sent; final work origin unknown")?;
+        let expected =
+            std::array::from_fn::<_, 3, _>(|i| if i == index { target } else { pose.work[i] });
+        if generation != c.port.generation()
+            || id != verified_id
+            || pose
+                .offset
+                .is_none_or(|wco| !bounds::same_offset(wco, offset))
+            || after.work[index] == from
+            || expected
+                .iter()
+                .zip(after.work)
+                .enumerate()
+                .any(|(i, (want, got))| {
+                    (want - got).abs()
+                        > if i == index {
+                            axis_tolerance
+                        } else {
+                            report_tolerance
+                        }
+                })
+        {
+            return Err(
+                "jog sent; observed endpoint, reference or identity did not match; do not replay"
+                    .into(),
+            );
+        }
+        if let Some(guard) = bounds {
+            guard.verify(&id, &after).map_err(|e| {
+                format!("jog sent; observed endpoint is outside its verified bounds: {e}")
+            })?;
+        }
+        return Ok(format!(
+            r#"{{"state":"Idle","axis_tolerance_mm":{axis_tolerance},"units":"mm","report_units":"{}","controller":"{}","firmware":{},"device_id":{},"work_position":{:?},"work_offset":{offset:?},"axis":{},"from_mm":{from},"target_mm":{target},"feed_mm_min":{feed}}}"#,
+            if scale == 1. { "mm" } else { "inch" },
+            if id.firmware == "1.3a.20221114" {
+                "BtWriter"
+            } else {
+                "grbl"
+            },
+            quote(&id.firmware),
+            id.device_id.as_deref().map_or_else(|| "null".into(), quote),
+            after.work,
+            quote(&axis.to_string())
+        ));
     }
     Ok(format!(
         r#"{{"state":"Idle","axis":{},"from_mm":{from},"target_mm":{target},"feed_mm_min":{feed}}}"#,
@@ -2061,6 +2168,111 @@ mod tests {
             );
             // No stale offset from the handshake; only read-only queries were written.
             assert_eq!(m.writes, ["?", "$I\n", "$$\n", "?"]);
+        }
+    }
+
+    #[test]
+    fn held_jog_reads_a_real_endpoint_once_and_rejects_stale_or_partial_motion() {
+        for (frame, ok) in [
+            ("<Idle|MPos:1.163,1,1|WCO:0,0,0>\n", true),
+            ("<Idle|MPos:1.100,1,1|WCO:0,0,0>\n", false),
+            ("<Idle|MPos:1.163,1.10,1|WCO:0,0,0>\n", false),
+            ("<Idle|MPos:2.163,1,1|WCO:1,0,0>\n", false),
+        ] {
+            let mut m = Mock::default();
+            m.expect("?", &[ORIGIN]);
+            m.expect("$I\n", &[GRBL_ID]);
+            m.expect("$$\n", &["$13=0\n$100=80\nok\n"]);
+            m.expect("?", &[ORIGIN]);
+            m.expect("$J=G21G90X1.160000F40.000000\n", &["ok\n"]);
+            m.expect("?", &["<Idle|WPos:1.163,1,1>\n"]);
+            m.expect("?", &[frame]);
+            m.expect("$I\n", &[GRBL_ID]);
+            let mut port = WatchedPort::new(m);
+            let reference = JogReference {
+                generation: port.reference_generation(),
+                firmware: "1.1h.2019".into(),
+                device_id: None,
+                offset: Some([0.; 3]),
+            };
+            let result = jog_connected(
+                &mut port,
+                ('X', 0.16, 40.),
+                Some(&reference),
+                deadline(2000).unwrap(),
+                &Cancellation::default(),
+                None,
+            );
+            if ok {
+                let receipt = result.unwrap();
+                assert!(receipt.contains(r#""work_position":[1.163, 1.0, 1.0]"#));
+                assert!(receipt.contains(r#""target_mm":1.16"#));
+            } else {
+                assert!(result.unwrap_err().contains("do not replay"));
+            }
+            assert_eq!(
+                port.inner
+                    .writes
+                    .iter()
+                    .filter(|w| w.starts_with("$J"))
+                    .count(),
+                1
+            );
+            assert!(port.inner.commands.is_empty());
+        }
+    }
+
+    #[test]
+    fn held_jog_refuses_changed_generation_identity_origin_and_bounds_before_motion() {
+        for reason in ["generation", "identity", "origin", "bounds"] {
+            let mut m = Mock::default();
+            if reason != "generation" {
+                m.expect("?", &[ORIGIN]);
+                m.expect("$I\n", &[GRBL_ID]);
+                if reason != "identity" {
+                    m.expect("$$\n", &["$13=0\n$101=80\nok\n"]);
+                    m.expect("?", &[ORIGIN]);
+                }
+            }
+            let mut port = WatchedPort::new(m);
+            let reference = JogReference {
+                generation: if reason == "generation" {
+                    0
+                } else {
+                    port.reference_generation()
+                },
+                firmware: if reason == "identity" {
+                    "another"
+                } else {
+                    "1.1h.2019"
+                }
+                .into(),
+                device_id: None,
+                offset: Some(if reason == "origin" {
+                    [4., 0., 0.]
+                } else {
+                    [0.; 3]
+                }),
+            };
+            let guard = bounds::bind(
+                &mut sample(GRBL_ID, ORIGIN),
+                TravelBounds::new([0.; 3], [1.1; 3]).unwrap(),
+                Some([0.; 3]),
+                deadline(500).unwrap(),
+                &Cancellation::default(),
+            )
+            .unwrap();
+            let result = jog_connected(
+                &mut port,
+                ('Y', 1., 300.),
+                Some(&reference),
+                deadline(1000).unwrap(),
+                &Cancellation::default(),
+                (reason == "bounds").then_some(&guard),
+            );
+            assert!(result.is_err(), "{reason}");
+            assert!(port.inner.commands.is_empty());
+            assert!(port.inner.writes.iter().all(|w| !w.starts_with("$J")));
         }
     }
 

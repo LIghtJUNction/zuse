@@ -174,4 +174,8 @@ USB 设备	USB devices
 
 书写起点 X/Y 对应纸张左上角。	The writing origin is the top-left corner of the paper.
 按住方向键连续点动，松开或移出按钮即停止续发。	Hold an axis button to jog. Release it or move off it to stop sending moves.
+启用键盘方向键	Enable arrow keys
+停用键盘方向键	Disable arrow keys
+按住方向键或轴按钮移动。松开停止续发，已发段最多 2 mm。	Hold an arrow key or axis button to jog. Release to stop sending. One segment of up to 2 mm may finish.
+点动回执与请求不符，请核对位置。	The jog receipt differs from the request. Check the position.
 XY 点动速度 · mm/min	XY jog speed · mm/min

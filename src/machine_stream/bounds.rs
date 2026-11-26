@@ -66,7 +66,7 @@ pub(crate) struct Workspace {
     pub(super) offset: [f64; 3],
 }
 
-fn same_offset(first: [f64; 3], second: [f64; 3]) -> bool {
+pub(super) fn same_offset(first: [f64; 3], second: [f64; 3]) -> bool {
     first
         .into_iter()
         .zip(second)
@@ -128,6 +128,26 @@ pub(super) struct Pose {
 }
 
 impl Positions {
+    pub(super) fn metric_pose(&self, scale: f64, require_offset: bool) -> Result<Option<Pose>> {
+        let offset = self.offset_xyz().map(|v| v.map(|n| n * scale));
+        let (Some(x), Some(y), Some(z)) = (self.work_axis(0), self.work_axis(1), self.work_axis(2))
+        else {
+            return Ok(None);
+        };
+        if require_offset && offset.is_none() {
+            return Ok(None);
+        }
+        let work = [x * scale, y * scale, z * scale];
+        if !work
+            .into_iter()
+            .chain(offset.into_iter().flatten())
+            .all(f64::is_finite)
+        {
+            return Err("non-finite controller metric position".into());
+        }
+        Ok(Some(Pose { work, offset }))
+    }
+
     pub(super) fn offset_xyz(&self) -> Option<[f64; 3]> {
         if let Some(offset) = &self.offset {
             return Some([offset[0], offset[1], offset[2]]);
@@ -140,6 +160,10 @@ impl Positions {
 impl<P: Port> Connection<'_, P> {
     pub(super) fn idle_pose(&mut self, require_offset: bool) -> Result<Pose> {
         let scale = self.report_scale()?;
+        self.idle_pose_scaled(require_offset, scale)
+    }
+
+    pub(super) fn idle_pose_scaled(&mut self, require_offset: bool, scale: f64) -> Result<Pose> {
         let mut attempts = 0;
         loop {
             let frame = self.query_status(false)?;
@@ -147,22 +171,8 @@ impl<P: Port> Connection<'_, P> {
                 return Err("controller left Idle before motion or teaching".into());
             }
             let coords = Positions::parse(&frame)?;
-            let offset = coords.offset_xyz().map(|v| v.map(|x| x * scale));
-            if let (Some(x), Some(y), Some(z)) = (
-                coords.work_axis(0),
-                coords.work_axis(1),
-                coords.work_axis(2),
-            ) && (!require_offset || offset.is_some())
-            {
-                let work = [x * scale, y * scale, z * scale];
-                if !work
-                    .into_iter()
-                    .chain(offset.into_iter().flatten())
-                    .all(f64::is_finite)
-                {
-                    return Err("non-finite controller metric position".into());
-                }
-                return Ok(Pose { work, offset });
+            if let Some(pose) = coords.metric_pose(scale, require_offset)? {
+                return Ok(pose);
             }
             attempts += 1;
             let left = self.end.saturating_duration_since(Instant::now());

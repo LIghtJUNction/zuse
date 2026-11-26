@@ -210,6 +210,12 @@ fn imports_reject_missing_lock_dirty_cache_and_index_hidden_changes() {
     );
     add(&app, &source, "v0.1.0").unwrap();
     let path = packages::resolve_import(&app, "pkg:kit").unwrap();
+    // Git records this setting when it probes macOS filename normalization.
+    git(
+        path.parent().unwrap(),
+        &["config", "core.precomposeunicode", "true"],
+    );
+    assert_eq!(packages::resolve_import(&app, "pkg:kit").unwrap(), path);
     fs::write(&path, "fn inspect(){wait(ms=0)}\n").unwrap();
     assert!(
         packages::resolve_import(&app, "pkg:kit")

@@ -27,6 +27,25 @@ zuse run examples/handwriting.zuse
 
 For example, `size=10,advance=12,reference_units=10,reference_distance=5` gives a 5-unit glyph and 6 units between adjacent origins. The screen uses downward-positive Y. On a Cartesian XY plotter the first glyph begins at the specified top-left work coordinate and its downstrokes decrease machine Y. Set `swap_xy` to exchange the local axes, then `flip_x` and/or `flip_y` to reverse the corresponding machine directions. These transforms precede the final origin offset.
 
+### Import a local KuiXiang font
+
+From the extracted release directory, run the Python 3 importer on an unencrypted `.gfont` file you have permission to use. Versions 5, 6 and 9 are supported.
+
+```sh
+python3 scripts/import_gfont.py my-font.gfont --output my-font.zfont
+./zuse font add local-pen my-font.zfont
+```
+
+Add `--text "Hello"` to convert only the characters in that text. To install directly, use `--install local-pen --zuse ./zuse` in place of `--output my-font.zfont`. On Windows, use `python` and `.\\zuse.exe`. Writer keeps a common scale for all glyphs and applies its own character spacing. Existing output files are preserved.
+
+On GNU/Linux, open Writer with a local paper preset:
+
+```sh
+./zuse-writer --kuixiang-page page_settings.json "Letter"
+```
+
+Use the exact preset name from your file. You can omit it when the file contains a single preset. Writer reads the page width, height and four margins in millimetres. A calibrated page keeps its taught size and takes the imported margins. Font size, spacing, directions and machine settings stay under Writer's control.
+
 ## Desktop input
 
 ~~~sh

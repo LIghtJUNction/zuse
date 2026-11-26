@@ -44,6 +44,7 @@ enum Action {
         axis: char,
         delta: f64,
         feed: f64,
+        reference: Option<machine_stream::JogReference>,
     },
     Pen {
         z: f64,
@@ -88,19 +89,7 @@ impl Command {
                 let min = ["x_min", "y_min", "z_min"].map(|k| number(call, k, f64::NAN));
                 let max = ["x_max", "y_max", "z_max"].map(|k| number(call, k, f64::NAN));
                 let limits = machine_stream::TravelBounds::new(min, max)?;
-                let keys = ["wco_x", "wco_y", "wco_z"];
-                let expected = if keys.iter().any(|k| call.get(k).is_some()) {
-                    let wco = keys.map(|k| number(call, k, f64::NAN));
-                    if !wco.iter().all(|n| n.is_finite()) {
-                        return Err(
-                            "expected work origin requires finite wco_x, wco_y, wco_z together"
-                                .into(),
-                        );
-                    }
-                    Some(wco)
-                } else {
-                    None
-                };
+                let expected = expected_offset(call)?;
                 let expected_generation = if call.get("expected_generation").is_some() {
                     Some(range(call, "expected_generation", 0, 0, i64::MAX)? as u64)
                 } else {
@@ -136,7 +125,7 @@ impl Command {
                     timeout_ms: 0,
                 });
             }
-            "plotter.jog" => {
+            "plotter.jog" | "plotter.jog_held" => {
                 let axis = match text(call, "axis", "")?.as_str() {
                     "x" => 'X',
                     "y" => 'Y',
@@ -155,7 +144,34 @@ impl Command {
                 // Leave time for the initial queries, acceleration and final Idle report.
                 let default_ms =
                     (travel_ms + 5_000.0).clamp(15_000.0, MAX_TIMEOUT_MS as f64) as i64;
-                (Action::Jog { axis, delta, feed }, default_ms)
+                let reference = if call.name == "plotter.jog_held" {
+                    if axis == 'Z'
+                        || !(0.001..=2.).contains(&delta.abs())
+                        || !(40. ..=500.).contains(&feed)
+                    {
+                        return Err("held jog requires X/Y, 0.001–2 mm and 40–500 mm/min".into());
+                    }
+                    Some(machine_stream::JogReference {
+                        generation: range(call, "expected_generation", 0, 0, i64::MAX)? as u64,
+                        firmware: text(call, "firmware", "")?,
+                        device_id: call
+                            .get("device_id")
+                            .map(|_| text(call, "device_id", ""))
+                            .transpose()?,
+                        offset: expected_offset(call)?,
+                    })
+                } else {
+                    None
+                };
+                (
+                    Action::Jog {
+                        axis,
+                        delta,
+                        feed,
+                        reference,
+                    },
+                    default_ms,
+                )
             }
             "plotter.pen" => {
                 let z = number(call, "z", f64::NAN);
@@ -185,6 +201,18 @@ impl Command {
             timeout_ms: range(call, "timeout", default_ms, 1, MAX_TIMEOUT_MS)? as u32,
         })
     }
+}
+
+fn expected_offset(call: &Call<'_>) -> Result<Option<[f64; 3]>> {
+    let keys = ["wco_x", "wco_y", "wco_z"];
+    if keys.iter().all(|k| call.get(k).is_none()) {
+        return Ok(None);
+    }
+    let wco = keys.map(|key| number(call, key, f64::NAN));
+    if !wco.iter().all(|n| n.is_finite()) {
+        return Err("expected work origin requires finite wco_x, wco_y, wco_z together".into());
+    }
+    Ok(Some(wco))
 }
 
 fn feed(call: &Call<'_>) -> Result<f64> {
@@ -344,11 +372,15 @@ pub(super) fn execute(
             offset,
             &mut device.probe,
         )?,
-        Action::Jog { axis, delta, feed } => machine_stream::jog_connected(
-            &mut device.port,
+        Action::Jog {
             axis,
             delta,
             feed,
+            reference,
+        } => machine_stream::jog_connected(
+            &mut device.port,
+            (axis, delta, feed),
+            reference.as_ref(),
             end,
             cancel,
             device.bounds.as_ref(),
@@ -398,6 +430,22 @@ pub(super) fn execute(
 #[cfg(test)]
 mod tests {
     use crate::runtime::{Options, Runtime, check, failed};
+    #[test]
+    fn held_jog_rejects_unsafe_segments_and_incomplete_reference_in_preflight() {
+        let source = r#"plotter.jog_held(axis="y",delta=-0.16,feed=40,expected_generation=4,firmware="1.1h.2019")"#;
+        let dry = Options::default();
+        assert!(check(source, dry).is_ok());
+        for invalid in [
+            source.replace("-0.16", "2.01"),
+            source.replace("40", "39"),
+            source.replace("\"y\"", "\"z\""),
+            source.replace(",expected_generation=4", ""),
+            source.replace("4,firmware", "4,wco_x=0,firmware"),
+        ] {
+            assert!(check(&invalid, dry).is_err(), "{invalid}");
+        }
+    }
+
     #[test]
     fn jog_deadlines_cover_travel_and_respect_the_explicit_timeout() {
         let timeout = |source: &str| {

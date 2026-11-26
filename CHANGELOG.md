@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.1 — 2026-11-26
+
+- Hold a keyboard arrow or axis button to jog while teaching paper corners in Writer. Choose 40–500 mm/min. Each segment waits for a verified position, and releasing the key leaves at most one submitted segment of up to 2 mm.
+- Import unencrypted KuiXiang `.gfont` files (v5, v6 and v9) with the Python script included in every release archive. Convert a complete font or select characters with `--text`.
+- Open Writer with `--kuixiang-page page_settings.json [name]` to import paper dimensions and margins in millimetres. A calibrated paper area retains its measured dimensions.
+- Handle Git's macOS filename-normalization setting and use a relative staging directory name when initializing the package cache on Windows.
+
 ## 0.9.0 — 2026-11-26
 
 - Add Zuse Writer to the native GNU/Linux archives, alongside its matching Zuse engine. The window reflows its settings and uses available height for the paper preview. Open the application from its desktop entry or run `zuse-writer`.

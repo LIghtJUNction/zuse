@@ -218,6 +218,7 @@ static SPECS: &[Spec] = &[
     spec!("plotter.park", false, ["x":N:true,"y":N:true,"z":N:true,"feed":N:false,"timeout":I:false]),
     spec!("plotter.auto_bounds", false, ["timeout":I:false]),
     spec!("plotter.jog",false,["axis":T:true,"delta":N:true,"feed":N:false,"timeout":I:false]),
+    spec!("plotter.jog_held",false,["axis":T:true,"delta":N:true,"feed":N:true,"expected_generation":I:true,"firmware":T:true,"device_id":T:false,"wco_x":N:false,"wco_y":N:false,"wco_z":N:false,"timeout":I:false]),
     spec!("plotter.pen",false,["z":N:true,"feed":N:false,"timeout":I:false]),
     spec!("plotter.send",false,["program":T:true,"require_bounds":B:false,"timeout":I:false]),
     spec!("plotter.check",false,["program":T:true,"timeout":I:false]),

@@ -52,6 +52,7 @@ def package(target):
     name = "zuse.exe" if "windows" in target else "zuse"
     prefix = "zuse-v" + version + "-" + target
     files = [(built_binary(ROOT, target, name), name, 0o755)]
+    files.append((ROOT / "scripts" / "import_gfont.py", "scripts/import_gfont.py", 0o755))
     if target in WRITER_TARGETS:
         writer = ROOT / "apps" / "writer"
         files.append((built_binary(writer, target, "zuse-writer"), "zuse-writer", 0o755))

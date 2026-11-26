@@ -3,6 +3,7 @@ mod article;
 mod controller;
 mod devices;
 mod font_picker;
+mod kuixiang_page;
 mod locale;
 mod screen_output;
 mod view;
@@ -13,7 +14,7 @@ use controller::{Action, Controller};
 use view::WriterView;
 use zgpui::native::{Event, Palette, Theme, Ui, Window, colors};
 
-const HELP: &str = "Zuse Writer · 写字机\n\nzuse-writer          打开书写页\nzuse-writer --align  打开行程与装笔向导，记录机台范围和纸面高度";
+const HELP: &str = "Zuse Writer · 写字机\n\nzuse-writer          打开书写页\nzuse-writer --align  打开行程与装笔向导，记录机台范围和纸面高度\nzuse-writer --kuixiang-page <page_settings.json> [预设名]  导入毫米纸张尺寸和四边页边距后打开书写页；字号、间距、对齐、轴向和机器参数沿用 Writer 设置";
 fn writer_palette(dark: bool) -> Palette {
     let mut p = Palette::for_theme(if dark { Theme::Dark } else { Theme::Light });
     if dark {
@@ -46,22 +47,36 @@ fn writer_palette(dark: bool) -> Palette {
 }
 
 fn main() -> Result<(), String> {
-    let mut args = std::env::args_os().skip(1);
-    let align = match (args.next(), args.next()) {
-        (None, None) => false,
-        (Some(flag), None) if flag == "--align" => true,
-        (Some(flag), None) if flag == "--help" || flag == "-h" => {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let mut controller = Controller::default();
+    let align = match args.as_slice() {
+        [] => false,
+        [flag] if flag == "--align" => true,
+        [flag] if flag == "--help" || flag == "-h" => {
             println!("{HELP}");
             return Ok(());
+        }
+        [flag, path] | [flag, path, _] if flag == "--kuixiang-page" => {
+            let name = args
+                .get(2)
+                .map(|s| s.to_str().ok_or("预设名需要 Unicode 文本"))
+                .transpose()?;
+            let preset = kuixiang_page::load(std::path::Path::new(path), name)?;
+            preset.apply(&mut controller.form, controller.paper.is_some())?;
+            eprintln!(
+                "已导入纸张 {:?} 的尺寸和四边页边距（毫米）。行数、字号、间距、对齐、轴向和机器参数沿用 Writer 设置。",
+                preset.name
+            );
+            false
         }
         _ => return Err(HELP.into()),
     };
     let mut window = Window::new("Zuse Writer · 写字机", 1120, 820)?;
     window.set_min_size(320, 240)?;
-    let mut controller = Controller::default();
     let mut view = WriterView::new(&mut controller, align);
     let mut ui = Ui::default();
     let mut event = None;
+    let mut key_read_at: Option<std::time::Instant> = None;
     let mut redraw = true;
     let mut closing = false;
     let mut initial_preview = !align;
@@ -108,7 +123,12 @@ fn main() -> Result<(), String> {
         if let Some(input) = event.as_ref() {
             view.calibration_pointer(input, &controller);
             let (_, height) = window.size();
-            if view.article_input(input, &mut ui, height) {
+            let fresh =
+                key_read_at.is_some_and(|t| t.elapsed() <= std::time::Duration::from_millis(80));
+            if !closing && let Some(repaint) = view.calibration_key(input, fresh, &mut controller) {
+                redraw |= repaint;
+                event = None;
+            } else if view.article_input(input, &mut ui, height) {
                 event = None;
                 redraw = true;
             }
@@ -141,11 +161,22 @@ fn main() -> Result<(), String> {
             }
             redraw = had_input || previous_screen != view.screen();
         }
-        event = window.event(if controller.busy() || view.needs_tick() {
+        let wait = if controller.busy() || view.needs_tick() {
             40
         } else {
             200
-        });
+        };
+        // Never turn buffered OS repeats from a slow frame into motion. Other
+        // controls still see queued events normally.
+        event = window.event(0);
+        key_read_at = None;
+        if event.is_none() {
+            let start = std::time::Instant::now();
+            event = window.event(wait);
+            if start.elapsed() <= std::time::Duration::from_millis(wait as u64 + 35) {
+                key_read_at = Some(std::time::Instant::now());
+            }
+        }
     }
     Ok(())
 }

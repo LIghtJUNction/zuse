@@ -16,7 +16,7 @@ enum Step {
 #[derive(Clone, Copy)]
 enum Request {
     Corner(usize),
-    Jog,
+    Jog(MountAction),
     Load,
     Position,
     Positioned,
@@ -29,6 +29,13 @@ struct JogButton {
     area: Rect,
     axis: char,
     sign: f64,
+}
+
+#[derive(Debug, PartialEq)]
+enum KeyJog {
+    Unhandled,
+    Discard,
+    Segment(char, f64),
 }
 
 struct Hold {
@@ -52,6 +59,8 @@ pub(crate) struct WorkspaceWizard {
     jog_buttons: Vec<JogButton>,
     hold: Option<Hold>,
     suppress_click: bool,
+    keyboard: bool,
+    keyboard_button: Option<Rect>,
     notice: String,
 }
 
@@ -74,6 +83,11 @@ fn fitted(plan: &WorkspaceProfile, work: [f64; 3]) -> bool {
     inside(plan, work) && (plan.mount_z - work[2]).abs() <= 0.001
 }
 
+// 240 ms of commanded travel. At 40..=500 mm/min this is 0.16..=2 mm.
+fn segment_mm(feed: f64) -> f64 {
+    (feed * 0.24 / 60. * 1000.).round() / 1000.
+}
+
 impl WorkspaceWizard {
     pub(crate) fn height(&self, _width: f32) -> f32 {
         565.
@@ -88,6 +102,16 @@ impl WorkspaceWizard {
     }
 
     pub(crate) fn pointer(&mut self, event: &Event, ready: bool) {
+        if matches!(event, Event::Down(x, y) if !self.keyboard_button.is_some_and(|r| r.contains(*x, *y)))
+            || matches!(
+                event,
+                Event::Scroll(_) | Event::Resize | Event::Close | Event::Text(_)
+            )
+            || matches!(event, Event::Key { code, control, shift, .. }
+                if *control || *shift || !matches!(code, 13 | 32 | 1001..=1004))
+        {
+            self.keyboard = false;
+        }
         match *event {
             Event::Down(x, y) if ready => {
                 self.hold = self
@@ -123,6 +147,81 @@ impl WorkspaceWizard {
         }
     }
 
+    // With zgpui 0.1.9 the only keyboard evidence is a Key event. A fresh
+    // press/repeat authorizes one segment; neither timers nor job completions
+    // extend that authorization. Never retain a keypress while a job is busy.
+    fn key_jog(&self, event: &Event, fresh: bool, idle: bool) -> KeyJog {
+        let Event::Key {
+            code,
+            control: false,
+            shift: false,
+            ..
+        } = event
+        else {
+            return KeyJog::Unhandled;
+        };
+        let (axis, sign) = match code {
+            1001 => ('X', -1.),
+            1002 => ('X', 1.),
+            1003 => ('Y', 1.),
+            1004 => ('Y', -1.),
+            _ => return KeyJog::Unhandled,
+        };
+        if !self.keyboard || !matches!(self.step, Step::TopLeft | Step::BottomRight) {
+            return KeyJog::Unhandled;
+        }
+        if fresh && idle && !self.pending() && !self.holding() {
+            KeyJog::Segment(axis, sign)
+        } else {
+            KeyJog::Discard
+        }
+    }
+
+    // Some(redraw) means the event belongs to the pad. Busy repeats need no paint.
+    pub(crate) fn keyboard_input(
+        &mut self,
+        event: &Event,
+        fresh: bool,
+        c: &mut Controller,
+    ) -> Option<bool> {
+        match self.key_jog(event, fresh, c.connected() && !c.busy()) {
+            KeyJog::Unhandled => None,
+            KeyJog::Discard => Some(false),
+            KeyJog::Segment(axis, sign) => {
+                self.segment(axis, sign, c);
+                Some(true)
+            }
+        }
+    }
+
+    fn segment(&mut self, axis: char, sign: f64, c: &mut Controller) {
+        let feed = match self.jog_feed() {
+            Ok(speed) => speed,
+            Err(error) => {
+                self.stop_holding();
+                self.notice = error;
+                return;
+            }
+        };
+        let delta = sign * segment_mm(feed);
+        let token = c.jog_held(axis, delta, feed);
+        if token.is_none() {
+            self.stop_holding();
+        }
+        self.request(
+            token,
+            Request::Jog(MountAction::Jog { axis, delta, feed }),
+            c,
+        );
+    }
+
+    fn stop_holding(&mut self) {
+        self.keyboard = false;
+        if let Some(hold) = &mut self.hold {
+            hold.stopped = true;
+        }
+    }
+
     fn jog_feed(&self) -> Result<f64, String> {
         self.jog_feed
             .as_deref()
@@ -135,7 +234,6 @@ impl WorkspaceWizard {
     }
 
     fn repeat_jog(&mut self, ready: bool, c: &mut Controller) {
-        let speed = self.jog_feed();
         let Some(hold) = &mut self.hold else { return };
         let elapsed = hold.armed_at.elapsed();
         if elapsed >= Duration::from_secs(12) {
@@ -145,19 +243,8 @@ impl WorkspaceWizard {
             return;
         }
         hold.repeated = true;
-        let feed = match speed {
-            Ok(feed) => feed,
-            Err(error) => {
-                hold.stopped = true;
-                self.notice = error;
-                return;
-            }
-        };
-        let token = c.jog_calibration(hold.button.axis, hold.button.sign * 2., feed);
-        if token.is_none() {
-            hold.stopped = true;
-        }
-        self.request(token, Request::Jog, c);
+        let (axis, sign) = (hold.button.axis, hold.button.sign);
+        self.segment(axis, sign, c);
     }
 
     fn request(&mut self, token: Option<u64>, request: Request, c: &Controller) {
@@ -195,7 +282,7 @@ impl WorkspaceWizard {
         }
         if !matches!(
             request,
-            Request::Positioned | Request::Applied { .. } | Request::Jog
+            Request::Positioned | Request::Applied { .. } | Request::Jog(_)
         ) && reply.action != MountAction::Status
         {
             return Err("坐标读取回执与请求不符。".into());
@@ -216,7 +303,12 @@ impl WorkspaceWizard {
                 };
                 self.notice = format!("已记录 X {x:.3}  Y {y:.3} mm");
             }
-            Request::Jog => self.notice = "点动完成。".into(),
+            Request::Jog(expected) => {
+                if reply.action != expected {
+                    return Err("点动回执与请求不符，请核对位置。".into());
+                }
+                self.notice = "点动完成。".into();
+            }
             Request::Load => {
                 let identity = identity.ok_or("此设备没有可核实的档案标识。")?;
                 self.plan =
@@ -308,9 +400,7 @@ impl WorkspaceWizard {
             match self.receive(token, request, c) {
                 Ok(done) => return done,
                 Err(error) => {
-                    if let Some(hold) = &mut self.hold {
-                        hold.stopped = true;
-                    }
+                    self.stop_holding();
                     self.notice = error;
                 }
             }
@@ -395,6 +485,10 @@ impl WorkspaceWizard {
         }
         let corner = matches!(self.step, Step::TopLeft | Step::BottomRight);
         self.jog_buttons.clear();
+        self.keyboard_button = None;
+        if !corner || closing || !c.connected() {
+            self.stop_holding();
+        }
         let ready = !closing && c.connected() && !c.busy() && !self.pending();
         if corner {
             self.repeat_jog(ready, c);
@@ -444,14 +538,18 @@ impl WorkspaceWizard {
                             match self.jog_feed() {
                                 Ok(feed) => {
                                     let token = c.jog_calibration(axis, delta, feed);
-                                    self.request(token, Request::Jog, c);
+                                    self.request(
+                                        token,
+                                        Request::Jog(MountAction::Jog { axis, delta, feed }),
+                                        c,
+                                    );
                                 }
                                 Err(error) => self.notice = error,
                             }
                         }
                     }
                 }
-                panel.report("按住方向键连续点动，松开或移出按钮即停止续发。", 304.);
+                panel.text("← X−    → X+    ↑ Y+    ↓ Y−", 303., 14, false);
                 panel.text("XY 点动速度 · mm/min", 334., 14, false);
                 let speed_rect = panel.cell(355., 0, 2, 34.);
                 panel.ui.input(
@@ -463,7 +561,26 @@ impl WorkspaceWizard {
                     false,
                     ready,
                 );
+                let key_area = panel.cell(355., 1, 2, 34.);
+                self.keyboard_button = Some(key_area);
+                if panel.button(
+                    1045,
+                    key_area,
+                    if self.keyboard {
+                        "停用键盘方向键"
+                    } else {
+                        "启用键盘方向键"
+                    },
+                    self.keyboard,
+                    ready || self.keyboard,
+                ) {
+                    self.keyboard = !self.keyboard;
+                }
 
+                panel.report(
+                    "按住方向键或轴按钮移动。松开停止续发，已发段最多 2 mm。",
+                    490.,
+                );
                 if panel.pair(
                     1041,
                     405.,
@@ -537,7 +654,7 @@ impl WorkspaceWizard {
             } else {
                 &self.notice
             },
-            510.,
+            525.,
         );
         Outcome::Stay
     }
@@ -546,6 +663,89 @@ impl WorkspaceWizard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn arrow(code: i32) -> Event {
+        Event::Key {
+            code,
+            control: false,
+            shift: false,
+            text: String::new(),
+        }
+    }
+
+    #[test]
+    fn only_fresh_focused_arrows_authorize_one_xy_segment() {
+        let mut w = WorkspaceWizard::default();
+        assert_eq!(w.key_jog(&arrow(1002), true, true), KeyJog::Unhandled);
+        w.keyboard = true;
+        for (code, axis, sign) in [
+            (1001, 'X', -1.),
+            (1002, 'X', 1.),
+            (1003, 'Y', 1.),
+            (1004, 'Y', -1.),
+        ] {
+            assert_eq!(
+                w.key_jog(&arrow(code), true, true),
+                KeyJog::Segment(axis, sign)
+            );
+            assert_eq!(w.key_jog(&arrow(code), false, true), KeyJog::Discard);
+            assert_eq!(w.key_jog(&arrow(code), true, false), KeyJog::Discard);
+        }
+        for loss in [
+            arrow(9),
+            Event::Down(0., 0.),
+            Event::Text("7".into()),
+            Event::Resize,
+        ] {
+            w.keyboard = true;
+            w.pointer(&loss, true);
+            assert_eq!(w.key_jog(&arrow(1002), true, true), KeyJog::Unhandled);
+        }
+        w.keyboard = true;
+        w.step = Step::Mount;
+        assert_eq!(w.key_jog(&arrow(1003), true, true), KeyJog::Unhandled);
+    }
+
+    #[test]
+    fn release_and_receipts_do_not_send_queued_arrows() {
+        let mut w = WorkspaceWizard {
+            keyboard: true,
+            ..WorkspaceWizard::default()
+        };
+        let mut travelled = 0.;
+        // 30 Hz keyboard repeat against a 300 ms simulated motion receipt.
+        // Release after 15 mm, with the final accepted segment still in flight.
+        for tick in 0..180 {
+            if tick % 9 == 0 && w.pending.take().is_some() {
+                travelled += segment_mm(500.);
+            }
+            if tick >= 65 {
+                assert!(!w.holding()); // No timer can manufacture a keyboard jog.
+                continue;
+            }
+            if let KeyJog::Segment(axis, sign) = w.key_jog(&arrow(1002), true, true) {
+                let expected = MountAction::Jog {
+                    axis,
+                    delta: sign * segment_mm(500.),
+                    feed: 500.,
+                };
+                w.pending = Some((tick, Request::Jog(expected)));
+            }
+        }
+        assert_eq!(travelled, 16.);
+        assert_eq!([40., 300., 500.].map(segment_mm), [0.16, 1.2, 2.]);
+        w.pending = Some((
+            200,
+            Request::Jog(MountAction::Jog {
+                axis: 'X',
+                delta: 2.,
+                feed: 500.,
+            }),
+        ));
+        let mut c = Controller::default();
+        assert!(w.poll(&mut c).is_none()); // No receipt for 200: inhibits further motion.
+        assert!(!w.keyboard);
+    }
 
     #[test]
     fn hold_is_disarmed_on_pointer_exit_and_release_does_not_add_a_click() {

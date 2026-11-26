@@ -92,12 +92,16 @@ jobs:
         run: |
           bundle="zuse-${ZUSE_TAG}-${TARGET}"
           stage="$(mktemp -d)"
-          tar -xzf "dist/$bundle.tar.gz" -C "$stage" "$bundle/zuse" "$bundle/zuse-writer" "$bundle/apps/writer/README.md"
+          tar -xzf "dist/$bundle.tar.gz" -C "$stage" "$bundle/zuse" "$bundle/zuse-writer" "$bundle/apps/writer/README.md" "$bundle/scripts/import_gfont.py" "$bundle/docs/handwriting.md"
           test -s "$stage/$bundle/apps/writer/README.md"
           version="$("$stage/$bundle/zuse" --version)"
           test "$version" = "zuse ${ZUSE_TAG#v}"
           env -u DISPLAY -u WAYLAND_DISPLAY "$stage/$bundle/zuse-writer" --help > "$stage/writer-help"
           grep -F -- '--align' "$stage/writer-help"
+          grep -F -- '--kuixiang-page' "$stage/writer-help"
+          "$stage/$bundle/scripts/import_gfont.py" --help > "$stage/importer-help"
+          grep -F -- '--install' "$stage/importer-help"
+          grep -F -- '--kuixiang-page' "$stage/$bundle/docs/handwriting.md"
       - uses: actions/upload-artifact@v7
         with:
           name: zuse-${{ matrix.target }}

@@ -600,6 +600,7 @@ fn verify_cache_config(root: &Path) -> Result<()> {
                     "bare",
                     "logallrefupdates",
                     "ignorecase",
+                    "precomposeunicode",
                     "symlinks",
                 ] as &[&str],
                 "origin" => &["url", "fetch"],
@@ -930,12 +931,12 @@ impl<'a> Resolver<'a> {
         if self.fetches > MAX_PACKAGES {
             return Err("package fetch count exceeds 65".into());
         }
-        let path = self.stage.0.join(format!("checkout-{}", self.fetches));
+        let destination = format!("checkout-{}", self.fetches);
+        let path = self.stage.0.join(&destination);
         self.fetches += 1;
-        let destination = path.to_str().ok_or("package cache path must be UTF-8")?;
         git(
             &self.stage.0,
-            &["init", "--quiet", "--template=", destination],
+            &["init", "--quiet", "--template=", &destination],
         )?;
         git(&path, &["remote", "add", "origin", &source.git])?;
         git(
