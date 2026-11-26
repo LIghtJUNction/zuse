@@ -104,6 +104,25 @@ fn translation(rng: &mut Rng, bound: f64) -> f64 {
 }
 
 pub fn strokes(font: &Font, text: &str, layout: &Layout) -> Result<Vec<Vec<(f64, f64)>>, String> {
+    strokes_in_area(font, text, layout, 0.0, 0.0, GlyphVariation::default())
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct GlyphVariation {
+    pub tilt_degrees: f64,
+    pub size_ratio: f64,
+}
+
+/// A zero dimension leaves that axis unconstrained. The origin of a constrained
+/// axis is the edge of the writing area, including the room reserved for jitter.
+pub(crate) fn strokes_in_area(
+    font: &Font,
+    text: &str,
+    layout: &Layout,
+    width: f64,
+    height: f64,
+    variation: GlyphVariation,
+) -> Result<Vec<Vec<(f64, f64)>>, String> {
     if [layout.size, layout.advance, layout.line_height]
         .into_iter()
         .any(|n| !(n > 0.0 && n <= MAX_COORDINATE))
@@ -121,6 +140,31 @@ pub fn strokes(font: &Font, text: &str, layout: &Layout) -> Result<Vec<Vec<(f64,
     if text.len() > 1024 * 1024 {
         return Err("handwriting text exceeds 1 MiB".into());
     }
+    if !(0.0..=45.0).contains(&variation.tilt_degrees)
+        || !(0.0..=0.5).contains(&variation.size_ratio)
+    {
+        return Err("glyph tilt must be 0–45 degrees and size variation 0–50%".into());
+    }
+    let tilt = variation.tilt_degrees.to_radians();
+    let max_span = layout.size * (1.0 + variation.size_ratio) * (tilt.cos() + tilt.sin());
+    let overhang = (max_span - layout.size) / 2.0;
+    for (dimension, offset) in [(width, layout.offset_x), (height, layout.offset_y)] {
+        if !(0.0..=MAX_COORDINATE).contains(&dimension)
+            || (dimension > 0.0 && dimension < max_span + 2.0 * offset)
+        {
+            return Err("writing area must fit one glyph and its random offsets".into());
+        }
+    }
+    let margin_x = if width > 0.0 {
+        layout.offset_x + overhang
+    } else {
+        0.0
+    };
+    let margin_y = if height > 0.0 {
+        layout.offset_y + overhang
+    } else {
+        0.0
+    };
     let mut rng = Rng::new(layout.seed);
     let mut output = Vec::new();
     let mut total = 0;
@@ -135,8 +179,16 @@ pub fn strokes(font: &Font, text: &str, layout: &Layout) -> Result<Vec<Vec<(f64,
             row += 1;
             continue;
         }
-        let x = f64::from(column) * layout.advance;
-        let y = f64::from(row) * layout.line_height;
+        if width > 0.0 && f64::from(column) * layout.advance + layout.size + 2.0 * margin_x > width
+        {
+            if matches!(ch, ' ' | '\u{3000}') {
+                continue;
+            }
+            column = 0;
+            row += 1;
+        }
+        let x = f64::from(column) * layout.advance + margin_x;
+        let y = f64::from(row) * layout.line_height + margin_y;
         column += 1;
         if x > MAX_COORDINATE || y > MAX_COORDINATE {
             return Err("glyph origin exceeds coordinate bounds".into());
@@ -144,12 +196,26 @@ pub fn strokes(font: &Font, text: &str, layout: &Layout) -> Result<Vec<Vec<(f64,
         if ch == ' ' || ch == '\u{3000}' {
             continue;
         }
+        if height > 0.0 && y + layout.size + margin_y > height {
+            return Err(format!("text exceeds the writing area at line {}", row + 1));
+        }
         let glyph = font
             .glyphs
             .get(&ch)
             .ok_or_else(|| format!("missing glyph U+{:04X}", ch as u32))?;
         let x = x + translation(&mut rng, layout.offset_x);
         let y = y + translation(&mut rng, layout.offset_y);
+        let (sin, cos) = if tilt == 0.0 {
+            (0.0, 1.0)
+        } else {
+            translation(&mut rng, tilt).sin_cos()
+        };
+        let scale = if variation.size_ratio == 0.0 {
+            1.0
+        } else {
+            1.0 + translation(&mut rng, variation.size_ratio)
+        };
+        let center = layout.size / 2.0;
         for path in glyph {
             total += path.len();
             if total > MAX_PROGRAM_POINTS {
@@ -157,7 +223,16 @@ pub fn strokes(font: &Font, text: &str, layout: &Layout) -> Result<Vec<Vec<(f64,
             }
             let mut stroke = Vec::with_capacity(path.len());
             for &(u, v) in path {
-                let point = (x + u * layout.size, y + v * layout.size);
+                let point = if tilt == 0.0 && variation.size_ratio == 0.0 {
+                    (x + u * layout.size, y + v * layout.size)
+                } else {
+                    let dx = (u - 0.5) * layout.size * scale;
+                    let dy = (v - 0.5) * layout.size * scale;
+                    (
+                        x + center + dx * cos - dy * sin,
+                        y + center + dx * sin + dy * cos,
+                    )
+                };
                 if point.0.abs() > MAX_COORDINATE || point.1.abs() > MAX_COORDINATE {
                     return Err("handwriting point exceeds coordinate bounds".into());
                 }
@@ -225,6 +300,63 @@ Z 0,0 1,0 0,1 1,1
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writing_area_wraps_and_reserves_jitter_on_both_axes() {
+        let font = Font::parse("X 0,0 1,1").unwrap();
+        let layout = Layout {
+            size: 5.0,
+            advance: 6.0,
+            line_height: 8.0,
+            offset_x: 0.5,
+            offset_y: 0.5,
+            ..geometry()
+        };
+        let paths =
+            strokes_in_area(&font, "XXX", &layout, 12.0, 14.0, GlyphVariation::default()).unwrap();
+        assert_eq!(paths.len(), 3);
+        assert!(paths[2][0].0 <= 1.0 && paths[2][0].1 >= 8.0);
+        assert!(
+            paths
+                .iter()
+                .flatten()
+                .all(|&(x, y)| { (0.0..=12.0).contains(&x) && (0.0..=14.0).contains(&y) })
+        );
+        assert!(
+            strokes_in_area(&font, "XXX", &layout, 12.0, 13.0, GlyphVariation::default())
+                .unwrap_err()
+                .contains("line 2")
+        );
+    }
+
+    #[test]
+    fn rotation_and_scale_are_reproducible_and_fit_the_area() {
+        let font = Font::parse("X 0,0 1,0 | 0,1 1,1").unwrap();
+        let layout = Layout {
+            size: 5.0,
+            advance: 6.0,
+            line_height: 8.0,
+            ..geometry()
+        };
+        let style = GlyphVariation {
+            tilt_degrees: 3.0,
+            size_ratio: 0.04,
+        };
+        let render = || strokes_in_area(&font, "XX", &layout, 12.0, 6.0, style).unwrap();
+        let paths = render();
+        assert_eq!(paths, render());
+        assert_ne!(paths[0][0].1, paths[0][1].1);
+        assert_ne!(
+            5.0,
+            (paths[0][1].0 - paths[0][0].0).hypot(paths[0][1].1 - paths[0][0].1)
+        );
+        assert!(
+            paths
+                .iter()
+                .flatten()
+                .all(|&(x, y)| { (0.0..=12.0).contains(&x) && (0.0..=6.0).contains(&y) })
+        );
+    }
 
     fn geometry() -> Layout {
         Layout {

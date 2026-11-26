@@ -3,7 +3,7 @@ use super::{boolean, number, range, text};
 use crate::{
     drawing::MAX_PROGRAM_POINTS,
     font_store,
-    handwriting::{self, Layout},
+    handwriting::{self, GlyphVariation, Layout},
     json::quote,
     language::Call,
     motion::MAX_COORDINATE,
@@ -51,11 +51,33 @@ impl Writing {
             return Err("reference distance conversion is outside numeric range".into());
         }
         let size = number(call, "size", 10.0);
-        let offset_x = number(call, "offset_x", 0.0);
-        let offset_y = number(call, "offset_y", 0.0);
+        let glyph_offset = |absolute: &str, relative: &str| {
+            if call.get(relative).is_some() {
+                if call.get(absolute).is_some() {
+                    return Err(format!("use either {absolute} or {relative}"));
+                }
+                let ratio = number(call, relative, 0.0);
+                if !(0.0..=1.0).contains(&ratio) {
+                    return Err(format!("{relative} must be between 0 and 1"));
+                }
+                Ok(size * ratio)
+            } else {
+                Ok(number(call, absolute, 0.0))
+            }
+        };
+        let offset_x = glyph_offset("offset_x", "offset_x_ratio")?;
+        let offset_y = glyph_offset("offset_y", "offset_y_ratio")?;
+        let variation = GlyphVariation {
+            tilt_degrees: number(call, "tilt_degrees", 0.0),
+            size_ratio: number(call, "size_ratio", 0.0),
+        };
         let seed = if call.get("seed").is_some() {
             range(call, "seed", 0, 0, i64::MAX)? as u64
-        } else if offset_x != 0.0 || offset_y != 0.0 {
+        } else if offset_x != 0.0
+            || offset_y != 0.0
+            || variation.tilt_degrees != 0.0
+            || variation.size_ratio != 0.0
+        {
             // Generated seeds also round-trip through JavaScript's JSON number type.
             RandomState::new().hash_one(()) & ((1_u64 << 53) - 1)
         } else {
@@ -70,7 +92,14 @@ impl Writing {
             seed,
         };
         let font = font_store::load(&text(call, "font", "builtin")?)?;
-        let mut strokes = handwriting::strokes(&font, &text(call, "text", "")?, &layout)?;
+        let mut strokes = handwriting::strokes_in_area(
+            &font,
+            &text(call, "text", "")?,
+            &layout,
+            number(call, "area_width", 0.0),
+            number(call, "area_height", 0.0),
+            variation,
+        )?;
         let origin = (number(call, "x", 0.0), number(call, "y", 0.0));
         let machine = matches!(call.name, "write.gcode" | "write.export");
         // A character's downstroke is +Y on screen and -Y on a Cartesian plotter.

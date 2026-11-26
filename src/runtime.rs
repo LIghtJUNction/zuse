@@ -72,6 +72,8 @@ macro_rules! write_spec {
         spec!($name, $read, ["text":T:true,"font":T:false,"size":N:false,"advance":N:false,
             "line_height":N:false,"offset_x":N:false,"offset_y":N:false,"seed":I:false,
             "reference_units":N:false,"reference_distance":N:false,"x":N:false,"y":N:false,
+            "area_width":N:false,"area_height":N:false,
+            "offset_x_ratio":N:false,"offset_y_ratio":N:false,"tilt_degrees":N:false,"size_ratio":N:false,
             $($arg:$ty:$required),*])
     };
 }

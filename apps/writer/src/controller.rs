@@ -28,8 +28,12 @@ pub struct Form {
     pub line_height: f64,
     pub x: f64,
     pub y: f64,
+    pub area_width: f64,
+    pub area_height: f64,
     pub offset_x: f64,
     pub offset_y: f64,
+    pub tilt_degrees: f64,
+    pub size_percent: f64,
     pub reference_units: f64,
     pub reference_distance: f64,
     pub swap_xy: bool,
@@ -53,8 +57,12 @@ impl Default for Form {
             line_height: 15.,
             x: 0.,
             y: 0.,
-            offset_x: 0.,
-            offset_y: 0.,
+            area_width: 0.,
+            area_height: 0.,
+            offset_x: 3.5,
+            offset_y: 3.5,
+            tilt_degrees: 3.,
+            size_percent: 4.,
             reference_units: 1.,
             reference_distance: 1.,
             swap_xy: false,
@@ -141,8 +149,16 @@ pub struct MachineBounds {
 pub enum MountAction {
     Status,
     MoveZ(f64),
-    Jog { axis: char, delta: f64 },
+    Jog {
+        axis: char,
+        delta: f64,
+    },
     ApplyBounds(MachineBounds),
+    TestInk {
+        bounds: MachineBounds,
+        up: f64,
+        down: f64,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MountReceipt {
@@ -157,7 +173,7 @@ const MOUNT_STATUS: &str = "plotter.status(work=true,offset=true,timeout=6000)";
 impl MountAction {
     fn program(self, reference: Option<[f64; 3]>, generation: Option<u64>) -> Result<String> {
         match self {
-            Self::Status => Ok(MOUNT_STATUS.into()),
+            Self::Status | Self::TestInk { .. } => Ok(MOUNT_STATUS.into()),
             Self::MoveZ(z) if (-10000.0..=10000.0).contains(&z) => {
                 Ok(format!("plotter.pen(z={z},feed=40,timeout=300000)"))
             }
@@ -226,16 +242,20 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
     let text = match action {
         Action::Screen(screen) => screen.source.clone(),
         Action::Preview => format!(
-            "write.gcode(text={},font={},size={},advance={},line_height={},x={},y={},offset_x={},offset_y={},reference_units={},reference_distance={},swap_xy={},flip_x={},flip_y={},seed={},pen_up={},pen_down={},feed={})",
+            "write.gcode(text={},font={},size={},advance={},line_height={},area_width={},area_height={},x={},y={},offset_x_ratio={},offset_y_ratio={},tilt_degrees={},size_ratio={},reference_units={},reference_distance={},swap_xy={},flip_x={},flip_y={},seed={},pen_up={},pen_down={},feed={})",
             quote(&f.text),
             quote(&f.font),
             f.size,
             f.advance,
             f.line_height,
+            f.area_width,
+            f.area_height,
             f.x,
             f.y,
-            f.offset_x,
-            f.offset_y,
+            f.offset_x / 100.,
+            f.offset_y / 100.,
+            f.tilt_degrees,
+            f.size_percent / 100.,
             f.reference_units,
             f.reference_distance,
             f.swap_xy,
@@ -931,6 +951,44 @@ impl MountObservation {
     }
 }
 
+fn ink_test(
+    bounds: MachineBounds,
+    work: [f64; 3],
+    up: f64,
+    down: f64,
+) -> Result<(String, [f64; 3])> {
+    if ![up, down]
+        .into_iter()
+        .all(|z| (bounds.min[2]..=bounds.max[2]).contains(&z))
+        || !(0..3).all(|i| (bounds.min[i]..=bounds.max[i]).contains(&work[i]))
+        || (up - work[2]).abs().min((down - work[2]).abs()) > 0.001
+    {
+        return Err("试写前请核对当前坐标和笔高".into());
+    }
+    let (axis, direction) = [(0, 1.), (0, -1.), (1, 1.), (1, -1.)]
+        .into_iter()
+        .find(|&(axis, direction)| {
+            (bounds.min[axis]..=bounds.max[axis]).contains(&(work[axis] + 5. * direction))
+        })
+        .ok_or("试写需要从当前笔尖位置起至少 5 mm 的纸面")?;
+    let point = |distance| {
+        let mut xy = [work[0], work[1]];
+        xy[axis] += direction * distance;
+        (xy[0], xy[1])
+    };
+    let program = zuse::plotter::gcode(
+        &[vec![point(0.), point(2.)], vec![point(3.), point(5.)]],
+        up,
+        down,
+        120.,
+    )?;
+    let (x, y) = point(5.);
+    Ok((
+        format!("plotter.send(program={},timeout=30000)", quote(&program)),
+        [x, y, up],
+    ))
+}
+
 fn mount_job(
     action: &Action,
     snapshot: Option<&Snapshot>,
@@ -974,6 +1032,13 @@ fn mount_job(
         }
         _ => {}
     }
+    let trial;
+    let program = if let MountAction::TestInk { bounds, up, down } = *kind {
+        (trial, target) = ink_test(bounds, before.work, up, down)?;
+        &trial
+    } else {
+        program
+    };
     // Only submit()'s read-only observation can fall back on a legacy daemon.
     let program = kind.program(*reference, before.reference_generation)?;
     let (receipt, after) = run(action, &program, &before.snapshot)?;
@@ -1171,6 +1236,16 @@ impl Controller {
             self.link.as_ref().and_then(|d| d.offset),
         )
     }
+    pub fn test_calibration_ink(
+        &mut self,
+        bounds: MachineBounds,
+        up: f64,
+        down: f64,
+        offset: [f64; 3],
+    ) -> Option<u64> {
+        self.dispatch_mount(MountAction::TestInk { bounds, up, down }, Some(offset))
+    }
+
     pub fn apply_calibration_bounds_at(&mut self, b: MachineBounds, wco: [f64; 3]) -> Option<u64> {
         self.dispatch_mount(MountAction::ApplyBounds(b), Some(wco))
     }
@@ -1832,6 +1907,21 @@ impl Controller {
 mod tests {
     use super::*;
     const PROGRAM: &str = "G21 G17 G90 G94\nG0 Z3.000\nG0 X10.000 Y20.000\nG1 Z0.000 F300.000\nG1 X12.500 Y18.500\nG0 Z3.000\nM2\n";
+
+    #[test]
+    fn ink_test_uses_two_dashes_and_ends_with_the_pen_up_inside_bounds() {
+        let bounds = MachineBounds {
+            min: [0., 0., -2.],
+            max: [5., 5., 2.],
+        };
+        let (trial, target) = ink_test(bounds, [5., 2., 1.], -1., 1.).unwrap();
+        assert_eq!(target, [0., 2., -1.]);
+        assert!(trial.contains("G1 X3.000 Y2.000"));
+        assert!(trial.contains("G0 X2.000 Y2.000"));
+        assert!(trial.contains("G0 Z-1.000"));
+        assert!(ink_test(bounds, [2., 2., 1.], -1., 1.).is_err());
+        assert!(ink_test(bounds, [5., 2., 0.], -1., 1.).is_err());
+    }
 
     #[test]
     fn preview_uses_exported_machine_coordinates() {

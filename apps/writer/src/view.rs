@@ -3,6 +3,7 @@ use crate::controller::{Action, Controller};
 use crate::devices::{self, DeviceCandidate};
 use crate::screen_output::ScreenOutput;
 use crate::workspace_wizard::{Outcome, WorkspaceWizard};
+use std::io::Read;
 use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
 
 const INK: u32 = 0x222222ff;
@@ -20,10 +21,10 @@ pub struct WriterView {
     alignment: Option<Alignment>,
     picker: DevicePicker,
     geometry: [String; 8],
-    mapping: [String; 4],
+    mapping: [String; 8],
     advanced: bool,
     confirm_cancel: Option<(u64, u64, u64)>,
-    export_path: String,
+    file_path: String,
     baud: String,
     step: String,
     seed: String,
@@ -88,11 +89,15 @@ impl DevicePicker {
     }
 }
 
-const MAP_LABELS: [&str; 4] = [
-    "字形 X 偏移幅度",
-    "字形 Y 偏移幅度",
+const MAP_LABELS: [&str; 8] = [
+    "左右偏移 ±%",
+    "上下偏移 ±%",
     "校准参考长度",
     "实测距离 mm",
+    "书写宽度（0 不限）",
+    "书写高度（0 不限）",
+    "逐字倾斜 ±°",
+    "字号变化 ±%",
 ];
 
 const LABELS: [&str; 8] = [
@@ -150,11 +155,15 @@ impl WriterView {
                 f.offset_y,
                 f.reference_units,
                 f.reference_distance,
+                f.area_width,
+                f.area_height,
+                f.tilt_degrees,
+                f.size_percent,
             ]
             .map(|v| v.to_string()),
             advanced: false,
             confirm_cancel: None,
-            export_path: String::new(),
+            file_path: String::new(),
             baud: f.baud.to_string(),
             step: f.jog_step.to_string(),
             seed: f.seed.to_string(),
@@ -224,7 +233,7 @@ impl WriterView {
             .trim()
             .parse::<u64>()
             .map_err(|_| "随机种子需为非负整数")?;
-        let mut mapping = [0.; 4];
+        let mut mapping = [0.; 8];
         for (i, v) in mapping.iter_mut().enumerate() {
             *v = number(&self.mapping[i], MAP_LABELS[i])?;
         }
@@ -234,6 +243,10 @@ impl WriterView {
             f.offset_y,
             f.reference_units,
             f.reference_distance,
+            f.area_width,
+            f.area_height,
+            f.tilt_degrees,
+            f.size_percent,
         ] = mapping;
         [
             f.size,
@@ -300,7 +313,7 @@ impl WriterView {
                 if self.screen_mode {
                     self.screen_output.height(right)
                 } else {
-                    708.
+                    if self.advanced { 763. } else { 708. }
                 }
             });
         // A connected narrow window opens directly on the calibration controls.
@@ -838,8 +851,8 @@ impl WriterView {
             ("字距", advance),
             ("行距", line),
             ("随机种子", &mut self.seed),
-            ("字形 X 偏移幅度", ox),
-            ("字形 Y 偏移幅度", oy),
+            (MAP_LABELS[0], ox),
+            (MAP_LABELS[1], oy),
         ]
         .into_iter()
         .enumerate()
@@ -872,22 +885,27 @@ impl WriterView {
         let size = number(&self.geometry[0], LABELS[0])?;
         let advance = number(&self.geometry[1], LABELS[1])?;
         let line = number(&self.geometry[2], LABELS[2])?;
-        let ox = number(&self.mapping[0], MAP_LABELS[0])?;
-        let oy = number(&self.mapping[1], MAP_LABELS[1])?;
+        let mut variation = [0.; 8];
+        for (i, value) in variation.iter_mut().enumerate() {
+            *value = number(&self.mapping[i], MAP_LABELS[i])?;
+        }
         let seed = self
             .seed
             .trim()
             .parse()
             .map_err(|_| "随机种子需为非负整数")?;
         let f = &mut c.form;
-        (
-            f.size,
-            f.advance,
-            f.line_height,
+        (f.size, f.advance, f.line_height, f.seed) = (size, advance, line, seed);
+        [
             f.offset_x,
             f.offset_y,
-            f.seed,
-        ) = (size, advance, line, ox, oy, seed);
+            _,
+            _,
+            f.area_width,
+            f.area_height,
+            f.tilt_degrees,
+            f.size_percent,
+        ] = variation;
         Ok(())
     }
     fn writing(
@@ -939,8 +957,8 @@ impl WriterView {
             {
                 let label = format!("{label} · {}", if *value { "开" } else { "关" });
                 if f.button(
-                    75 + i as u64,
-                    Rect::new(x + i as f32 * (pw + 8.), y + 259., pw, 34.),
+                    90 + i as u64,
+                    Rect::new(x + i as f32 * (pw + 8.), y + 314., pw, 34.),
                     &label,
                     *value,
                     editing,
@@ -987,6 +1005,7 @@ impl WriterView {
                 MUTED,
             );
         }
+        let y = y + if self.advanced { 55. } else { 0. };
         f.heading("笔迹预览", x, y + 331.);
         if f.button(
             50,
@@ -1056,20 +1075,35 @@ impl WriterView {
             81,
             x,
             y + 630.,
-            w - 94.,
-            "导出路径",
-            &mut self.export_path,
-            "文件名或 .gcode 路径",
+            w - 174.,
+            "文本或 G-code 文件",
+            &mut self.file_path,
+            "输入文件路径",
             editing,
         );
+        if f.button(
+            83,
+            Rect::new(x + w - 166., y + 651., 72., 34.),
+            "读文本",
+            false,
+            editing && !self.file_path.trim().is_empty(),
+        ) {
+            match read_article(self.file_path.trim()) {
+                Ok(text) => {
+                    c.form.text = text;
+                    self.dirty(c);
+                }
+                Err(error) => self.notice = error,
+            }
+        }
         if f.button(
             82,
             Rect::new(x + w - 86., y + 651., 86., 34.),
             "导出",
             false,
-            editing && !c.gcode.is_empty() && !self.export_path.trim().is_empty(),
+            editing && !c.gcode.is_empty() && !self.file_path.trim().is_empty(),
         ) {
-            self.act(c, Action::Export(self.export_path.trim().into()));
+            self.act(c, Action::Export(self.file_path.trim().into()));
         }
         let status = if self.notice.is_empty() {
             &c.status
@@ -1078,6 +1112,23 @@ impl WriterView {
         };
         f.canvas.ellipsis(status, x, y + 600., w, 14, false, MUTED);
     }
+}
+
+fn read_article(path: &str) -> Result<String, String> {
+    const MAX_BYTES: u64 = 1024 * 1024;
+    let mut article = String::new();
+    std::fs::File::open(path)
+        .and_then(|file| {
+            if !file.metadata()?.is_file() {
+                return Err(std::io::Error::other("需要普通文件"));
+            }
+            file.take(MAX_BYTES + 1).read_to_string(&mut article)
+        })
+        .map_err(|error| format!("读取 UTF-8 文本失败：{error}"))?;
+    if article.len() > MAX_BYTES as usize {
+        return Err("文本超过 1 MiB".into());
+    }
+    Ok(article.trim_start_matches('\u{feff}').to_owned())
 }
 
 fn position(v: Option<[f64; 3]>) -> String {

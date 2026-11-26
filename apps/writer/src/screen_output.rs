@@ -110,14 +110,18 @@ impl Plan {
             Some((dimension(&fields.width)?, dimension(&fields.height)?))
         };
         let arguments = format!(
-            "text={},font={},size={},advance={},line_height={},offset_x={},offset_y={},seed={},x={x},y={y},reference_units=1,reference_distance={scale}",
+            "text={},font={},size={},advance={},line_height={},area_width={},area_height={},offset_x_ratio={},offset_y_ratio={},tilt_degrees={},size_ratio={},seed={},x={x},y={y},reference_units=1,reference_distance={scale}",
             json::quote(&f.text),
             json::quote(&f.font),
             f.size,
             f.advance,
             f.line_height,
-            f.offset_x,
-            f.offset_y,
+            f.area_width,
+            f.area_height,
+            f.offset_x / 100.,
+            f.offset_y / 100.,
+            f.tilt_degrees,
+            f.size_percent / 100.,
             f.seed
         );
         if arguments.len() + 128 > 256 * 1024 {
@@ -606,8 +610,8 @@ mod tests {
     #[test]
     fn shared_layout_and_explicit_seed_match_each_output_schema_without_dispatch() {
         let mut f = form();
-        f.offset_x = 0.2;
-        f.offset_y = 0.4;
+        f.offset_x = 20.;
+        f.offset_y = 40.;
         f.seed = 17;
         let fields = Fields::default();
         for target in [Output::Mouse, Output::Touchscreen, Output::Touchpad] {
@@ -625,7 +629,9 @@ mod tests {
                 plan.send().contains("width=1920,height=1080"),
                 target != Output::Mouse
             );
-            assert!(plan.send().contains("offset_x=0.2,offset_y=0.4,seed=17"));
+            assert!(plan.send().contains(
+                "offset_x_ratio=0.2,offset_y_ratio=0.4,tilt_degrees=3,size_ratio=0.04,seed=17"
+            ));
             let dry = Options {
                 dry_run: true,
                 ..Default::default()
@@ -636,7 +642,11 @@ mod tests {
 
     #[test]
     fn real_read_only_preview_keeps_positive_down_axes_and_matches_touch_extent() {
-        let f = form();
+        let f = Form {
+            area_width: 100.,
+            area_height: 100.,
+            ..form()
+        };
         let plan = Plan::new(&f, &Fields::default(), Output::Touchscreen).unwrap();
         let reply = Runtime::new()
             .execute(

@@ -9,6 +9,7 @@ enum Stage {
     Review,
     Move,
     Fix,
+    Test,
     Save,
     Stopped,
 }
@@ -30,6 +31,7 @@ enum Operation {
     Move,
     BeforeApply,
     Apply,
+    Test,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +56,7 @@ pub(crate) struct WorkspaceWizard {
     jog_index: usize,
     pending: Option<(u64, Operation)>,
     plan: Option<WorkspaceProfile>,
+    tested: bool,
     notice: String,
 }
 
@@ -265,7 +268,7 @@ impl WorkspaceWizard {
                     _ => unreachable!(),
                 }
             }
-            Operation::Jog(_, _) | Operation::Move | Operation::Apply => {
+            Operation::Jog(_, _) | Operation::Move | Operation::Apply | Operation::Test => {
                 let r = c
                     .mount_receipt()
                     .filter(|r| r.epoch == epoch && r.request_id == id)
@@ -292,8 +295,13 @@ impl WorkspaceWizard {
                         if bounds.min != p.min || bounds.max != p.max || !at_mount(p, r.work) {
                             return Err("控制器回读的共享范围或安装位置不匹配。".into());
                         }
-                        self.stage = Stage::Save;
-                        return self.finish(c, false).map(Some);
+                        self.stage = Stage::Test;
+                        self.tested = false;
+                        self.notice = "已应用行程。确认笔尖周围是空白纸面，再试写。".into();
+                    }
+                    (Operation::Test, MountAction::TestInk { .. }) => {
+                        self.tested = true;
+                        self.notice = "试写已结束，笔已抬高。请观察纸面。".into();
                     }
                     _ => return Err("回执类型与请求不符，请重新确认。".into()),
                 }
@@ -446,10 +454,11 @@ impl WorkspaceWizard {
         }
         let title = match self.stage {
             Stage::Stopped => "操作已暂停",
-            Stage::Teach => "1 / 4   示教机台行程",
-            Stage::Review => "2 / 4   核对行程与装笔高度",
-            Stage::Move => "3 / 4   空笔夹定位",
-            Stage::Fix | Stage::Save => "4 / 4   贴纸装笔",
+            Stage::Teach => "1 / 5   示教机台行程",
+            Stage::Review => "2 / 5   核对行程与装笔高度",
+            Stage::Move => "3 / 5   空笔夹定位",
+            Stage::Fix => "4 / 5   贴纸装笔",
+            Stage::Test | Stage::Save => "5 / 5   检查试写",
         };
         f.text(title, 46., 17, true);
         let report_y = match self.stage {
@@ -478,6 +487,12 @@ impl WorkspaceWizard {
             Stage::Move => {
                 self.move_page(&mut f, c, ready);
                 290.
+            }
+            Stage::Test => {
+                if let Some(done) = self.test_ink(&mut f, c, ready) {
+                    return Outcome::Done(done);
+                }
+                320.
             }
             Stage::Fix | Stage::Save => {
                 if let Some(done) = self.fix(&mut f, c, ready) {
@@ -678,6 +693,45 @@ impl WorkspaceWizard {
             self.read(Operation::BeforeMove, c)
         }
         f.text("保持当前 XY，只沿 Z 轴低速定位。", 261., 14, false);
+    }
+
+    fn test_ink(
+        &mut self,
+        f: &mut Panel<'_, '_>,
+        c: &mut Controller,
+        ready: bool,
+    ) -> Option<String> {
+        f.report(
+            "笔尖附近留出至少 5 mm 空白纸面。程序将试写两段短线，中间抬笔。",
+            80.,
+        );
+        f.report(
+            "两段都出墨且中间无拖痕才保存。没出墨或有拖痕时，松开笔夹，再返回装笔。",
+            139.,
+        );
+        if !self.tested && f.pair(1090, 218., 0, "试写两段短线", true, ready) {
+            let p = self.plan.as_ref()?;
+            let offset = self.offset?;
+            let bounds = MachineBounds {
+                min: p.min,
+                max: p.max,
+            };
+            let token = c.test_calibration_ink(bounds, p.pen_up_z, p.pen_down_z, offset);
+            self.request(token, Operation::Test, c);
+        }
+        if self.tested && f.pair(1091, 218., 0, "出墨正常 · 保存", true, ready) {
+            self.stage = Stage::Save;
+            match self.finish(c, false) {
+                Ok(message) => return Some(message),
+                Err(error) => self.notice = error,
+            }
+        }
+        if f.pair(1092, 218., 1, "返回装笔", false, ready) {
+            self.stage = Stage::Move;
+            self.tested = false;
+            self.notice = "请先松开或取下笔，再定位空笔夹。".into();
+        }
+        None
     }
 
     fn fix(&mut self, f: &mut Panel<'_, '_>, c: &mut Controller, ready: bool) -> Option<String> {
