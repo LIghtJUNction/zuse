@@ -36,6 +36,22 @@ impl SerialPort {
         })
     }
 
+    /// Match a requested alias against the retained handle without reopening the device.
+    pub(crate) fn matches_path(&self, path: &str) -> Result<bool> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let port = self.port.as_ref().ok_or("serial port is not open")?;
+            port.matches_path(path)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            fn normalize(name: &str) -> &str {
+                name.strip_prefix(r"\\.\").unwrap_or(name)
+            }
+            Ok(normalize(&self.path) == normalize(path))
+        }
+    }
+
     pub fn status(&self) -> String {
         format!(
             "{{\"connected\":{},\"path\":{},\"baud\":{},\"format\":\"8N1\",\"flow_control\":\"none\"}}",
@@ -209,6 +225,22 @@ mod native {
     }
 
     impl Port {
+        pub(super) fn matches_path(&self, path: &str) -> Result<bool> {
+            use std::os::unix::fs::{FileTypeExt, MetadataExt};
+            let retained = self
+                .file
+                .metadata()
+                .map_err(|e| format!("inspect retained serial device: {e}"))?;
+            let requested = std::fs::metadata(path).map_err(|e| {
+                format!("inspect requested serial device {path}: {e}; current connection retained")
+            })?;
+            // rdev alone can be reused after USB removal. The held inode distinguishes
+            // a replacement device node from a second name for the actual open node.
+            Ok(requested.file_type().is_char_device()
+                && (retained.dev(), retained.ino(), retained.rdev())
+                    == (requested.dev(), requested.ino(), requested.rdev()))
+        }
+
         pub fn open(path: &str, baud: u32, machine: bool) -> Result<Self> {
             #[cfg(target_os = "linux")]
             let flags = 0x100 | 0x800; // O_NOCTTY | O_NONBLOCK.

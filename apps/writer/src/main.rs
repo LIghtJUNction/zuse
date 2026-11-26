@@ -1,4 +1,5 @@
 mod controller;
+mod devices;
 mod view;
 
 use controller::{Action, Controller};
@@ -23,6 +24,7 @@ fn main() -> Result<(), String> {
     let mut event = None;
     let mut redraw = true;
     let mut closing = false;
+    let mut initial_preview = true;
     loop {
         let before = (
             controller.busy(),
@@ -31,9 +33,14 @@ fn main() -> Result<(), String> {
             controller.cancel_target(),
         );
         let status = controller.status.clone();
+        let previous_baud = controller.form.baud;
         let calibration = (controller.form.pen_up, controller.form.pen_down);
         controller.poll();
         view.sync_heights(calibration, &controller);
+        if previous_baud != controller.form.baud {
+            view.sync_baud(controller.form.baud);
+            redraw = true;
+        }
         if closing && !controller.owns_job() {
             break;
         }
@@ -44,6 +51,10 @@ fn main() -> Result<(), String> {
             closing = true;
             controller.dispatch(Action::Cancel);
             event = None;
+        }
+        if initial_preview && !closing && !controller.busy() {
+            initial_preview = false;
+            controller.dispatch(Action::Preview);
         }
         redraw |= before
             != (

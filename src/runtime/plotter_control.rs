@@ -10,6 +10,8 @@ use crate::{
 
 type Result<T> = std::result::Result<T, String>;
 
+const MAX_TIMEOUT_MS: i64 = 300_000;
+
 pub(super) struct Command {
     action: Action,
     pub timeout_ms: u32,
@@ -52,14 +54,15 @@ impl Command {
                 if !delta.is_finite() || delta == 0. || delta.abs() > 10. {
                     return Err("plotter.jog delta must be nonzero and within ±10 mm".into());
                 }
-                (
-                    Action::Jog {
-                        axis,
-                        delta,
-                        feed: feed(call)?,
-                    },
-                    15000,
-                )
+                let feed = feed(call)?;
+                let travel_ms = (delta.abs() * 60_000.0 / feed).ceil();
+                if travel_ms >= MAX_TIMEOUT_MS as f64 && call.get("timeout").is_none() {
+                    return Err("plotter.jog travel reaches the 300 s deadline; shorten the move or increase the feed".into());
+                }
+                // Leave time for the initial queries, acceleration and final Idle report.
+                let default_ms =
+                    (travel_ms + 5_000.0).clamp(15_000.0, MAX_TIMEOUT_MS as f64) as i64;
+                (Action::Jog { axis, delta, feed }, default_ms)
             }
             "plotter.pen" => {
                 let z = number(call, "z", f64::NAN);
@@ -85,7 +88,7 @@ impl Command {
         };
         Ok(Self {
             action,
-            timeout_ms: range(call, "timeout", default_ms, 1, 300000)? as u32,
+            timeout_ms: range(call, "timeout", default_ms, 1, MAX_TIMEOUT_MS)? as u32,
         })
     }
 }
@@ -129,14 +132,20 @@ pub(super) fn execute(
     }
     let end = machine_stream::deadline(command.timeout_ms)?;
     if let Action::Connect { port: path, baud } = command.action {
-        if let Some(old) = selected.as_mut()
-            && old.path == path
-        {
-            if old.baud != baud {
-                return Err("disconnect the selected port before changing its baud rate".into());
+        if let Some(old) = selected.as_mut() {
+            if old.port.matches_path(&path)? {
+                if old.baud != baud {
+                    return Err(
+                        "run plotter.disconnect() before changing the selected port's baud rate"
+                            .into(),
+                    );
+                }
+                let status = machine_stream::inspect_connected(&mut old.port, end, cancel)?;
+                return Ok(old.envelope(&status));
             }
-            let status = machine_stream::inspect_connected(&mut old.port, end, cancel)?;
-            return Ok(old.envelope(&status));
+            if old.path == path {
+                return Err("the selected path now identifies a different device; run plotter.disconnect() before selecting its replacement".into());
+            }
         }
         let mut port = cancel.dispatch(|| SerialPort::open_machine(&path, baud))?;
         let status = machine_stream::inspect_connected(&mut port, end, cancel)?;
@@ -183,6 +192,38 @@ pub(super) fn execute(
 #[cfg(test)]
 mod tests {
     use crate::runtime::{Options, Runtime, check, failed};
+    #[test]
+    fn jog_deadlines_cover_travel_and_respect_the_explicit_timeout() {
+        let timeout = |source: &str| {
+            let call = crate::language::Parser::new(source)
+                .next()
+                .unwrap()
+                .unwrap();
+            super::Command::prepare(&call).map(|command| command.timeout_ms)
+        };
+        assert_eq!(
+            timeout(r#"plotter.jog(axis="y",delta=-10,feed=40)"#),
+            Ok(20_000)
+        );
+        assert_eq!(
+            timeout(r#"plotter.jog(axis="x",delta=1,feed=100)"#),
+            Ok(15_000)
+        );
+        assert_eq!(
+            timeout(r#"plotter.jog(axis="x",delta=4.95,feed=1)"#),
+            Ok(300_000)
+        );
+        assert!(
+            timeout(r#"plotter.jog(axis="x",delta=10,feed=1)"#)
+                .unwrap_err()
+                .contains("shorten")
+        );
+        assert_eq!(
+            timeout(r#"plotter.jog(axis="x",delta=10,feed=1,timeout=9000)"#),
+            Ok(9_000)
+        );
+    }
+
     #[test]
     fn offline_dry_run_and_full_program_budget_precede_serial_io() {
         let dry = Options {

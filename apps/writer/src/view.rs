@@ -1,4 +1,5 @@
 use crate::controller::{Action, Controller};
+use crate::devices::{self, DeviceCandidate};
 use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
 
 const INK: u32 = 0x222222ff;
@@ -9,6 +10,7 @@ const PAPER: u32 = 0xf6f6f3ff;
 // Keep partially typed numbers in the editor. Validate and transfer them as
 // a group when building a plan, never on each digit of a keyboard event.
 pub struct WriterView {
+    picker: DevicePicker,
     geometry: [String; 8],
     mapping: [String; 4],
     advanced: bool,
@@ -20,6 +22,62 @@ pub struct WriterView {
     notice: String,
     scroll_y: f32,
     max_scroll: f32,
+}
+
+const PAGE_SIZE: usize = 3;
+const DEVICE_ROW: f32 = 70.0;
+
+#[derive(Default)]
+struct DevicePicker {
+    candidates: Vec<DeviceCandidate>,
+    page: usize,
+    expanded: bool,
+    automatic: Option<String>,
+    edited: bool,
+}
+
+impl DevicePicker {
+    fn update(&mut self, candidates: Vec<DeviceCandidate>, port: &mut String, allow_auto: bool) {
+        if allow_auto
+            && !self.edited
+            && (port.is_empty() || self.automatic.as_ref() == Some(port))
+            && !candidates.iter().any(|device| device.path == *port)
+        {
+            self.automatic = match candidates.as_slice() {
+                [only] => Some(only.path.clone()),
+                _ => None,
+            };
+            *port = self.automatic.clone().unwrap_or_default();
+        }
+        self.candidates = candidates;
+        self.page = self
+            .candidates
+            .iter()
+            .position(|d| d.path == *port)
+            .map_or_else(
+                || self.page.min(self.pages().saturating_sub(1)),
+                |i| i / PAGE_SIZE,
+            );
+    }
+
+    fn pages(&self) -> usize {
+        self.candidates.len().div_ceil(PAGE_SIZE)
+    }
+
+    fn rows(&self) -> std::ops::Range<usize> {
+        let first = self.page * PAGE_SIZE;
+        first..(first + PAGE_SIZE).min(self.candidates.len())
+    }
+
+    fn height(&self) -> f32 {
+        if self.candidates.is_empty() {
+            return 70.0;
+        }
+        if !self.expanded {
+            return 44.0;
+        }
+        44.0 + self.rows().len() as f32 * DEVICE_ROW + if self.pages() > 1 { 36.0 } else { 0.0 }
+    }
 }
 
 const MAP_LABELS: [&str; 4] = [
@@ -54,9 +112,15 @@ impl WriterView {
         if c.form.text.is_empty() {
             c.form.text = "你好 Zuse".into();
         }
-        c.dispatch(Action::Preview);
+        let mut picker = DevicePicker {
+            expanded: true,
+            ..Default::default()
+        };
+        picker.update(devices::discover(), &mut c.form.port, true);
+        c.dispatch(Action::Refresh);
         let f = &c.form;
         Self {
+            picker,
             geometry: [
                 f.size,
                 f.advance,
@@ -85,6 +149,9 @@ impl WriterView {
             scroll_y: 0.0,
             max_scroll: 0.0,
         }
+    }
+    pub fn sync_baud(&mut self, value: u32) {
+        self.baud = value.to_string();
     }
     pub fn sync_heights(&mut self, old: (f64, f64), c: &Controller) {
         if old.0 != c.form.pen_up {
@@ -160,12 +227,18 @@ impl WriterView {
         } else {
             width
         };
+        let device_extra = self.picker.height()
+            + if c.connected_device().is_some() {
+                56.0
+            } else {
+                0.0
+            };
         let (rx, ry, right) = if wide {
             (pad + left + gap, 94., width - left - gap)
         } else {
-            (pad, 772., width)
+            (pad, 772. + device_extra, width)
         };
-        let content_h = ry + 708.;
+        let content_h = (ry + 708.).max(94. + device_extra + 657.);
         self.max_scroll = (content_h + 20. - h).max(0.);
         self.scroll_y = self.scroll_y.min(self.max_scroll);
         let y = -self.scroll_y;
@@ -178,7 +251,7 @@ impl WriterView {
             } else {
                 "共享作业中"
             }
-        } else if c.connected() {
+        } else if c.connected_device().is_some() {
             "已连接"
         } else {
             "未连接"
@@ -215,32 +288,36 @@ impl WriterView {
         closing: bool,
     ) {
         f.heading("设备", x, y);
-        let editing = !c.busy() && !c.connected() && !closing;
-        f.field(
+        let linked = c.connected_device().is_some();
+        let editing = !c.busy() && !linked && !closing;
+        let height = self.device_list(f, c, x, y + 40., w, closing);
+        let mut y = y + height;
+        if let Some((port, baud, firmware)) = c.connected_device() {
+            f.canvas.ellipsis(
+                &format!("已连接 · {}", firmware.unwrap_or("固件未报告型号")),
+                x,
+                y + 41.,
+                w,
+                15,
+                true,
+                INK,
+            );
+            f.canvas
+                .ellipsis(&format!("{port} · {baud}"), x, y + 65., w, 13, false, MUTED);
+            y += 56.;
+        }
+        if f.field(
             1,
             x,
             y + 41.,
-            w - 88.,
-            "串口",
+            w,
+            "串口路径",
             &mut c.form.port,
-            "端口路径",
-            editing,
-        );
-        if f.button(
-            2,
-            Rect::new(x + w - 80., y + 62., 80., 34.),
-            "下一端口",
-            false,
+            "手动输入端口",
             editing,
         ) {
-            match zuse::serial::ports().and_then(|s| choices(&s, None)) {
-                Ok(ports) if !ports.is_empty() => {
-                    c.form.port = next(&ports, &c.form.port);
-                    self.notice.clear();
-                }
-                Ok(_) => self.notice = "没有发现串口，可手动输入端口路径。".into(),
-                Err(e) => self.notice = e,
-            }
+            self.picker.edited = true;
+            self.picker.automatic = None;
         }
         f.field(
             3,
@@ -255,11 +332,11 @@ impl WriterView {
         if f.button(
             4,
             Rect::new(x + w * 0.52 + 8., y + 133., w * 0.48 - 8., 34.),
-            if c.connected() { "断开" } else { "连接" },
+            if linked { "断开" } else { "连接" },
             true,
-            !c.busy() && !closing,
+            !c.busy() && !closing && (linked || !c.form.port.trim().is_empty()),
         ) {
-            if c.connected() {
+            if linked {
                 self.act(c, Action::Disconnect);
             } else if let Ok(baud) = self.baud.trim().parse::<u32>() {
                 c.form.baud = baud;
@@ -368,6 +445,119 @@ impl WriterView {
             }
         }
     }
+    fn device_list(
+        &mut self,
+        f: &mut Frame<'_, '_>,
+        c: &mut Controller,
+        x: f32,
+        y: f32,
+        w: f32,
+        closing: bool,
+    ) -> f32 {
+        let editing = !c.busy() && c.connected_device().is_none() && !closing;
+        let list = &mut self.picker;
+        let count = list.candidates.len();
+        let open = if list.expanded { "▾" } else { "▸" };
+        let title = format!("{open} USB 设备 ({count})");
+        if f.button(90, Rect::new(x, y, w - 76., 32.), &title, false, count > 0) {
+            list.expanded = !list.expanded;
+        }
+        if f.button(
+            91,
+            Rect::new(x + w - 68., y, 68., 32.),
+            "扫描",
+            false,
+            !closing,
+        ) {
+            list.update(devices::discover(), &mut c.form.port, editing);
+            list.expanded = true;
+        }
+        if list.candidates.is_empty() {
+            f.canvas.ellipsis(
+                "未发现 USB 串口，可手动输入路径",
+                x,
+                y + 42.,
+                w,
+                13,
+                false,
+                MUTED,
+            );
+        } else if list.expanded {
+            for (row, i) in list.rows().enumerate() {
+                let device = &list.candidates[i];
+                let selected = c.form.port == device.path;
+                let top = y + 40. + row as f32 * DEVICE_ROW;
+                let rect = Rect::new(x, top, w, DEVICE_ROW - 6.);
+                if f.button(100 + i as u64, rect, "", selected, editing) {
+                    c.form.port.clone_from(&device.path);
+                    list.edited = true;
+                    list.automatic = None;
+                }
+                let ink = if selected && editing { 0xffffffff } else { INK };
+                let secondary = if selected && editing {
+                    0xddddddff
+                } else {
+                    MUTED
+                };
+                let label = if selected {
+                    format!("✓ {}", device.label)
+                } else {
+                    device.label.clone()
+                };
+                f.canvas
+                    .ellipsis(&label, x + 10., top + 5., w - 20., 15, true, ink);
+                f.canvas.ellipsis(
+                    &device.detail,
+                    x + 10.,
+                    top + 26.,
+                    w - 20.,
+                    12,
+                    false,
+                    secondary,
+                );
+                f.canvas.ellipsis(
+                    &device.path,
+                    x + 10.,
+                    top + 44.,
+                    w - 20.,
+                    12,
+                    false,
+                    secondary,
+                );
+            }
+            if list.pages() > 1 {
+                let top = y + 40. + list.rows().len() as f32 * DEVICE_ROW;
+                let pages = list.pages();
+                if f.button(
+                    92,
+                    Rect::new(x, top, 58., 28.),
+                    "上一页",
+                    false,
+                    list.page > 0,
+                ) {
+                    list.page -= 1;
+                }
+                f.canvas.text(
+                    &format!("{} / {pages}", list.page + 1),
+                    x + 69.,
+                    top + 6.,
+                    13,
+                    false,
+                    MUTED,
+                );
+                if f.button(
+                    93,
+                    Rect::new(x + w - 58., top, 58., 28.),
+                    "下一页",
+                    false,
+                    list.page + 1 < pages,
+                ) {
+                    list.page += 1;
+                }
+            }
+        }
+        list.height()
+    }
     fn writing(
         &mut self,
         f: &mut Frame<'_, '_>,
@@ -420,7 +610,7 @@ impl WriterView {
             false,
             editing,
         ) {
-            match zuse::font_store::cli(&["list"]).and_then(|s| choices(&s, Some("fonts"))) {
+            match zuse::font_store::cli(&["list"]).and_then(|s| choices(&s, "fonts")) {
                 Ok(fonts) if !fonts.is_empty() => {
                     c.form.font = next(&fonts, &c.form.font);
                     changed = true;
@@ -588,12 +778,9 @@ fn position(v: Option<[f64; 3]>) -> String {
         .unwrap_or_else(|| "X —     Y —     Z —".into())
 }
 
-fn choices(json: &str, key: Option<&str>) -> Result<Vec<String>, String> {
+fn choices(json: &str, key: &str) -> Result<Vec<String>, String> {
     zuse::json::with_value(json, |v| {
-        let list = match key {
-            Some(k) => v.get(k).ok_or("名称列表缺失")?,
-            None => v,
-        };
+        let list = v.get(key).ok_or("名称列表缺失")?;
         list.elements().map(zuse::json::text).collect()
     })
 }
@@ -702,4 +889,56 @@ fn paint_strokes(canvas: &mut Canvas<'_>, area: Rect, strokes: &[Vec<(f64, f64)>
         false,
         MUTED,
     );
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+
+    fn candidates(paths: &[&str]) -> Vec<DeviceCandidate> {
+        paths
+            .iter()
+            .map(|path| DeviceCandidate {
+                path: path.to_string(),
+                label: path.to_string(),
+                detail: String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scan_preserves_user_input_and_existing_selection() {
+        let mut picker = DevicePicker::default();
+        let mut port = String::new();
+        picker.update(candidates(&["a", "b"]), &mut port, true);
+        assert!(port.is_empty());
+        picker.update(candidates(&["b"]), &mut port, true);
+        assert_eq!(port, "b");
+        picker.update(candidates(&["a", "b"]), &mut port, true);
+        assert_eq!(port, "b");
+        picker.update(candidates(&[]), &mut port, true);
+        assert!(port.is_empty());
+        picker.edited = true;
+        port = "/dev/partially-typed".into();
+        picker.update(candidates(&["a"]), &mut port, true);
+        assert_eq!(port, "/dev/partially-typed");
+        port.clear();
+        picker.update(candidates(&["a"]), &mut port, true);
+        assert!(port.is_empty());
+    }
+
+    #[test]
+    fn selection_and_pages_survive_rescan_while_connected() {
+        let mut picker = DevicePicker::default();
+        let mut port = String::from("f");
+        picker.update(
+            candidates(&["a", "b", "c", "d", "e", "f"]),
+            &mut port,
+            false,
+        );
+        assert_eq!(picker.rows(), 3..6);
+        picker.update(candidates(&["a"]), &mut port, false);
+        assert_eq!(picker.rows(), 0..1);
+        assert_eq!(port, "f");
+    }
 }

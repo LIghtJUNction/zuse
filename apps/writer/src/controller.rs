@@ -121,7 +121,8 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
             {
                 return Err("点动每次限单轴 0.001–10 mm".into());
             }
-            format!("plotter.jog(axis=\"{a}\",delta={delta},feed=40)")
+            // A 10 mm move at F40 needs 15 s before the final status query.
+            format!("plotter.jog(axis=\"{a}\",delta={delta},feed=40,timeout=20000)")
         }
         Action::PenUp | Action::PenDown => {
             let z = if matches!(action, Action::PenUp) {
@@ -374,8 +375,16 @@ fn submit(
         return Err("提交前已取消".into());
     }
     let id = request_id();
+    let command = if matches!(
+        action,
+        Action::Refresh | Action::SetPenUp | Action::SetPenDown
+    ) {
+        "observe"
+    } else {
+        "script"
+    };
     let accepted = session.cli(
-        "script",
+        command,
         &[
             "-",
             "--request-id",
@@ -467,6 +476,56 @@ fn export(path: &std::path::Path, program: &str) -> Result<()> {
     result.map_err(|e| format!("导出 {}: {e}", path.display()))
 }
 
+// Only a completed plotter operation can attest to the session's selected machine.
+fn device_receipt(receipt: &str) -> Option<String> {
+    let payload = value(receipt).ok()?;
+    let result = raw(receipt, "result")?;
+    let operation = json::with_value(&result, |v| {
+        let step = v
+            .get("results")
+            .and_then(|v| v.elements().last())
+            .ok_or("missing step")?;
+        json::text(step.get("operation").ok_or("missing operation")?)
+    })
+    .ok()?;
+    matches!(
+        operation.as_str(),
+        "plotter.status" | "plotter.connect" | "plotter.disconnect"
+    )
+    .then_some(payload)
+}
+
+#[derive(Debug)]
+struct Device {
+    port: String,
+    baud: u32,
+    label: Option<String>,
+    #[cfg(unix)]
+    tty: Option<(u64, u64, u64)>,
+}
+
+#[cfg(unix)]
+fn tty_identity(path: &str) -> Option<(u64, u64, u64)> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let m = fs::metadata(path).ok()?;
+    m.file_type()
+        .is_char_device()
+        .then(|| (m.dev(), m.ino(), m.rdev()))
+}
+
+impl Device {
+    fn matches(&self, port: &str, baud: u32) -> bool {
+        if self.baud != baud {
+            return false;
+        }
+        #[cfg(unix)]
+        if let Some(tty) = self.tty {
+            return tty_identity(port) == Some(tty);
+        }
+        self.port == port
+    }
+}
+
 pub struct Controller {
     pub form: Form,
     pub strokes: Strokes,
@@ -483,7 +542,10 @@ pub struct Controller {
     observing: bool,
     last_poll: Instant,
     generation: u64,
-    link: Option<(String, u32)>,
+    link: Option<Device>,
+    needs_device_status: bool,
+    auto_refresh: bool,
+    tried_revision: Option<(u64, u64)>,
     plan: Option<(Form, String)>,
     sent: bool,
 }
@@ -507,6 +569,9 @@ impl Default for Controller {
             last_poll: Instant::now() - Duration::from_secs(2),
             generation: 0,
             link: None,
+            needs_device_status: true,
+            auto_refresh: false,
+            tried_revision: None,
             plan: None,
             sent: false,
         }
@@ -530,10 +595,21 @@ impl Controller {
     pub fn busy(&self) -> bool {
         self.owns_job() || self.cancel_pending || self.active_job().is_some()
     }
+    /// Last device verified by this named session, independently of the editable selector.
+    pub fn connected_device(&self) -> Option<(&str, u32, Option<&str>)> {
+        self.link
+            .as_ref()
+            .map(|d| (d.port.as_str(), d.baud, d.label.as_deref()))
+    }
     pub fn connected(&self) -> bool {
         self.link
             .as_ref()
-            .is_some_and(|(p, b)| p == &self.form.port && *b == self.form.baud)
+            .is_some_and(|d| d.matches(&self.form.port, self.form.baud))
+    }
+    fn mark_device_stale(&mut self) {
+        self.needs_device_status = true;
+        self.mpos = None;
+        self.wpos = None;
     }
     fn forget_device(&mut self) {
         self.link = None;
@@ -567,6 +643,17 @@ impl Controller {
             self.status = "共享会话正忙".into();
             return;
         }
+        // A display alias may refer to the port already owned by the session.
+        let action = if matches!(action, Action::Connect) && self.connected() {
+            Action::Refresh
+        } else {
+            action
+        };
+        if matches!(action, Action::Disconnect) && (self.link.is_none() || self.needs_device_status)
+        {
+            self.status = "请先刷新当前会话的设备状态".into();
+            return;
+        }
         if matches!(
             action,
             Action::Jog { .. }
@@ -576,7 +663,7 @@ impl Controller {
                 | Action::Check
                 | Action::SetPenUp
                 | Action::SetPenDown
-        ) && !self.connected()
+        ) && (!self.connected() || self.needs_device_status)
         {
             self.status = "请先连接或刷新所选控制器".into();
             return;
@@ -638,9 +725,9 @@ impl Controller {
     fn position(&mut self, payload: &str) -> Result<()> {
         if raw(payload, "connected").as_deref() == Some("false") {
             self.forget_device();
+            self.needs_device_status = false;
             return Ok(());
         }
-        self.forget_device();
         if raw(payload, "connected").as_deref() != Some("true")
             || field(payload, "units").as_deref() != Some("mm")
         {
@@ -653,25 +740,37 @@ impl Controller {
         let m = coords(payload, "machine_position")?;
         let w = coords(payload, "work_position")?;
         let off = coords(payload, "work_offset")?;
-        self.mpos = m.or_else(|| {
+        let mpos = m.or_else(|| {
             w.zip(off)
                 .map(|(w, o)| std::array::from_fn(|i| w[i] + o[i]))
         });
-        self.wpos = w.or_else(|| {
+        let wpos = w.or_else(|| {
             m.zip(off)
                 .map(|(m, o)| std::array::from_fn(|i| m[i] - o[i]))
         });
-        if self
-            .mpos
-            .iter()
-            .chain(&self.wpos)
-            .flatten()
-            .any(|n| !n.is_finite())
-        {
-            self.forget_device();
+        if mpos.iter().chain(&wpos).flatten().any(|n| !n.is_finite()) {
             return Err("GRBL 坐标超出范围".into());
         }
-        self.link = Some((port, baud));
+        let label = match (field(payload, "controller"), field(payload, "firmware")) {
+            (Some(model), Some(version)) => Some(format!("{model} {version}")),
+            (model, version) => model.or(version),
+        }
+        .or_else(|| {
+            self.link
+                .as_ref()
+                .filter(|d| d.matches(&port, baud))
+                .and_then(|d| d.label.clone())
+        });
+        self.mpos = mpos;
+        self.wpos = wpos;
+        self.link = Some(Device {
+            #[cfg(unix)]
+            tty: tty_identity(&port),
+            port,
+            baud,
+            label,
+        });
+        self.needs_device_status = false;
         Ok(())
     }
 
@@ -710,25 +809,27 @@ impl Controller {
                     self.invalidate_plan();
                     return Ok(format!("已记录工作坐标 Z={z:.3}"));
                 }
-                if matches!(action, Action::Refresh)
-                    && let Some((p, b)) = &self.link
-                    && (p != &self.form.port || *b != self.form.baud)
+                if self.form.port.is_empty()
+                    && let Some(d) = &self.link
                 {
-                    self.form.port = p.clone();
-                    self.form.baud = *b;
+                    self.form.port = d.port.clone();
+                    self.form.baud = d.baud;
                     self.invalidate_plan();
                 }
-                Ok(if self.link.is_some() {
-                    format!(
-                        "控制器 · {}",
-                        field(payload, "state").unwrap_or_else(|| "已刷新".into())
-                    )
-                } else {
-                    "会话未连接控制器".into()
-                })
+                Ok(
+                    if let Some((path, baud, identity)) = self.connected_device() {
+                        format!(
+                            "{} · {path} · {baud} · {}",
+                            identity.unwrap_or("控制器"),
+                            field(payload, "state").unwrap_or_else(|| "已刷新".into())
+                        )
+                    } else {
+                        "会话未连接控制器".into()
+                    },
+                )
             }
             Action::Disconnect => {
-                self.forget_device();
+                self.position(payload)?;
                 Ok("已断开控制器".into())
             }
             Action::Export(_) => Ok(format!("已导出 {payload}")),
@@ -749,6 +850,11 @@ impl Controller {
         while let Ok(event) = self.events.try_recv() {
             match event {
                 Event::Accepted(s) => {
+                    if self.auto_refresh {
+                        // A failed observer job also advances the session revision. Do not submit
+                        // the same failing query again when its terminal snapshot arrives.
+                        self.tried_revision = Some((s.pid, s.rev.saturating_add(1)));
+                    }
                     self.status = format!(
                         "{} · 作业 #{}",
                         self.session.name,
@@ -764,22 +870,30 @@ impl Controller {
                 }
                 Event::Done(action, f, r) => {
                     self.stop = None;
+                    self.auto_refresh = false;
                     self.status = match r {
                         Ok((payload, snapshot)) => {
-                            let status = self.apply(&action, &f, &payload);
-                            if !matches!(action, Action::Export(_)) {
-                                self.snapshot = snapshot;
-                                if self.snapshot.is_none() {
-                                    self.forget_device()
+                            if !matches!(action, Action::Export(_)) && snapshot.is_none() {
+                                self.mark_device_stale();
+                                if !matches!(action, Action::Preview) {
+                                    self.status = "作业已完成，共享会话已变化，正在核对设备".into();
+                                    continue;
                                 }
                             }
-                            status.unwrap_or_else(|e| e)
+                            if !matches!(action, Action::Export(_)) && snapshot.is_some() {
+                                self.snapshot = snapshot;
+                            }
+                            self.apply(&action, &f, &payload).unwrap_or_else(|e| {
+                                if !matches!(action, Action::Preview | Action::Export(_)) {
+                                    self.mark_device_stale();
+                                }
+                                e
+                            })
                         }
                         Err(e) => {
                             if !matches!(action, Action::Preview | Action::Export(_)) {
-                                self.forget_device()
+                                self.mark_device_stale();
                             }
-                            self.snapshot = None;
                             if (e.contains("unknown") || e.contains("unsupported"))
                                 && e.contains("plotter.")
                             {
@@ -797,20 +911,13 @@ impl Controller {
                     }
                     match result {
                         Ok((s, last)) => {
-                            if self.snapshot.as_ref() != Some(&s) {
+                            if self.snapshot.as_ref().is_some_and(|old| old.pid != s.pid) {
                                 self.forget_device();
-                                if let Some(receipt) = &last
-                                    && let Ok(data) = value(receipt)
-                                    && raw(&data, "connected").is_some()
-                                {
-                                    let _ = self.position(&data);
-                                    if let Some((p, b)) = &self.link
-                                        && self.form.port.is_empty()
-                                    {
-                                        self.form.port = p.clone();
-                                        self.form.baud = *b;
-                                    }
-                                }
+                                self.tried_revision = None;
+                            }
+                            let changed = self.snapshot.as_ref() != Some(&s);
+                            if changed {
+                                self.mark_device_stale();
                                 self.status = if let Some(id) = s.active {
                                     format!("{} · 外部作业 #{id} 运行中", self.session.name)
                                 } else if let Some(id) = s.last {
@@ -825,12 +932,31 @@ impl Controller {
                                     format!("{} · 会话就绪", self.session.name)
                                 };
                             }
+                            if s.active.is_none()
+                                && self.needs_device_status
+                                && let Some(data) = last.as_deref().and_then(device_receipt)
+                            {
+                                let f = self.form.clone();
+                                if let Ok(label) = self.apply(&Action::Refresh, &f, &data) {
+                                    self.status = label;
+                                }
+                            }
+                            let revision = (s.pid, s.rev);
+                            let reconcile = s.active.is_none()
+                                && self.needs_device_status
+                                && self.tried_revision != Some(revision)
+                                && !self.cancel_pending;
                             self.snapshot = Some(s);
+                            if reconcile {
+                                self.tried_revision = Some(revision);
+                                self.auto_refresh = true;
+                                self.dispatch(Action::Refresh);
+                            }
                         }
                         Err(e) => {
-                            if self.snapshot.take().is_some() {
-                                self.forget_device();
-                                self.status = e;
+                            if self.snapshot.is_some() {
+                                self.mark_device_stale();
+                                self.status = format!("会话状态待核实 · {e}");
                             }
                         }
                     }
@@ -924,7 +1050,8 @@ mod tests {
         let f = c.form.clone();
         let body = format!("{{\"gcode\":{}}}", quote(PROGRAM));
         c.apply(&Action::Preview, &f, &body).unwrap();
-        c.link = Some((f.port.clone(), f.baud));
+        c.position(r#"{"connected":true,"port":"","baud":115200,"units":"mm"}"#)
+            .unwrap();
         c.form.seed += 1;
         c.dispatch(Action::Send);
         assert!(!c.busy());
@@ -932,6 +1059,68 @@ mod tests {
         c.sent = true;
         c.dispatch(Action::Send);
         assert!(!c.busy());
+    }
+
+    #[test]
+    fn verified_link_survives_a_failed_or_redundant_connect() {
+        let mut c = Controller::default();
+        let s = r#"{"connected":true,"port":"/dev/ttyUSB0","baud":115200,"units":"mm","controller":"BtWriter","firmware":"1.3a.20221114","state":"Idle"}"#;
+        let f = c.form.clone();
+        c.apply(&Action::Refresh, &f, s).unwrap();
+        assert!(c.connected());
+        assert_eq!(
+            c.connected_device(),
+            Some(("/dev/ttyUSB0", 115200, Some("BtWriter 1.3a.20221114")))
+        );
+        c.form.port = "/dev/different".into();
+        let f = c.form.clone();
+        c.apply(&Action::Refresh, &f, s).unwrap();
+        assert_eq!(c.form.port, "/dev/different");
+        assert!(!c.connected());
+        c.last_poll = Instant::now();
+        c.tx.send(Event::Done(
+            Action::Connect,
+            Box::new(f),
+            Err("busy".into()),
+        ))
+        .unwrap();
+        c.poll();
+        assert!(c.connected_device().is_some());
+        assert!(c.needs_device_status);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn equivalent_tty_alias_preserves_selection_and_requires_matching_baud() {
+        use std::os::unix::fs::symlink;
+        let alias = env::temp_dir().join(request_id());
+        symlink("/dev/null", &alias).unwrap();
+        let mut c = Controller::default();
+        c.form.port = alias.display().to_string();
+        let f = c.form.clone();
+        c.apply(
+            &Action::Refresh,
+            &f,
+            r#"{"connected":true,"port":"/dev/null","baud":115200,"units":"mm"}"#,
+        )
+        .unwrap();
+        assert!(c.connected());
+        assert_eq!(c.form.port, alias.display().to_string());
+        c.form.baud = 9600;
+        assert!(!c.connected());
+        fs::remove_file(alias).unwrap();
+    }
+
+    #[test]
+    fn only_plotter_operation_receipts_identify_the_selected_machine() {
+        let receipt = |op: &str| {
+            format!(
+                r#"{{"status":"completed","result":{{"status":"completed","results":[{{"operation":{},"value":{{"connected":false}}}}]}}}}"#,
+                quote(op)
+            )
+        };
+        assert!(device_receipt(&receipt("serial.status")).is_none());
+        assert!(device_receipt(&receipt("plotter.status")).is_some());
     }
 
     #[test]
