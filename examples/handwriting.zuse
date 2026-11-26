@@ -1,0 +1,4 @@
+# Ten design units span five output units. Offsets translate whole characters.
+write.preview(text="你好 Zuse",size=10,advance=12,x=12,y=20,offset_x=0.4,offset_y=0.25,seed=42,reference_units=10,reference_distance=5)
+# Use a Cartesian top-left writing origin, in millimetres, on the plotter.
+write.gcode(text="你好 Zuse",size=10,advance=12,x=12,y=20,offset_x=0.4,offset_y=0.25,seed=42,reference_units=10,reference_distance=5)

@@ -64,7 +64,24 @@ struct Spec {
     read_only: bool,
 }
 macro_rules! spec { ($name:literal, $read:literal, [$($arg:literal:$ty:ident:$required:literal),* $(,)?]) => { Spec{name:$name,args:&[$(($arg,$ty,$required)),*],read_only:$read} }; }
+mod writing;
+
+macro_rules! write_spec {
+    ($name:literal, $read:literal, [$($arg:literal:$ty:ident:$required:literal),*]) => {
+        spec!($name, $read, ["text":T:true,"font":T:false,"size":N:false,"advance":N:false,
+            "line_height":N:false,"offset_x":N:false,"offset_y":N:false,"seed":I:false,
+            "reference_units":N:false,"reference_distance":N:false,"x":N:false,"y":N:false,
+            $($arg:$ty:$required),*])
+    };
+}
+
 static SPECS: &[Spec] = &[
+    write_spec!("write.preview", true, []),
+    write_spec!("write.mouse", false, ["interval":I:false]),
+    write_spec!("write.touchpad", false, ["width":I:true,"height":I:true,"interval":I:false]),
+    write_spec!("write.touchscreen", false, ["width":I:true,"height":I:true,"interval":I:false]),
+    write_spec!("write.gcode", true, ["pen_up":N:false,"pen_down":N:false,"feed":N:false,"swap_xy":B:false,"flip_x":B:false,"flip_y":B:false]),
+    write_spec!("write.export", false, ["path":T:true,"pen_up":N:false,"pen_down":N:false,"feed":N:false,"swap_xy":B:false,"flip_x":B:false,"flip_y":B:false]),
     spec!("functions", true, ["namespace":T:false]),
     spec!("timer.start", true, []),
     spec!("timer.reset", true, []),
@@ -708,7 +725,14 @@ fn device_payload(call: &Call<'_>, allow_text: bool) -> Result<Vec<u8>, String> 
     Ok(bytes)
 }
 
-fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64), String> {
+struct Validated<'a> {
+    calls: Vec<Call<'a>>,
+    wait_ms: u64,
+    writing: BTreeMap<usize, writing::Writing>,
+}
+
+fn validate(source: &str, options: Options) -> Result<Validated<'_>, String> {
+    let mut writing = BTreeMap::new();
     let mut calls = Vec::new();
     let mut wait_budget = 0u64;
     let mut gesture_samples = 0usize;
@@ -756,6 +780,15 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
             }
         }
         match call.name {
+            name if name.starts_with("write.") => {
+                let plan = writing::Writing::prepare(&call)?;
+                drawing_points = drawing_points.saturating_add(plan.points);
+                if drawing_points > drawing::MAX_PROGRAM_POINTS {
+                    return Err("program drawing points exceed 65536".into());
+                }
+                wait_budget = wait_budget.saturating_add(plan.wait_ms);
+                writing.insert(calls.len(), plan);
+            }
             "observe" | "watch" => {
                 if call.name == "observe" && call.get("watch").is_some() {
                     if ["source", "selector", "scope"]
@@ -1207,7 +1240,11 @@ fn validate<'a>(source: &'a str, options: Options) -> Result<(Vec<Call<'a>>, u64
         }
         calls.push(call);
     }
-    Ok((calls, wait_budget))
+    Ok(Validated {
+        calls,
+        wait_ms: wait_budget,
+        writing,
+    })
 }
 
 pub fn check(source: &str, options: Options) -> Result<String, String> {
@@ -1224,7 +1261,7 @@ pub fn check_prepared(prepared: &Prepared, options: Options) -> Result<String, S
             plan.summary.to_json()
         ));
     }
-    let (calls, _) = validate(&prepared.source, options)?;
+    let calls = validate(&prepared.source, options)?.calls;
     let list: Vec<_> = calls
         .iter()
         .map(|c| {
@@ -1546,7 +1583,7 @@ impl Runtime {
         };
         // Validate the saved plan before claiming its single-use approval.
         let continuation = queue.continuation(id)?;
-        let (calls, _) = validate(&continuation, options)?;
+        let calls = validate(&continuation, options)?.calls;
         require_touchpad_capabilities(&calls)?;
         let source = queue.take(id)?;
         self.execute(&source, options)
@@ -1585,7 +1622,11 @@ impl Runtime {
             );
         }
         let source = prepared.source;
-        let (calls, scheduled_wait_ms) = validate(&source, options)?;
+        let Validated {
+            calls,
+            wait_ms: scheduled_wait_ms,
+            mut writing,
+        } = validate(&source, options)?;
         require_touchpad_capabilities(&calls)?;
         if !self.cancellation.is_cancelled() {
             self.modules = prepared.next_session;
@@ -1627,7 +1668,10 @@ impl Runtime {
             let outcome = self
                 .cancellation
                 .check()
-                .and_then(|_| self.step(call, &mut dynamic_wait_ms));
+                .and_then(|_| match writing.remove(&index) {
+                    Some(plan) => plan.execute(&self.cancellation),
+                    None => self.step(call, &mut dynamic_wait_ms),
+                });
             let elapsed = began.elapsed();
             let timing = if was_timing || self.timer.running() {
                 format!(

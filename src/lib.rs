@@ -74,3 +74,17 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(feature = "std")]
 mod screenshot;
+
+#[cfg(feature = "std")]
+pub mod font_store;
+#[cfg(feature = "std")]
+pub mod handwriting;
+#[cfg(feature = "std")]
+pub mod machine_stream;
+#[cfg(feature = "std")]
+pub mod pen_input;
+#[cfg(feature = "std")]
+pub mod plotter;
+
+#[cfg(feature = "std")]
+mod output_file;

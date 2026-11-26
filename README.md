@@ -6,6 +6,8 @@ zuse turns small programs into desktop observations and actions. The same execut
 
 [中文](README.zh-CN.md) · [Language](docs/language.md) · [Numeric programs](docs/scalar-programs.md) · [Sessions](docs/sessions.md) · [Protocol v1](docs/session-protocol.md) · [Platforms](docs/platforms.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
 
+[Handwriting and machine control](docs/handwriting.md) covers stroke fonts, touch input, pen plotters and the X/Z lathe profile.
+
 ## Small core, explicit effects
 
 The flat-call parser and pointer-motion kernel compile with `no_std`, use no allocator, and have no dependencies. The optional host runtime, including the scoped-script compiler and scheduler, uses Rust's standard library and six Project Z crates across its dependency tree: zmcpio, zcall, zconv, zclap, z64, and zsys. WebSocket handshakes use the `sha1` crate with its default features disabled. Native dynamic-library loading reuses zsys 0.1.1. There is no embedded JavaScript engine or browser automation framework.

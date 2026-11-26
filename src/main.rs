@@ -10,6 +10,7 @@ use zuse::{
     runtime::{self, Options, Runtime},
 };
 
+mod machine_cli;
 mod update;
 
 const DEFAULT_SHELL_IDLE_TIMEOUT_MS: u64 = 900_000;
@@ -42,6 +43,8 @@ USAGE
   zuse shell                    Persistent line-oriented interactive shell
   zuse session help             Persistent externally controlled Runtime sessions
   zuse web                      Serve the local touch workbench on 127.0.0.1:43497
+  zuse font list|add|remove      Manage single-line handwriting fonts
+  zuse machine help             Preview or run a controller-specific G-code program
   zuse doctor                   Inspect available backends and integrations
   zuse update                   Update a tracked user Cargo installation
   zuse update --check           Check the latest stable version without installing
@@ -462,6 +465,15 @@ fn run() -> Result<i32, String> {
             exactly(&words, 1, "web")?;
             zuse::browser::workbench::serve().map(|()| 0)
         }
+        "font" => {
+            if matches!(words.get(1).copied(), Some("add" | "remove"))
+                && (options.read_only || options.dry_run)
+            {
+                return Err("font changes require normal execution mode".into());
+            }
+            output(zuse::font_store::cli(&words[1..])?)
+        }
+        "machine" => output(machine_cli::run(&words[1..], options)?),
         "doctor" => {
             exactly(&words, 1, "doctor")?;
             output(Runtime::new().capabilities())
