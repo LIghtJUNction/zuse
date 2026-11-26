@@ -116,3 +116,11 @@
 保持当前 XY，只沿 Z 轴低速定位。	Keep the current XY position and move only along Z at low speed.
 编辑文章	Edit article
 应用文章	Apply text
+快速装笔	Quick pen setup
+定位装笔	Position pen holder
+自动校准机台边界	Auto travel limits
+确认归零 · 清空机台	Confirm homing
+笔尖已贴纸并锁紧	Tip touching, holder secured
+1 / 3   快速装笔	1 / 3   Quick pen setup
+2 / 3   贴纸装笔	2 / 3   Fit pen against paper
+3 / 3   检查试写	3 / 3   Verify ink test

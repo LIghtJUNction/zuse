@@ -5,7 +5,15 @@ use std::time::{Duration, Instant};
 #[path = "linuxcnc.rs"]
 mod linuxcnc;
 pub use linuxcnc::run_linuxcnc;
+mod automatic_bounds;
 mod bounds;
+pub(crate) fn calibrate_travel<P: Port>(
+    port: &mut P,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<Workspace> {
+    automatic_bounds::home(port, end, cancel)
+}
 pub(crate) use bounds::{TravelBounds, Workspace};
 pub(crate) fn bind_workspace<P: Port>(
     port: &mut WatchedPort<P>,
@@ -744,40 +752,40 @@ impl<P: Port> Connection<'_, P> {
             None => Err("invalid controller status".into()),
         }
     }
-    fn report_scale(&mut self) -> Result<f64> {
-        // GRBL $13 controls realtime coordinate reporting independently of G20/G21.
-        // Read the setting without changing the firmware's reporting configuration.
+    fn read_settings(&mut self) -> Result<std::collections::BTreeMap<u16, f64>> {
         self.send(b"$$\n")?;
-        let mut units = None;
+        let mut settings = std::collections::BTreeMap::new();
         loop {
             let line = self
                 .next(self.end)?
                 .ok_or("controller settings query timed out")?;
             if line == "ok" {
-                break;
+                return Ok(settings);
             }
             let (key, value) = line
                 .split_once('=')
                 .ok_or("malformed GRBL settings reply")?;
-            if key
+            let key: u16 = key
                 .strip_prefix('$')
-                .and_then(|s| s.parse::<u16>().ok())
-                .is_none()
-            {
-                return Err("malformed GRBL settings key".into());
-            }
-            if key == "$13" {
-                if units.is_some() {
-                    return Err("duplicate GRBL report units".into());
-                }
-                units = Some(match value.trim() {
-                    "0" => 1.,
-                    "1" => 25.4,
-                    _ => return Err("unknown GRBL report units".into()),
-                });
+                .and_then(|s| s.parse().ok())
+                .ok_or("malformed GRBL settings key")?;
+            let value: f64 = value
+                .trim()
+                .parse()
+                .map_err(|_| "malformed GRBL settings value")?;
+            if !value.is_finite() || settings.insert(key, value).is_some() {
+                return Err("duplicate or invalid GRBL settings value".into());
             }
         }
-        units.ok_or_else(|| "missing GRBL $13 report units".into())
+    }
+    fn report_scale(&mut self) -> Result<f64> {
+        // Reporting units are independent of G20/G21.
+        match self.read_settings()?.get(&13) {
+            Some(0.) => Ok(1.),
+            Some(1.) => Ok(25.4),
+            Some(_) => Err("unknown GRBL report units".into()),
+            None => Err("missing GRBL $13 report units".into()),
+        }
     }
     fn check_generation(&self, expected: u64) -> Result<()> {
         if self.port.generation() == expected {
@@ -1326,6 +1334,44 @@ mod tests {
         );
         assert!(port.commands.is_empty());
         assert!(!port.writes.iter().any(|line| line.contains("X4")));
+    }
+
+    #[test]
+    fn homing_applies_work_limits_only_after_the_expected_pull_off_pose() {
+        let mut mock = Mock::default();
+        mock.expect("?", &["<Idle|MPos:0,0,0>\n"]);
+        mock.expect("$$\n", &["$20=1\n$22=1\n$23=1\n$27=1\n$100=80\n$101=80\n$102=80\n$130=300\n$131=200\n$132=40\nok\n"]);
+        mock.expect("$I\n", &[GRBL_ID]);
+        mock.expect("$N\n", &["$N0=\n$N1=\nok\n"]);
+        mock.expect("$H\n", &["ok\n"]);
+        mock.expect("$$\n", &["$13=0\nok\n"]);
+        mock.expect("?", &["<Idle|MPos:-299,-1,-1|WCO:1,2,3>\n"]);
+        let bounds = calibrate_travel(
+            &mut mock,
+            Instant::now() + Duration::from_secs(2),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert!(
+            bounds
+                .receipt()
+                .contains(r#""x_min":-300.75,"x_max":-1.25"#)
+        );
+        assert!(mock.commands.is_empty());
+    }
+
+    #[test]
+    fn controller_with_disabled_limits_receives_no_homing_command() {
+        let mut mock = Mock::default();
+        mock.expect("?", &["<Idle|MPos:0,0,0>\n"]);
+        mock.expect("$$\n", &["$20=0\n$22=0\nok\n"]);
+        let result = calibrate_travel(
+            &mut mock,
+            Instant::now() + Duration::from_secs(2),
+            &Cancellation::default(),
+        );
+        assert!(result.err().unwrap().contains("no motion sent"));
+        assert_eq!(mock.writes, ["?", "$$\n"]);
     }
 
     const GRBL_ID: &str = "[VER:1.1h.2019:]\nok\n";

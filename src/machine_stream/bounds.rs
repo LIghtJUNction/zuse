@@ -21,7 +21,7 @@ impl TravelBounds {
         Ok(Self { min, max })
     }
 
-    fn point(&self, point: [f64; 3]) -> Result<()> {
+    pub(super) fn point(&self, point: [f64; 3]) -> Result<()> {
         for (axis, value) in point.into_iter().enumerate() {
             if !value.is_finite() || value < self.min[axis] || value > self.max[axis] {
                 return Err(format!(
@@ -60,10 +60,10 @@ impl TravelBounds {
 }
 
 pub(crate) struct Workspace {
-    limits: TravelBounds,
-    identity: Identity,
-    generation: std::cell::Cell<u64>,
-    offset: [f64; 3],
+    pub(super) limits: TravelBounds,
+    pub(super) identity: Identity,
+    pub(super) generation: std::cell::Cell<u64>,
+    pub(super) offset: [f64; 3],
 }
 
 fn same_offset(first: [f64; 3], second: [f64; 3]) -> bool {

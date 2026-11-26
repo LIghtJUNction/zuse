@@ -35,6 +35,7 @@ enum Action {
     ClearBounds,
     Disconnect,
     Reset,
+    AutoBounds,
     Jog {
         axis: char,
         delta: f64,
@@ -109,6 +110,7 @@ impl Command {
                     8000,
                 )
             }
+            "plotter.auto_bounds" => (Action::AutoBounds, 120000),
             "plotter.reset" => (Action::Reset, 8000),
             "plotter.disconnect" => {
                 return Ok(Self {
@@ -295,6 +297,13 @@ pub(super) fn execute(
             )?;
             let receipt = bounds.receipt();
             device.bounds = Some(bounds);
+            receipt
+        }
+        Action::AutoBounds => {
+            let bounds = machine_stream::calibrate_travel(&mut device.port, end, cancel)?;
+            let receipt = bounds.receipt();
+            device.bounds = Some(bounds);
+            device.probe = machine_stream::ProbeEvidence::default();
             receipt
         }
         Action::Reset => {

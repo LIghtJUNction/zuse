@@ -6,6 +6,7 @@ use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
 enum Stage {
     #[default]
     Teach,
+    Quick,
     Review,
     Move,
     Fix,
@@ -27,6 +28,7 @@ enum Operation {
     Sample(Target),
     Load,
     Jog(char, f64),
+    QuickStart,
     BeforeMove,
     Move,
     BeforeApply,
@@ -57,6 +59,8 @@ pub(crate) struct WorkspaceWizard {
     pending: Option<(u64, Operation)>,
     plan: Option<WorkspaceProfile>,
     tested: bool,
+    quick: bool,
+    confirm_auto_bounds: bool,
     notice: String,
 }
 
@@ -173,7 +177,9 @@ impl WorkspaceWizard {
         if self.taught_binding.is_some() && current != self.taught_binding {
             return Err("设备身份与示教记录不符，请重新确认机台。".into());
         }
-        let label = if let Some(key) = self.taught_binding.as_ref().filter(|_| !session_only) {
+        let label = if self.quick {
+            "已应用本次装笔高度。"
+        } else if let Some(key) = self.taught_binding.as_ref().filter(|_| !session_only) {
             save_profile(key, p)?;
             "已保存机台档案并应用行程。"
         } else {
@@ -198,6 +204,7 @@ impl WorkspaceWizard {
         match op {
             Operation::Sample(_)
             | Operation::Load
+            | Operation::QuickStart
             | Operation::BeforeMove
             | Operation::BeforeApply => {
                 let r = c
@@ -236,6 +243,30 @@ impl WorkspaceWizard {
                         self.notice = "已记录本次读取的毫米工作坐标。".into();
                     }
                     Operation::Load => self.load(c, offset)?,
+                    Operation::QuickStart => {
+                        if !matches!(c.controller_identity(), Some(("BtWriter", "1.3a.20221114")))
+                            || offset != [0.; 3]
+                            || !(0. ..=5.).contains(&work[2])
+                        {
+                            return Err("快速装笔需要已识别的 BtWriter、零工作偏移，且当前 Z 在 0–5 mm 内。".into());
+                        }
+                        self.quick = true;
+                        self.offset = Some(offset);
+                        self.taught_binding = observed;
+                        // A 5 mm trial area around the current tip. It is not published as machine travel.
+                        let [x, y, _] = work.map(|value| (value * 1000.).round() / 1000.);
+                        let plan = WorkspaceProfile::new(
+                            [x - 0.01, y - 0.01],
+                            [x + 5.02, y + 0.01],
+                            0.,
+                            5.,
+                            Some(5.),
+                            5.,
+                        )?;
+                        let token = c.move_mount_z(plan.mount_z);
+                        self.plan = Some(plan);
+                        self.request(token, Operation::Move, c);
+                    }
                     Operation::BeforeMove => {
                         let p = self.plan.as_ref().ok_or("请重新确认行程。")?;
                         if !in_range(p, work) {
@@ -251,6 +282,12 @@ impl WorkspaceWizard {
                         let p = self.plan.as_ref().ok_or("请重新确认行程。")?;
                         if !at_mount(p, work) {
                             return Err("当前位置不在安装位。先松开或取下笔，再重新定位。".into());
+                        }
+                        if self.quick {
+                            self.stage = Stage::Test;
+                            self.tested = false;
+                            self.notice = "确认双手离开机器，再试写。".into();
+                            return Ok(None);
                         }
                         let bounds = MachineBounds {
                             min: p.min,
@@ -337,6 +374,7 @@ impl WorkspaceWizard {
                         && matches!(
                             op,
                             Operation::Jog(..)
+                                | Operation::QuickStart
                                 | Operation::BeforeMove
                                 | Operation::Move
                                 | Operation::BeforeApply
@@ -454,10 +492,13 @@ impl WorkspaceWizard {
         }
         let title = match self.stage {
             Stage::Stopped => "操作已暂停",
+            Stage::Quick => "1 / 3   快速装笔",
             Stage::Teach => "1 / 5   示教机台行程",
             Stage::Review => "2 / 5   核对行程与装笔高度",
             Stage::Move => "3 / 5   空笔夹定位",
+            Stage::Fix if self.quick => "2 / 3   贴纸装笔",
             Stage::Fix => "4 / 5   贴纸装笔",
+            Stage::Test | Stage::Save if self.quick => "3 / 3   检查试写",
             Stage::Test | Stage::Save => "5 / 5   检查试写",
         };
         f.text(title, 46., 17, true);
@@ -474,7 +515,24 @@ impl WorkspaceWizard {
             }
             Stage::Teach => {
                 self.teach(&mut f, c, ready);
-                482.
+                565.
+            }
+            Stage::Quick => {
+                f.report(
+                    "先松开或取下笔，保持当前 XY。笔尖右方要有至少 5 mm 空白纸面。",
+                    80.,
+                );
+                f.report(
+                    "程序只沿 Z 轴低速移动。到位后，把笔尖轻放到纸上并锁紧。",
+                    150.,
+                );
+                if f.pair(1093, 233., 0, "返回示教", false, ready) {
+                    *self = Self::default();
+                }
+                if f.pair(1094, 233., 1, "定位装笔", true, ready) {
+                    self.read(Operation::QuickStart, c);
+                }
+                295.
             }
             Stage::Review => {
                 self.range(&mut f, ready);
@@ -513,6 +571,8 @@ impl WorkspaceWizard {
         );
         let note = if self.notice.is_empty() && !c.connected() {
             "请先在设备栏选择串口并连接。"
+        } else if self.notice.is_empty() {
+            &c.status
         } else {
             &self.notice
         };
@@ -570,6 +630,27 @@ impl WorkspaceWizard {
             let label = val.map_or_else(|| format!("记录{name}"), |v| format!("{name}  {v}"));
             if f.pair(1030 + i as u64, y, col, &label, false, ready) {
                 self.read(Operation::Sample(target), c)
+            }
+        }
+        if f.pair(1095, 478., 0, "快速装笔", false, ready) {
+            *self = Self {
+                stage: Stage::Quick,
+                ..Self::default()
+            };
+        }
+        let label = if self.confirm_auto_bounds {
+            "确认归零 · 清空机台"
+        } else {
+            "自动校准机台边界"
+        };
+        if f.pair(1096, 478., 1, label, self.confirm_auto_bounds, ready) {
+            if self.confirm_auto_bounds {
+                self.confirm_auto_bounds = false;
+                self.notice.clear();
+                c.dispatch(crate::controller::Action::AutoBounds);
+            } else {
+                self.confirm_auto_bounds = true;
+                self.notice = "归零前取下笔，确认限位开关正常，且机台行程内没有夹具或障碍。".into();
             }
         }
         let recorded =
@@ -727,7 +808,16 @@ impl WorkspaceWizard {
             }
         }
         if f.pair(1092, 218., 1, "返回装笔", false, ready) {
-            self.stage = Stage::Move;
+            self.stage = if self.quick {
+                Stage::Quick
+            } else {
+                Stage::Move
+            };
+            if self.quick {
+                self.plan = None;
+                self.offset = None;
+                self.taught_binding = None;
+            }
             self.tested = false;
             self.notice = "请先松开或取下笔，再定位空笔夹。".into();
         }
@@ -768,7 +858,12 @@ impl WorkspaceWizard {
             }
         } else {
             let r = Rect::new(f.area.x, f.area.y + 321., f.area.w, 38.);
-            if f.button(1071, r, "笔尖已贴纸并锁紧 · 应用行程", true, ready) {
+            let action = if self.quick {
+                "笔尖已贴纸并锁紧"
+            } else {
+                "笔尖已贴纸并锁紧 · 应用行程"
+            };
+            if f.button(1071, r, action, true, ready) {
                 self.read(Operation::BeforeApply, c)
             }
         }

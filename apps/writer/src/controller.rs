@@ -116,6 +116,7 @@ pub enum Action {
     CalibrationCapture(CalibrationStep),
     Disconnect,
     Reset,
+    AutoBounds,
     Jog { axis: char, delta: f64 },
     SetPenUp,
     SetPenDown,
@@ -282,6 +283,7 @@ fn source(action: &Action, f: &Form, program: &str) -> Result<String> {
         | Action::SetPenDown => WORK_STATUS.into(),
         Action::Disconnect => "plotter.disconnect()".into(),
         Action::Reset => "plotter.reset()".into(),
+        Action::AutoBounds => "plotter.auto_bounds()".into(),
         Action::Jog { axis, delta } => {
             let a = axis.to_ascii_lowercase();
             if !matches!(a, 'x' | 'y' | 'z') || !delta.is_finite() || *delta == 0. {
@@ -1360,6 +1362,7 @@ impl Controller {
                 | Action::PenUp
                 | Action::PenDown
                 | Action::Reset
+                | Action::AutoBounds
                 | Action::Send
                 | Action::Check
                 | Action::CalibrationCapture(_)
@@ -1564,6 +1567,11 @@ impl Controller {
                     "屏幕书写已完成"
                 }
                 .into())
+            }
+            Action::AutoBounds => {
+                self.mark_device_stale();
+                self.invalidate_plan();
+                Ok("已归零并应用机台边界。请继续校准纸面和装笔高度。".into())
             }
             Action::Reset => {
                 self.mark_device_stale();
