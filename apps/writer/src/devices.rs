@@ -6,6 +6,21 @@ pub(crate) struct DeviceCandidate {
     pub path: String,
     pub label: String,
     pub detail: String,
+    pub identifier: Option<String>,
+}
+
+impl DeviceCandidate {
+    pub(crate) fn display_name(&self) -> &str {
+        let name = self.detail.rsplit_once(" · USB ").map_or(self.detail.as_str(), |(name, _)| name);
+        if name.is_empty() || name == "USB serial" || (name.starts_with("USB ") && name.contains(':')) {
+            crate::locale::text("USB 设备")
+        } else {
+            name
+        }
+    }
+    pub(crate) fn port_name(&self) -> &str {
+        std::path::Path::new(&self.label).file_name().and_then(|s| s.to_str()).unwrap_or(&self.label)
+    }
 }
 
 pub(crate) fn discover() -> Vec<DeviceCandidate> {
@@ -56,7 +71,7 @@ mod linux {
             .then(|| text.chars().take(160).collect())
     }
 
-    fn usb_description(tty: &Path) -> Option<String> {
+    fn usb_description(tty: &Path) -> Option<(String, Option<String>)> {
         // tty/device points to the serial interface. The USB device containing
         // the interface owns idVendor, idProduct, manufacturer and product.
         let device = tty.join("device").canonicalize().ok()?;
@@ -86,7 +101,12 @@ mod linux {
                 vid.to_ascii_lowercase(),
                 pid.to_ascii_lowercase()
             ));
-            return Some(fields.join(" · "));
+            let identifier = attribute(parent, "serial").map(|s| format!("{} {s}", crate::locale::text("序列号"))).or_else(|| {
+                let name = parent.file_name()?.to_str()?;
+                (name.contains('-') && name.bytes().all(|c| c.is_ascii_digit() || matches!(c, b'-' | b'.')))
+                    .then(|| format!("{} {name}", crate::locale::text("USB 插口")))
+            });
+            return Some((fields.join(" · "), identifier));
         }
         None
     }
@@ -150,6 +170,7 @@ mod linux {
             if usb.is_none() && !kernel_usb_name(name) {
                 continue;
             }
+            let (detail, identifier) = usb.unwrap_or_else(|| ("USB serial".into(), None));
             let candidate = DeviceCandidate {
                 path: aliases
                     .get(&node)
@@ -157,7 +178,8 @@ mod linux {
                     .to_string_lossy()
                     .into_owned(),
                 label: node.to_string_lossy().into_owned(),
-                detail: usb.unwrap_or_else(|| "USB serial".into()),
+                detail,
+                identifier,
             };
             found.insert(node, candidate);
         }
@@ -188,6 +210,7 @@ mod macos {
                 label: path.clone(),
                 path,
                 detail: "USB serial".into(),
+                identifier: Some(suffix.to_owned()),
             };
             if name.starts_with("cu.") {
                 by_port.insert(suffix.to_owned(), c);
@@ -280,7 +303,24 @@ mod tests {
         assert!(ports[0].path.ends_with("/serial/by-id/usb-bridge"));
         assert!(ports[0].label.ends_with("/ttyUSB0"));
         assert_eq!(ports[0].detail, "Example · USB Serial · USB 1a86:7523");
+        assert_eq!(ports[0].display_name(), "Example · USB Serial");
+        assert_eq!(ports[0].port_name(), "ttyUSB0");
     }
+    #[test]
+    fn identical_usb_models_can_be_distinguished_by_their_reported_serials() {
+        let f = Fixture::new();
+        for (tty, serial) in [("ttyUSB0", "A120"), ("ttyUSB1", "B340")] {
+            f.node(tty);
+            f.usb(tty);
+            fs::write(f.root.join("bus").join(tty).join("serial"), serial).unwrap();
+        }
+        let found = f.discover();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].display_name(), found[1].display_name());
+        assert_eq!(found[0].identifier.as_deref(), Some("序列号 A120"));
+        assert_eq!(found[1].identifier.as_deref(), Some("序列号 B340"));
+    }
+
     #[test]
     fn sorts_usb_nodes_and_recognizes_nonstandard_sysfs_names() {
         let f = Fixture::new();

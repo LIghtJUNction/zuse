@@ -24,6 +24,8 @@ pub struct WriterView {
     workspace: Option<WorkspaceWizard>,
     alignment: Option<Alignment>,
     picker: DevicePicker,
+    connection_settings: bool,
+    connection_attempted: bool,
     geometry: [String; 8],
     mapping: [String; 12],
     advanced: bool,
@@ -44,13 +46,12 @@ pub struct WriterView {
 }
 
 const PAGE_SIZE: usize = 3;
-const DEVICE_ROW: f32 = 70.0;
+const DEVICE_ROW: f32 = 51.0;
 
 #[derive(Default)]
 struct DevicePicker {
     candidates: Vec<DeviceCandidate>,
     page: usize,
-    expanded: bool,
     automatic: Option<String>,
     edited: bool,
 }
@@ -89,13 +90,8 @@ impl DevicePicker {
     }
 
     fn height(&self) -> f32 {
-        if self.candidates.is_empty() {
-            return 70.0;
-        }
-        if !self.expanded {
-            return 44.0;
-        }
-        44.0 + self.rows().len() as f32 * DEVICE_ROW + if self.pages() > 1 { 36.0 } else { 0.0 }
+        if self.candidates.len() <= 1 { return 57.; }
+        29. + self.rows().len() as f32 * DEVICE_ROW + if self.pages() > 1 { 36. } else { 0. }
     }
 }
 
@@ -115,9 +111,9 @@ const MAP_LABELS: [&str; 12] = [
 ];
 
 const LABELS: [&str; 8] = [
-    "字高",
-    "字距",
-    "行距",
+    "字高 mm",
+    "字距 mm",
+    "行距 mm",
     "起点 X mm",
     "起点 Y mm",
     "进给 mm/min",
@@ -139,10 +135,7 @@ impl WriterView {
         if c.form.text.is_empty() {
             c.form.text = "你好 Zuse".into();
         }
-        let mut picker = DevicePicker {
-            expanded: true,
-            ..Default::default()
-        };
+        let mut picker = DevicePicker::default();
         picker.update(devices::discover(), &mut c.form.port, true);
         c.dispatch(Action::Refresh);
         let f = &c.form;
@@ -154,6 +147,8 @@ impl WriterView {
             workspace: align.then(WorkspaceWizard::default),
             alignment: None,
             picker,
+            connection_settings: false,
+            connection_attempted: false,
             geometry: [
                 f.size,
                 f.advance,
@@ -215,7 +210,9 @@ impl WriterView {
     }
     pub(crate) fn set_sources(&mut self, sources: Menu, message: String) {
         self.sources = (!sources.sources.choices.is_empty()).then_some(sources);
-        self.notice = message;
+        self.notice = if message.contains("--kuixiang-config") {
+            crate::locale::text("两份奎享配置的纸张不同，可在「连接设置」中选择。").into()
+        } else { message };
     }
     pub fn dark(&self) -> bool {
         self.dark
@@ -226,6 +223,7 @@ impl WriterView {
     pub fn needs_tick(&self) -> bool {
         (self.screen_mode && self.screen_output.needs_tick())
             || self.fonts.as_ref().is_some_and(FontPicker::pending)
+            || self.article.as_ref().is_some_and(Article::pending)
             || self
                 .workspace
                 .as_ref()
@@ -399,7 +397,7 @@ impl WriterView {
         let gap = (width * 0.035).clamp(16., 38.);
         let aligning = self.aligning();
         let title_width = canvas.measure("Zuse Writer", 30, true);
-        let nav_width = if aligning { 108. } else { 92. };
+        let nav_width = 120.;
         let nav_x = w - pad - nav_width;
         let target_width = 230.;
         let wrapped_targets = !aligning && width < title_width + nav_width + target_width + 64.;
@@ -430,14 +428,11 @@ impl WriterView {
         let sidebar_min = if self.screen_mode {
             412.
         } else {
-            self.picker.height()
-                + if c.connected_device().is_some() {
-                    56.
-                } else {
-                    0.
-                }
-                + if self.sources.is_some() { 70. } else { 0. }
-                + if aligning { 370. } else { 877. }
+            let device = if c.connected_device().is_some() { 48. } else { self.picker.height() };
+            141. + device + if self.connection_attempted { 35. } else { 0. }
+                + if self.connection_settings {
+                    self.source_height() + if aligning { 371. } else { 883. }
+                } else { 0. }
         };
         let panel_min = if let Some(alignment) = &self.alignment {
             alignment.height(right_width)
@@ -479,7 +474,11 @@ impl WriterView {
             "未连接"
         };
         let state = crate::locale::text(state);
-        let session = format!("{}  {}", crate::locale::text("共享会话"), c.session_name());
+        let session = if self.advanced {
+            format!("{}  {}", crate::locale::text("共享会话"), c.session_name())
+        } else {
+            String::new()
+        };
         let job = c
             .active_job()
             .map(|id| format!("{state}  #{id}"))
@@ -512,11 +511,26 @@ impl WriterView {
         if !connected {
             canvas.rect(dot.inset(1.5), 3., colors::SURFACE);
         }
+        let language_width = (status_space - state_width - 12.).clamp(0., 76.);
+        if language_width >= 48. {
+            let language = if self.english { "简体中文" } else { "English" };
+            if ui.button(
+                canvas,
+                703,
+                Rect::new(status_x, status_y - 7., language_width, 29.),
+                language,
+                ButtonStyle::Quiet,
+                !closing,
+            ) {
+                self.english = !self.english;
+                crate::locale::set_english(self.english);
+            }
+        }
         canvas.ellipsis(
             &session,
-            status_x,
+            status_x + language_width + 4.,
             status_y,
-            (status_space - state_width - 14.).max(0.),
+            (status_space - state_width - language_width - 18.).max(0.),
             14,
             false,
             MUTED,
@@ -567,7 +581,7 @@ impl WriterView {
                 } else if aligning {
                     "返回书写"
                 } else {
-                    "对笔"
+                    "设置纸张和笔"
                 },
                 !closing && !c.busy() && self.can_navigate(),
             )
@@ -667,52 +681,53 @@ impl WriterView {
         w: f32,
         closing: bool,
     ) {
-        f.heading("设备", x, y);
-        let appearance = if self.dark { "浅色" } else { "深色" };
-        if f.quiet_button(
-            702,
-            Rect::new(x + w - 140., y, 66., 28.),
-            appearance,
-            !closing,
-        ) {
-            self.dark = !self.dark;
-        }
-        let language = if self.english {
-            "简体中文"
-        } else {
-            "English"
-        };
-        if f.quiet_button(703, Rect::new(x + w - 70., y, 70., 28.), language, !closing) {
-            self.english = !self.english;
-            crate::locale::set_english(self.english);
-        }
+        f.heading("写字机", x, y);
         let linked = c.connected_device().is_some();
         let editing = !c.busy() && !linked && !closing;
-        let y = if self.sources.is_some() {
-            self.draw_sources(f, c, x, y + 37., w, closing);
-            y + 70.
+        if !linked && f.quiet_button(91, Rect::new(x + w - 96., y, 96., 29.), "重新查找", !closing) {
+            self.picker.update(devices::discover(), &mut c.form.port, editing);
+            self.connection_attempted = false;
+        }
+        let list_height = if let Some((path, _, _)) = c.connected_device() {
+            let name = self.picker.candidates.iter().find(|d| d.path == path)
+                .map_or(crate::locale::text("写字机"), |d| d.display_name());
+            f.note(&format!("{} · {name}", crate::locale::text("已连接")), x, y + 43., w);
+            48.
         } else {
-            y
+            self.device_list(f, c, x, y + 40., w, closing)
         };
-        let height = self.device_list(f, c, x, y + 40., w, closing);
-        let mut y = y + height;
-        if let Some((port, baud, firmware)) = c.connected_device() {
-            f.canvas.ellipsis(
-                &format!(
-                    "{} · {}",
-                    crate::locale::text("已连接"),
-                    firmware.unwrap_or(crate::locale::text("固件未报告型号"))
-                ),
-                x,
-                y + 41.,
-                w,
-                15,
-                true,
-                INK,
-            );
-            f.canvas
-                .ellipsis(&format!("{port} · {baud}"), x, y + 65., w, 13, false, MUTED);
-            y += 56.;
+        let connect_y = y + 40. + list_height;
+        if f.button(4, Rect::new(x, connect_y, w, 36.),
+            if linked { "断开连接" } else { "连接写字机" }, !linked,
+            !closing && !c.busy() && (linked || !c.form.port.trim().is_empty())) {
+            self.connection_attempted = true;
+            if linked {
+                self.act(c, Action::Disconnect);
+            } else if let Ok(baud) = self.baud.trim().parse::<u32>() {
+                c.form.baud = baud;
+                self.act(c, Action::Connect);
+            } else {
+                self.connection_settings = true;
+                self.notice = crate::locale::text("请在连接设置中输入有效的波特率。").into();
+            }
+        }
+        let mut settings_y = connect_y + 45.;
+        if self.connection_attempted {
+            let message = if self.notice.is_empty() { &c.status } else { &self.notice };
+            f.status(7188, Rect::new(x, settings_y, w, 28.), message);
+            settings_y += 35.;
+        }
+        if f.quiet_button(7189, Rect::new(x, settings_y, w, 32.),
+            if self.connection_settings { "收起连接设置" } else { "连接设置" }, !closing) {
+            self.connection_settings = !self.connection_settings;
+        }
+        if !self.connection_settings { return; }
+        let mut y = settings_y + 46.;
+        let appearance = if self.dark { "浅色" } else { "深色" };
+        if f.quiet_button(702, Rect::new(x, y, 70., 28.), appearance, !closing) { self.dark = !self.dark; }
+        if self.sources.is_some() {
+            self.draw_sources(f, c, x, y + 40., w, closing);
+            y += self.source_height();
         }
         if f.field(
             1,
@@ -737,22 +752,6 @@ impl WriterView {
             "115200",
             editing,
         );
-        if f.button(
-            4,
-            Rect::new(x + w * 0.52 + 8., y + 133., w * 0.48 - 8., 34.),
-            if linked { "断开" } else { "连接" },
-            true,
-            !c.busy() && !closing && (linked || !c.form.port.trim().is_empty()),
-        ) {
-            if linked {
-                self.act(c, Action::Disconnect);
-            } else if let Ok(baud) = self.baud.trim().parse::<u32>() {
-                c.form.baud = baud;
-                self.act(c, Action::Connect);
-            } else {
-                self.notice = "波特率需为正整数。".into();
-            }
-        }
         let enabled = c.connected() && !c.busy() && !closing;
         f.caption("工作坐标 · mm", x, y + 197.);
         f.canvas
@@ -963,37 +962,22 @@ impl WriterView {
             Err(error) => f.note(&error, x, y + 807., w),
         }
     }
-    fn draw_sources(
-        &mut self,
-        frame: &mut Frame<'_, '_>,
-        c: &mut Controller,
-        x: f32,
-        y: f32,
-        w: f32,
-        closing: bool,
-    ) {
+    fn source_height(&self) -> f32 {
+        self.sources.as_ref().map_or(0., |m| 33. + m.sources.choices.len() as f32 * 37.)
+    }
+    fn draw_sources(&mut self, f: &mut Frame<'_, '_>, c: &mut Controller, x: f32, y: f32, w: f32, closing: bool) {
         let Some(menu) = &self.sources else { return };
-        let active = menu.sources.active;
-        let label = active.map_or("指定目录", Choice::label);
-        frame.note(&format!("奎享来源 · {label}"), x, y, w);
-        let choices = &menu.sources.choices;
-        let width = (w - 6. * (choices.len() - 1) as f32) / choices.len() as f32;
+        f.caption("奎享默认设置", x, y);
         let mut selected = None;
-        for (i, choice) in choices.iter().copied().enumerate() {
-            if frame.button(
-                7190 + i as u64,
-                Rect::new(x + i as f32 * (width + 6.), y + 22., width, 31.),
-                choice.label(),
-                active == Some(choice),
-                !closing && !c.busy(),
-            ) {
+        for (i, choice) in menu.sources.choices.iter().copied().enumerate() {
+            let label = menu.sources.paper_label(choice);
+            if f.button(7190 + i as u64, Rect::new(x, y + 22. + i as f32 * 37., w, 32.),
+                &label, menu.sources.active == Some(choice), !closing && !c.busy()) {
                 selected = Some(choice);
             }
         }
         if let Some(choice) = selected {
-            self.notice = match self.switch_source(c, choice) {
-                Ok(message) | Err(message) => message,
-            };
+            self.notice = match self.switch_source(c, choice) { Ok(message) | Err(message) => message };
         }
     }
 
@@ -1081,75 +1065,41 @@ impl WriterView {
     ) -> f32 {
         let editing = !c.busy() && c.connected_device().is_none() && !closing;
         let list = &mut self.picker;
-        let count = list.candidates.len();
-        let open = if list.expanded { "▾" } else { "▸" };
-        let title = format!("{open} {} ({count})", crate::locale::text("USB 设备"));
-        if f.button(90, Rect::new(x, y, w - 76., 32.), &title, false, count > 0) {
-            list.expanded = !list.expanded;
-        }
-        if f.quiet_button(91, Rect::new(x + w - 68., y, 68., 32.), "扫描", !closing) {
-            list.update(devices::discover(), &mut c.form.port, editing);
-            list.expanded = true;
-        }
         if list.candidates.is_empty() {
-            f.canvas.ellipsis(
-                "未发现 USB 串口，可手动输入路径",
-                x,
-                y + 42.,
-                w,
-                13,
-                false,
-                MUTED,
-            );
-        } else if list.expanded {
+            f.caption("还没找到写字机", x, y);
+            f.note("接上 USB 并打开电源，再点「重新查找」。", x, y + 23., w);
+        } else if let [only] = list.candidates.as_slice() {
+            let selected = c.form.port == only.path;
+            f.caption(if selected { "已选设备" } else { "找到一台设备" }, x, y);
+            if selected {
+                f.note(only.display_name(), x, y + 22., w);
+            } else if f.button(100, Rect::new(x, y + 18., w, 32.), only.display_name(), false, editing) {
+                c.form.port.clone_from(&only.path);
+                list.edited = true;
+                list.automatic = None;
+            }
+        } else {
+            f.caption("选择要连接的设备", x, y);
             for (row, i) in list.rows().enumerate() {
                 let device = &list.candidates[i];
                 let selected = c.form.port == device.path;
-                let top = y + 40. + row as f32 * DEVICE_ROW;
-                let rect = Rect::new(x, top, w, DEVICE_ROW - 6.);
-                if selected {
-                    f.canvas.rect(rect, 8., colors::BLUE_PALE);
-                    f.canvas.rect(
-                        Rect::new(rect.x, rect.y + 8., 3., rect.h - 16.),
-                        1.5,
-                        colors::BLUE,
-                    );
-                }
-                if editing && f.quiet_button(100 + i as u64, rect, "", true) {
+                let top = y + 23. + row as f32 * DEVICE_ROW;
+                let rect = Rect::new(x, top, w, DEVICE_ROW - 4.);
+                if selected { f.canvas.rect(rect, 7., colors::BLUE_PALE); }
+                if f.quiet_button(100 + i as u64, rect, "", editing) {
                     c.form.port.clone_from(&device.path);
                     list.edited = true;
                     list.automatic = None;
                 }
-                let ink = INK;
-                let secondary = MUTED;
-                let label = if selected {
-                    format!("✓ {}", device.label)
-                } else {
-                    device.label.clone()
-                };
-                f.canvas
-                    .ellipsis(&label, x + 10., top + 5., w - 20., 15, true, ink);
-                f.canvas.ellipsis(
-                    &device.detail,
-                    x + 10.,
-                    top + 26.,
-                    w - 20.,
-                    12,
-                    false,
-                    secondary,
-                );
-                f.canvas.ellipsis(
-                    &device.path,
-                    x + 10.,
-                    top + 44.,
-                    w - 20.,
-                    12,
-                    false,
-                    secondary,
-                );
+                let label = if selected { format!("✓ {}", device.display_name()) } else { device.display_name().to_owned() };
+                f.canvas.ellipsis(&label, x + 10., top + 4., w - 20., 15, true, INK);
+                let id = device.identifier.as_deref().filter(|id| {
+                    list.candidates.iter().filter(|d| d.identifier.as_deref() == Some(*id)).count() == 1
+                }).unwrap_or_else(|| device.port_name());
+                f.canvas.ellipsis(id, x + 10., top + 25., w - 20., 12, false, MUTED);
             }
             if list.pages() > 1 {
-                let top = y + 40. + list.rows().len() as f32 * DEVICE_ROW;
+                let top = y + 23. + list.rows().len() as f32 * DEVICE_ROW;
                 let pages = list.pages();
                 if f.button(
                     92,
@@ -1198,7 +1148,7 @@ impl WriterView {
             (canvas.measure(crate::locale::text(label), 14, false) + 26.).min(group * 0.56)
         };
         let edit_w = button_width(f.canvas, "编辑文章", text_w);
-        let library_w = button_width(f.canvas, "字体库", font_w);
+        let library_w = button_width(f.canvas, "选择字体", font_w);
         let mut changed = f.field(
             30,
             x,
@@ -1218,20 +1168,38 @@ impl WriterView {
         ) {
             self.article = Some(Article::new(&c.form.text));
         }
-        changed |= f.field(
-            31,
-            font_x,
-            font_y,
-            (font_w - library_w - 8.).max(0.),
-            "单线字体",
-            &mut c.form.font,
-            "builtin",
-            editing,
-        );
+        if self.advanced {
+            changed |= f.field(
+                31,
+                font_x,
+                font_y,
+                (font_w - library_w - 8.).max(0.),
+                "单线字体",
+                &mut c.form.font,
+                "builtin",
+                editing,
+            );
+        } else {
+            f.caption("字体", font_x, font_y);
+            let font_label = if c.form.font == "builtin" {
+                crate::locale::text("内置字体")
+            } else {
+                &c.form.font
+            };
+            f.canvas.ellipsis(
+                font_label,
+                font_x,
+                font_y + 29.,
+                (font_w - library_w - 8.).max(0.),
+                15,
+                false,
+                INK,
+            );
+        }
         if f.button(
             32,
             Rect::new(x + w - library_w, font_y + 21., library_w, 34.),
-            "字体库",
+            "选择字体",
             false,
             editing,
         ) {
@@ -1329,9 +1297,9 @@ impl WriterView {
         let editing = !c.busy() && !closing;
         let layout = WritingLayout::new(area, self.advanced);
         let switch_label = if self.advanced {
-            "书写参数"
+            "收起更多设置"
         } else {
-            "纸张与字迹"
+            "更多设置"
         };
         let switch_width = (f
             .canvas
@@ -1358,9 +1326,34 @@ impl WriterView {
             return;
         }
         let mut changed = self.text_font(f, c, area, layout.stack_text, editing);
+        let geometry_count = if self.advanced { LABELS.len() } else { 3 };
+        for (i, label) in LABELS.iter().take(geometry_count).enumerate() {
+            let field = layout.parameter(i);
+            changed |= f.field(
+                40 + i as u64,
+                field.x,
+                field.y,
+                field.w,
+                label,
+                &mut self.geometry[i],
+                "",
+                editing,
+            );
+        }
         if self.advanced {
+            let field = layout.parameter(LABELS.len());
+            changed |= f.field(
+                48,
+                field.x,
+                field.y,
+                field.w,
+                "随机种子",
+                &mut self.seed,
+                "0",
+                editing,
+            );
             for (i, label) in MAP_LABELS.iter().enumerate() {
-                let field = layout.parameter(i);
+                let field = layout.parameter(LABELS.len() + 1 + i);
                 changed |= f.field(
                     200 + i as u64,
                     field.x,
@@ -1386,31 +1379,6 @@ impl WriterView {
                     changed = true;
                 }
             }
-        } else {
-            for (i, label) in LABELS.iter().enumerate() {
-                let field = layout.parameter(i);
-                changed |= f.field(
-                    40 + i as u64,
-                    field.x,
-                    field.y,
-                    field.w,
-                    label,
-                    &mut self.geometry[i],
-                    "",
-                    editing,
-                );
-            }
-            let field = layout.parameter(LABELS.len());
-            changed |= f.field(
-                48,
-                field.x,
-                field.y,
-                field.w,
-                "随机种子",
-                &mut self.seed,
-                "0",
-                editing,
-            );
         }
         if changed {
             self.dirty(c);
@@ -1454,23 +1422,47 @@ impl WriterView {
             }
         }
         paint_page(f.canvas, layout.preview, &c.form, &c.strokes);
-        if f.button(
-            53,
-            layout.action(0),
-            "校验程序",
-            false,
-            editing && c.connected() && !c.gcode.is_empty(),
-        ) {
+        if self.advanced
+            && f.button(
+                53,
+                layout.action(0),
+                "校验程序",
+                false,
+                editing && c.connected() && !c.gcode.is_empty(),
+            )
+        {
             self.act(c, Action::Check);
         }
+        let next = if !c.connected() {
+            "设置写字机"
+        } else if c.paper.is_none() {
+            "设置纸张和笔"
+        } else if c.preview_submitted() {
+            "重新生成预览"
+        } else if c.gcode.is_empty() {
+            "生成书写预览"
+        } else {
+            "开始写字"
+        };
         if f.button(
             51,
-            layout.action(1),
-            "发送到写字机",
+            layout.action(usize::from(self.advanced)),
+            next,
             true,
-            editing && c.connected() && c.paper.is_some() && !c.gcode.is_empty(),
+            editing,
         ) {
-            self.act(c, Action::Send);
+            if !c.connected() || c.paper.is_none() {
+                self.workspace = Some(WorkspaceWizard::default());
+                self.scroll_y = 0.;
+                self.notice.clear();
+            } else if c.gcode.is_empty() || c.preview_submitted() {
+                match self.copy_geometry(c) {
+                    Ok(()) => self.act(c, Action::Preview),
+                    Err(error) => self.notice = error,
+                }
+            } else {
+                self.act(c, Action::Send);
+            }
         }
         let target = c.cancel_target();
         if self.confirm_cancel.is_some() && (self.confirm_cancel != target || c.owns_job()) {
@@ -1485,10 +1477,10 @@ impl WriterView {
         } else {
             "取消作业"
         };
-        if f.ui.button(
+        if c.busy() && f.ui.button(
             f.canvas,
             52,
-            layout.action(2),
+            layout.action(if self.advanced { 2 } else { 1 }),
             crate::locale::text(label),
             if c.busy() {
                 ButtonStyle::Danger
@@ -1505,37 +1497,39 @@ impl WriterView {
                 self.notice = format!("再次点击确认取消共享作业 #{job}。");
             }
         }
-        f.field(
-            81,
-            x,
-            layout.file_y,
-            if layout.stack_file { w } else { w - 174. },
-            "文本或 G-code 文件",
-            &mut self.file_path,
-            "输入文件路径",
-            editing,
-        );
-        if f.quiet_button(
-            83,
-            layout.file_button(0),
-            "读文本",
-            editing && !self.file_path.trim().is_empty(),
-        ) {
-            match read_article(self.file_path.trim()) {
-                Ok(text) => {
-                    c.form.text = text;
-                    self.dirty(c);
+        if self.advanced {
+            f.field(
+                81,
+                x,
+                layout.file_y,
+                if layout.stack_file { w } else { w - 174. },
+                "文本或 G-code 文件",
+                &mut self.file_path,
+                "输入文件路径",
+                editing,
+            );
+            if f.quiet_button(
+                83,
+                layout.file_button(0),
+                "读文本",
+                editing && !self.file_path.trim().is_empty(),
+            ) {
+                match read_article(self.file_path.trim()) {
+                    Ok(text) => {
+                        c.form.text = text;
+                        self.dirty(c);
+                    }
+                    Err(error) => self.notice = error,
                 }
-                Err(error) => self.notice = error,
             }
-        }
-        if f.quiet_button(
-            82,
-            layout.file_button(1),
-            "导出",
-            editing && !c.gcode.is_empty() && !self.file_path.trim().is_empty(),
-        ) {
-            self.act(c, Action::Export(self.file_path.trim().into()));
+            if f.quiet_button(
+                82,
+                layout.file_button(1),
+                "导出",
+                editing && !c.gcode.is_empty() && !self.file_path.trim().is_empty(),
+            ) {
+                self.act(c, Action::Export(self.file_path.trim().into()));
+            }
         }
         let status = if self.notice.is_empty() {
             &c.status
@@ -1568,9 +1562,9 @@ impl WritingLayout {
         let parameters_y = area.y + if stack_text { 179. } else { 114. };
         let parameters = GridLayout::new(row(parameters_y), 134., 3, 8.);
         let count = if advanced {
-            MAP_LABELS.len()
+            LABELS.len() + 1 + MAP_LABELS.len()
         } else {
-            LABELS.len() + 1
+            3
         };
         let fields_end = parameters_y + parameters.height(count, 58.) + 8.;
         let flips_y = fields_end + 2.;
@@ -1582,8 +1576,14 @@ impl WritingLayout {
         };
         let preview_y = heading_y + 46.;
         let actions_grid = |y| GridLayout::new(row(y), 170., 3, 8.);
-        let actions_height = actions_grid(0.).height(3, 39.);
-        let file_height = if stack_file { 97. } else { 55. };
+        let actions_height = actions_grid(0.).height(if advanced { 3 } else { 2 }, 39.);
+        let file_height = if !advanced {
+            0.
+        } else if stack_file {
+            97.
+        } else {
+            55.
+        };
         let footer = 16. + actions_height + 10. + 26. + file_height;
         let minimum_height = preview_y - area.y + 180. + footer;
         let preview_height = 180. + (area.h - minimum_height).max(0.);
@@ -1636,7 +1636,7 @@ impl WritingLayout {
     }
 }
 
-fn read_article(path: &str) -> Result<String, String> {
+pub(crate) fn read_article(path: &str) -> Result<String, String> {
     const MAX_BYTES: u64 = 1024 * 1024;
     let mut article = String::new();
     std::fs::File::open(path)
@@ -1903,6 +1903,7 @@ mod picker_tests {
                 path: path.to_string(),
                 label: path.to_string(),
                 detail: String::new(),
+                identifier: None,
             })
             .collect()
     }

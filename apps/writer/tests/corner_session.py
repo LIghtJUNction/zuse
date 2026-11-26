@@ -32,7 +32,8 @@ with (root / "job-log").open("a+") as journal:
                 else:
                     data["work_position"] = list(position)
             elif name=="plotter.status":
-                data = dict(base,work_position=list(position))
+                data = (dict(connected=False) if (root / "unplugged").exists() else
+                        dict(base, work_position=list(position), x_max_feed_mm_min=450, y_max_feed_mm_min=200))
             else:
                 data = {}
             results.append(dict(step=idx,operation=name,value=data))

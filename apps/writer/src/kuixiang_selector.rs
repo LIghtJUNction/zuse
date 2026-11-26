@@ -40,6 +40,7 @@ impl Choice {
 
 pub(crate) struct Sources {
     pub choices: Vec<Choice>,
+    paper_sizes: Vec<(Choice, [f64; 2])>,
     pub active: Option<Choice>,
     home: Option<PathBuf>,
 }
@@ -47,14 +48,11 @@ pub(crate) struct Sources {
 impl Sources {
     pub fn from_home(home: Option<&Path>) -> Self {
         let mut choices = vec![];
+        let mut paper_sizes = vec![];
         for choice in [Choice::Native, Choice::Flatpak] {
-            if choice
-                .root(home)
-                .ok()
-                .flatten()
-                .is_some_and(|p| kuixiang_config::has_profile(&p))
-            {
+            if let Some(size) = choice.root(home).ok().flatten().and_then(|p| kuixiang_config::paper_size(&p)) {
                 choices.push(choice);
+                paper_sizes.push((choice, size));
             }
         }
         if !choices.is_empty() {
@@ -62,10 +60,21 @@ impl Sources {
         }
         Self {
             choices,
+            paper_sizes,
             active: Some(Choice::Common),
             home: home.map(Path::to_owned),
         }
     }
+    pub fn paper_label(&self, choice: Choice) -> String {
+        if choice == Choice::Common {
+            let label = if self.paper_sizes.len() > 1 { "使用两份配置的共同设置" } else { "跟随已安装的配置" };
+            return crate::locale::text(label).into();
+        }
+        let label = crate::locale::text(choice.label());
+        self.paper_sizes.iter().find(|(c, _)| *c == choice)
+            .map_or_else(|| label.to_owned(), |(_, [w, h])| format!("{w} × {h} mm · {label}"))
+    }
+
     pub fn mark_explicit(&mut self, root: &Path) {
         self.active = self.choices.iter().copied().find(|choice| {
             choice.root(self.home.as_deref()).ok().flatten().as_deref() == Some(root)

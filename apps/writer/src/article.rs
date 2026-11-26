@@ -1,4 +1,6 @@
 use crate::locale::text;
+use crate::file_dialog::{FileDialog, FileKind};
+use std::sync::mpsc::{self,Receiver,TryRecvError};
 use zgpui::native::{ButtonStyle, Canvas, Event, Rect, Ui, colors};
 
 const MAX_BYTES: usize = 1024 * 1024;
@@ -8,6 +10,10 @@ pub(crate) struct Article {
     cursor: usize,
     first: usize,
     select_all: bool,
+    dialog: Option<FileDialog>,
+    reading: Option<Receiver<Result<(String,String),String>>>,
+    before_open: String,
+    notice: String,
 }
 
 impl Article {
@@ -17,7 +23,49 @@ impl Article {
             cursor: value.len(),
             first: 0,
             select_all: false,
+            dialog: None,
+            reading: None,
+            before_open: String::new(),
+            notice: String::new(),
         }
+    }
+
+    pub(crate) fn pending(&self) -> bool {
+        self.dialog.is_some() || self.reading.is_some()
+    }
+
+    fn poll_file(&mut self) {
+        if let Some(answer)=self.dialog.as_ref().and_then(FileDialog::poll) {
+            self.dialog=None;
+            match answer {
+                Ok(Some(path)) => {
+                    let (tx,rx)=mpsc::channel();
+                    self.reading=Some(rx);
+                    std::thread::spawn(move || {
+                        let value=crate::view::read_article(&path).map(|v|(path,v));
+                        let _=tx.send(value);
+                    });
+                }
+                Ok(None) => self.notice.clear(),
+                Err(error) => self.notice=error,
+            }
+        }
+        let Some(reader)=&self.reading else { return; };
+        self.notice=match reader.try_recv() {
+            Ok(Ok((path, value))) if self.draft==self.before_open => {
+                self.draft=value.replace("\r\n","\n").replace('\r',"\n");
+                self.first=0;
+                self.cursor=0;
+                self.select_all=false;
+                format!("已打开 {}", std::path::Path::new(&path).file_name().unwrap_or_default().to_string_lossy())
+            }
+            Ok(Ok(_)) => "草稿已有新的编辑。请重新选择文件以替换文章。".into(),
+            Ok(Err(error)) => error,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => "读取文本失败，请重试。".into(),
+        };
+        self.reading=None;
+        self.before_open.clear();
     }
 
     pub(crate) fn finish(self) -> String {
@@ -135,7 +183,14 @@ impl Article {
     pub(crate) fn draw(&mut self, canvas: &mut Canvas<'_>, ui: &mut Ui, area: Rect) -> bool {
         let Rect { x, y, w, h } = area;
         canvas.text(text("编辑文章"), x, y, 25, true, colors::TEXT);
-        let rect = Rect::new(x, y + 57., w, (h - 75.).max(100.));
+        self.poll_file();
+        if ui.button(canvas,711,Rect::new(x,y+44.,128.,34.),text("打开文本文件…"),ButtonStyle::Secondary,!self.pending()) {
+            self.before_open=self.draft.clone();
+            self.dialog=Some(FileDialog::open(FileKind::Text,"选择 UTF-8 文本文件"));
+            self.notice.clear();
+        }
+        canvas.ellipsis(&self.notice,x+140.,y+51.,(w-140.).max(1.),13,false,colors::MUTED);
+        let rect = Rect::new(x, y + 90., w, (h - 108.).max(100.));
         canvas.rect(rect, 8., colors::LINE);
         canvas.rect(rect.inset(1.), 7., colors::SURFACE);
         let row = self.row();
@@ -177,12 +232,12 @@ impl Article {
             Rect::new(x + w - 122., y - 2., 122., 34.),
             text("应用文章"),
             ButtonStyle::Primary,
-            true,
+            !self.pending(),
         )
     }
 
     pub(crate) fn reveal_cursor(&mut self, height: f32) {
-        let count = ((height - 121.) / 25.).max(1.) as usize;
+        let count = ((height - 154.) / 25.).max(1.) as usize;
         let row = self.row();
         if row >= self.first + count {
             self.first = row + 1 - count;

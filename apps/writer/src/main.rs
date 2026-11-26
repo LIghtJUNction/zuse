@@ -2,6 +2,7 @@ mod alignment;
 mod article;
 mod controller;
 mod devices;
+mod file_dialog;
 mod font_picker;
 mod jog_settings;
 mod kuixiang_config;

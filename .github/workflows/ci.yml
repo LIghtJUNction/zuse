@@ -49,3 +49,53 @@ jobs:
           python tests/cli_update.py --binary target/debug/zuse
           python tests/native_serial.py --binary target/debug/zuse --output target/ci-native-serial
           python tests/native_usb.py --binary target/debug/zuse --output target/ci-native-usb
+
+  writer-desktop:
+    name: Build and exercise the Linux desktop download
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      ZUSE_BUILD_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libx11-dev libfreetype-dev libfontconfig-dev xvfb xauth xdotool xclip zenity imagemagick tesseract-ocr tesseract-ocr-eng fonts-noto-cjk
+      - name: Build the portable application
+        run: |
+          set -eu
+          target=x86_64-unknown-linux-gnu
+          cargo build --locked --release --target "$target" --bin zuse
+          cargo build --locked --release --target "$target" --manifest-path apps/writer/Cargo.toml --features linux-software
+          package=$(python scripts/release.py writer-portable "$target")
+          echo "WRITER_PACKAGE=$package" >> "$GITHUB_ENV"
+          echo "PACKAGE_NAME=$(basename "$package")" >> "$GITHUB_ENV"
+          tar -xf "$package" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/Zuse-Writer/Zuse Writer" --version | grep -F "$GITHUB_SHA"
+          "$RUNNER_TEMP/Zuse-Writer/.zuse-writer/zuse" --version
+          sha256sum "$package" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Check the installed desktop workflows
+        run: |
+          set -eu
+          writer="$RUNNER_TEMP/Zuse-Writer/Zuse Writer"
+          engine="$RUNNER_TEMP/Zuse-Writer/.zuse-writer/zuse"
+          python apps/writer/tests/onboarding_gui.py "$writer" "$RUNNER_TEMP/writer-evidence/wizard"
+          xvfb-run -a -s '-screen 0 1440x1000x24' python tests/writer_file_picker.py "$writer" "$engine" "$PWD" "$RUNNER_TEMP/writer-evidence"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: Writer-desktop-screenshots
+          path: ${{ runner.temp }}/writer-evidence
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: ${{ env.WRITER_PACKAGE }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 90

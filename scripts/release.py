@@ -88,6 +88,32 @@ def package(target):
                         archive.addfile(info, io.BytesIO(data))
     print(output)
 
+def writer_portable(target):
+    """A desktop bundle with a single visible application and its private engine."""
+    if target not in WRITER_TARGETS:
+        raise ValueError("Writer portable bundles are available for Linux")
+    writer = built_binary(ROOT / "apps" / "writer", target, "zuse-writer")
+    engine = built_binary(ROOT, target, "zuse")
+    revision = git("rev-parse", "--short=12", "HEAD")
+    arch = target.split("-")[0]
+    dist = ROOT / "dist"
+    dist.mkdir(exist_ok=True)
+    output = dist / f"Zuse-Writer-Linux-{arch}-{revision}.tar.gz"
+    files = ((writer, "Zuse Writer", 0o755),
+             (engine, ".zuse-writer/zuse", 0o755),
+             (ROOT / "LICENSE", ".zuse-writer/LICENSE", 0o644))
+    with output.open("wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w") as archive:
+                for path, name, mode in files:
+                    record = tarfile.TarInfo("Zuse-Writer/" + name)
+                    record.mode = mode
+                    record.size = path.stat().st_size
+                    with path.open("rb") as src:
+                        archive.addfile(record, src)
+    print(output)
+
+
 def publish(tag):
     identity = verify(tag)
     files = []
@@ -107,11 +133,14 @@ def main():
     actions = parser.add_subparsers(dest="action", required=True)
     actions.add_parser("verify").add_argument("tag")
     actions.add_parser("package").add_argument("target")
+    actions.add_parser("writer-portable").add_argument("target")
     actions.add_parser("publish").add_argument("tag")
     args = parser.parse_args()
     if args.action == "verify":
         for key, value in verify(args.tag).items():
             print(key + "=" + value)
+    elif args.action == "writer-portable":
+        writer_portable(args.target)
     elif args.action == "package":
         package(args.target)
     else:

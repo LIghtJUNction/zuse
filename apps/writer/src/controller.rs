@@ -182,6 +182,7 @@ pub struct MountReceipt {
     pub action: MountAction,
     pub work: [f64; 3],
     pub work_offset: Option<[f64; 3]>,
+    pub sent_feed_mm_min: Option<f64>,
 }
 const MOUNT_STATUS: &str = "plotter.status(work=true,offset=true,timeout=6000)";
 
@@ -407,10 +408,13 @@ struct Session {
 pub(crate) fn engine_binary() -> std::ffi::OsString {
     env::var_os("ZUSE_BIN")
         .or_else(|| {
-            let peer = env::current_exe()
-                .ok()?
-                .with_file_name(format!("zuse{}", env::consts::EXE_SUFFIX));
-            peer.is_file().then(|| peer.into_os_string())
+            let app = env::current_exe().ok()?;
+            let dir = app.parent()?;
+            let name = format!("zuse{}", env::consts::EXE_SUFFIX);
+            [dir.join(&name), dir.join(".zuse-writer").join(&name)]
+                .into_iter()
+                .find(|bin| bin.is_file())
+                .map(|bin| bin.into_os_string())
         })
         .unwrap_or_else(|| "zuse".into())
 }
@@ -541,7 +545,11 @@ fn value(receipt: &str) -> Result<String> {
             field(&result, "error").unwrap_or(result.chars().take(600).collect())
         ));
     }
-    json::with_value(&result, |v| {
+    last_value(&result)
+}
+
+fn last_value(result: &str) -> Result<String> {
+    json::with_value(result, |v| {
         v.get("results")
             .and_then(|v| v.elements().last())
             .and_then(|v| v.get("value"))
@@ -554,6 +562,7 @@ enum Event {
     Observed(Result<(Snapshot, Option<String>)>, u64),
     Accepted(Snapshot),
     ScreenSettled(Snapshot),
+    OfflinePreview(Box<Form>, Result<String>),
     Done(Action, Box<Form>, Result<(String, Option<Snapshot>)>),
     Cancelled(Result<()>),
 }
@@ -1429,14 +1438,21 @@ impl Controller {
         Ok(mm)
     }
 
-    pub(crate) fn xy_jog_feed_preview(&self, axis: char, requested: f64) -> String {
-        let (i, setting) = if axis == 'X' { (0, 110) } else { (1, 111) };
-        let limit = self
-            .link
+    pub(crate) fn xy_jog_feed_limit(&self, axis: char) -> Option<f64> {
+        let index = match axis {
+            'X' => 0,
+            'Y' => 1,
+            _ => return None,
+        };
+        self.link
             .as_ref()
             .filter(|_| self.connected() && !self.needs_device_status)
-            .and_then(|d| d.axis_max_feed[i]);
-        match limit {
+            .and_then(|device| device.axis_max_feed[index])
+    }
+
+    pub(crate) fn xy_jog_feed_preview(&self, axis: char, requested: f64) -> String {
+        let setting = if axis == 'X' { 110 } else { 111 };
+        match self.xy_jog_feed_limit(axis) {
             Some(rate) => format!(
                 "{axis}  {} {requested} / {} {} mm/min (${setting} {rate})",
                 crate::locale::text("请求"),
@@ -1460,6 +1476,10 @@ impl Controller {
         let s = self.snapshot.as_ref()?;
         Some((s.pid, s.active?, s.rev))
     }
+    pub fn preview_submitted(&self) -> bool {
+        self.sent
+    }
+
     pub fn owns_job(&self) -> bool {
         self.stop.is_some()
     }
@@ -1810,6 +1830,7 @@ impl Controller {
         if matches!(action, Action::Mount(..)) {
             self.mount = None;
         }
+        let offline_preview = matches!(action, Action::Preview) && self.link.is_none();
         let device = self.link.clone();
         let (session, form, tx, expected) = (
             self.session.clone(),
@@ -1819,6 +1840,19 @@ impl Controller {
         );
         self.status = "处理中…".into();
         thread::spawn(move || {
+            if offline_preview {
+                let result = zuse::runtime::Runtime::new()
+                    .execute(&script, zuse::runtime::Options::default())
+                    .and_then(|output| {
+                        if field(&output, "status").as_deref() == Some("completed") {
+                            last_value(&output)
+                        } else {
+                            Err(field(&output, "error").unwrap_or_else(|| "无法生成笔迹预览".into()))
+                        }
+                    });
+                let _ = tx.send(Event::OfflinePreview(Box::new(form), result));
+                return;
+            }
             let result = match (&action, draft.as_ref()) {
                 (Action::Export(path), _) => {
                     export(path, &program).map(|()| (path.display().to_string(), expected))
@@ -2058,7 +2092,7 @@ impl Controller {
                 }
                 let code = json::field(payload, "gcode")?;
                 let paths = preview_paths(&code, f.pen_up)?;
-                let msg = format!("预览 · {} 笔 · seed {}", paths.len(), f.seed);
+                let msg = format!("预览已生成，共 {} 笔。", paths.len());
                 self.plan = Some((f.clone(), code.clone()));
                 self.gcode = code;
                 self.strokes = paths;
@@ -2150,14 +2184,25 @@ impl Controller {
                 }
                 let work = self.wpos.ok_or("示教缺少最终 WPos")?;
                 let offset = self.work_offset.ok_or("示教缺少同帧工作偏移")?;
+                let jog_payload = raw(payload, "jog_receipt");
+                // Single clicks nest the jog result inside a final status observation.
+                // Held segments already return their verified jog result directly.
+                let jog = jog_payload.as_deref().unwrap_or(payload);
+                let sent_feed_mm_min = match kind {
+                    MountAction::Jog { axis, .. } if field(jog, "axis") == Some(axis.to_string()) => {
+                        scalar(jog, "feed_mm_min")
+                    }
+                    _ => None,
+                };
                 self.mount = Some(MountReceipt {
                     request_id: self.generation,
                     epoch,
                     action: *kind,
                     work,
                     work_offset: Some(offset),
+                    sent_feed_mm_min,
                 });
-                let feed = raw(payload, "jog_receipt").and_then(|j| jog_feedback(&j));
+                let feed = sent_feed_mm_min.and_then(|_| jog_feedback(jog));
                 let mut summary = format!(
                     "示教回执 · X={:.3} Y={:.3} Z={:.3} mm",
                     work[0], work[1], work[2]
@@ -2215,6 +2260,19 @@ impl Controller {
                     self.status = out
                         .map(|_| "已请求取消，等待设备回执".into())
                         .unwrap_or_else(|e| e);
+                }
+                Event::OfflinePreview(form, result) => {
+                    let cancelled = self
+                        .stop
+                        .take()
+                        .is_some_and(|flag| flag.load(Ordering::Acquire));
+                    self.status = if cancelled {
+                        "预览已取消。".into()
+                    } else {
+                        result
+                            .and_then(|payload| self.apply(&Action::Preview, &form, &payload))
+                            .unwrap_or_else(|error| error)
+                    };
                 }
                 Event::Done(action, f, r) => {
                     if matches!(action, Action::Mount(..))
@@ -2564,6 +2622,22 @@ mod tests {
         assert!(!program.contains("G0"));
         assert!(program.contains("F300.000"));
         assert!(!preview_paths(&program, form.pen_up).unwrap().is_empty());
+    }
+
+    #[test]
+    fn preview_without_a_device_does_not_need_the_session_executable() {
+        let mut controller = Controller::default();
+        controller.session.bin = "/no-such-writer-session-binary".into();
+        controller.dispatch(Action::Preview);
+        let limit = Instant::now() + Duration::from_secs(5);
+        while controller.owns_job() && Instant::now() < limit {
+            controller.poll();
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!controller.gcode.is_empty(), "{}", controller.status);
+        assert!(!controller.strokes.is_empty());
+        assert!(controller.link.is_none());
+        assert!(controller.paper.is_none());
     }
 
     #[test]

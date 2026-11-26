@@ -164,7 +164,6 @@ USB 设备	USB devices
 记录右下角	Record bottom right
 分别记录纸张左上角、右下角的 XY，以及 Z 上下端。	Record the top-left and bottom-right XY coordinates, then the two Z endpoints.
 已根据左上角和右下角预选方向，可按纸面校对。	The corners determine the axis direction. Check it against the paper.
-
 纸面与装笔校准	Paper and pen calibration
 1 / 3  记录左上角	1 / 3  Record top left
 2 / 3  记录右下角	2 / 3  Record bottom right
@@ -177,7 +176,6 @@ USB 设备	USB devices
 回到中心	Center
 抬笔	Raise pen
 落笔	Lower pen
-
 书写起点 X/Y 对应纸张左上角。	The writing origin is the top-left corner of the paper.
 按住方向键连续点动，松开或移出按钮即停止续发。	Hold an axis button to jog. Release it or move off it to stop sending moves.
 启用键盘方向键	Enable arrow keys
@@ -199,3 +197,87 @@ XY 请求速度 · mm/min	Requested XY speed · mm/min
 本地 .zfont / .gfont 文件	Local .zfont / .gfont file
 仅导入当前文章用字	Only import characters in this article
 正在导入字体…	Importing font…
+设置纸张和笔	Set up paper and pen
+设置写字机	Set up plotter
+收起更多设置	Hide settings
+更多设置	More settings
+字高 mm	Letter height (mm)
+字距 mm	Letter spacing (mm)
+行距 mm	Line spacing (mm)
+字体	Font
+内置字体	Built-in font
+选择字体	Choose font
+生成书写预览	Preview writing
+开始写字	Start writing
+选择字体文件…	Choose font file…
+选择字体文件	Choose font file
+安装官方字体	Install official fonts
+支持 .gfont 和 .zfont	Supports .gfont and .zfont
+手工输入路径	Enter a path
+收起文件路径	Hide path
+字体文件路径	Font file path
+保存名称（自动生成）	Library name (suggested)
+打开文本文件…	Open text file…
+选择 UTF-8 文本文件	Open a UTF-8 text file
+重新查找	Look again
+还没找到写字机	No machine found yet
+接上 USB 并打开电源，再点「重新查找」。	Plug in USB, turn on the machine, then select Look again.
+已选设备	Selected device
+找到一台设备	One device found
+选择要连接的设备	Choose a device to connect
+连接写字机	Connect machine
+断开连接	Disconnect
+连接设置	Connection settings
+收起连接设置	Hide connection settings
+请在连接设置中输入有效的波特率。	Enter a valid baud rate under Connection settings.
+序列号	Serial
+USB 插口	USB port
+奎享默认设置	KuiXiang defaults
+使用两份配置的共同设置	Use settings shared by both installations
+跟随已安装的配置	Follow the installed settings
+原生 Bottles	Native Bottles
+两份奎享配置的纸张不同，可在「连接设置」中选择。	The two KuiXiang paper sizes differ. Choose one under Connection settings.
+每点一次移动 (mm)	Distance per click (mm)
+微调 1 mm	Fine · 1 mm
+粗调 10 mm	Coarse · 10 mm
+先连接写字机	Connect your writing machine
+插好 USB 线，在「设备」里选中写字机，再点「连接」。可以先设置每次移动的距离。	Plug in the USB cable, choose the machine under Device, and click Connect. You can set the distance per click now.
+1 / 3  找到纸张左上角	1 / 3  Find the top-left corner
+先取下笔，固定纸张。把空笔架移到想开始写字的左上角，避开纸夹，再记住这里。	Remove the pen and secure the paper. Move the empty holder to the top left of the area you want to write in, clear of the clips, and record it.
+2 / 3  找到纸张右下角	2 / 3  Find the bottom-right corner
+把空笔架移到可写区域的右下角，给纸边和纸夹留出空隙，再记住这里。	Move the empty holder to the bottom right of your writing area. Leave room for the paper edges and clips, then record this point.
+3 / 3  移到装笔高度	3 / 3  Set the holder height
+纸面的两个角都已记住。确认笔夹是空的或已经松开，再让它上下移动到装笔高度。	Both corners are recorded. Empty or loosen the holder before moving it vertically to the fitting height.
+3 / 3  装上笔	3 / 3  Fit the pen
+笔夹已到位。放入笔，让笔尖轻轻碰到纸面，锁紧笔夹，再保存。	Insert the pen so its tip just touches the paper. Tighten the holder, then save.
+使用已保存的校准	Use a saved calibration
+请确认纸张、笔和机器原点仍在原位。确认后会应用档案中的范围和笔高。	Check that the paper, pen and machine origin are still in place. Confirm to apply the saved writing area and pen heights.
+继续上次的角点记录	Resume the recorded corners
+正在核对上次记录使用的设备和坐标。核对通过后可以从原来的步骤继续。	Checking the machine and coordinate reference used for these corners. Once verified, you can continue where you left off.
+核对上次的角点	Check previously recorded corners
+查看下方的核对结果。可以重新核对，也可以放弃旧记录，从第一个角重新开始。	See the verification result below. Check again or discard the draft and start with the first corner.
+笔架现在	Holder now
+笔架现在 · 等待坐标回读	Holder now · Waiting for position
+草稿左上角（待核对）	Draft top left (unverified)
+草稿右下角（待核对）	Draft bottom right (unverified)
+档案中的左上角	Saved profile · top left
+档案中的右下角	Saved profile · bottom right
+已记住的左上角	Recorded top left
+已记住的右下角	Recorded bottom right
+先微调一小步看方向。同一轴点「减小」可往回走。长按会连续移动，松开停止续发。	Try one small step to check direction. Use the opposite sign to go back. Hold to repeat moves and release to stop sending them.
+X 减小	X −
+X 增大	X +
+Y 减小	Y −
+Y 增大	Y +
+记为纸面左上角	Record as top left
+记为纸面右下角	Record as bottom right
+预计移动速度	Expected feed
+上次实发速度	Last feed sent
+收起速度和其他选项	Hide speed and other options
+速度和其他选项	Speed and other options
+设定移动速度 (mm/min)	Requested speed (mm/min)
+速度来源	Speed source
+查找已保存的校准	Find saved calibration
+把笔夹移到装笔高度	Move holder to fitting height
+笔已夹紧，保存校准	Pen secured · Save calibration
+先微调一小步看方向。同一轴的「增大」和「减小」方向相反。长按连续移动，松开停止续发。	Try one small step to check direction. Use the opposite sign to go back. Hold to repeat moves and release to stop sending them.

@@ -213,8 +213,9 @@ pub(crate) fn selected_root(
         .join(BOTTLE))
 }
 
-pub(crate) fn has_profile(root: &Path) -> bool {
-    root.is_dir() && load(root).is_ok()
+pub(crate) fn paper_size(root: &Path) -> Option<[f64; 2]> {
+    if !root.is_dir() { return None; }
+    load(root).ok().map(|p| p.page.size_mm)
 }
 
 pub(crate) fn discover(selected: Option<&Path>, home: Option<&Path>) -> Result<Defaults, String> {
@@ -446,6 +447,10 @@ mod tests {
                 .report
                 .contains("未能读取")
         );
+        assert!(sources.paper_label(Choice::Native).starts_with("200 × 290 mm"));
+        home.install("flatpak");
+        let both = Sources::from_home(Some(&home.0));
+        assert!(both.paper_label(Choice::Flatpak).starts_with("150 × 200 mm"));
         let preference = home.0.join("kuixiang-source.json");
         assert_eq!(sources.saved_root(&preference).unwrap(), None);
         fs::write(&preference, r#""native""#).unwrap();
