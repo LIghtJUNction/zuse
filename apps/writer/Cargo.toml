@@ -1,0 +1,14 @@
+[package]
+name = "zuse-writer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "Desktop controller for a GRBL pen plotter"
+
+[dependencies]
+zuse = { package = "zuse-computer", path = "../.." }
+zgpui = { git = "https://github.com/LIghtJUNction/zgpui.git", features = ["native"] }
+
+[features]
+linux-software = ["zgpui/linux-software"]

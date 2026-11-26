@@ -6,7 +6,7 @@ zuse turns small programs into desktop observations and actions. The same execut
 
 [中文](README.zh-CN.md) · [Language](docs/language.md) · [Numeric programs](docs/scalar-programs.md) · [Sessions](docs/sessions.md) · [Protocol v1](docs/session-protocol.md) · [Platforms](docs/platforms.md) · [Releases](https://github.com/LIghtJUNction/zuse/releases)
 
-[Handwriting and machine control](docs/handwriting.md) covers stroke fonts, touch input, pen plotters and the X/Z lathe profile.
+[Handwriting and machine control](docs/handwriting.md) covers stroke fonts, touch input, pen plotters and the X/Z lathe profile. [Zuse Writer](apps/writer/README.md) provides a native zgpui desktop interface to a plotter session also accessible to an external controller.
 
 ## Small core, explicit effects
 

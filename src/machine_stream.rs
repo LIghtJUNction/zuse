@@ -47,7 +47,7 @@ pub fn stream_grbl(
 ) -> Result<usize> {
     let end = deadline(timeout_ms)?;
     let lines = plotter_lines(program)?;
-    let mut port = cancel.dispatch(|| SerialPort::open(path, baud))?;
+    let mut port = cancel.dispatch(|| SerialPort::open_machine(path, baud))?;
     let outcome = transmit(&mut port, &lines, end, cancel);
     let close = port.close();
     match (outcome, close) {
@@ -62,26 +62,60 @@ pub fn stream_grbl(
 /// Query controller status and build identity. No motion, configuration, reset, or unlock.
 pub fn probe_grbl(path: &str, baud: u32, timeout_ms: u32, cancel: &Cancellation) -> Result<String> {
     let end = deadline(timeout_ms)?;
-    let mut port = cancel.dispatch(|| SerialPort::open(path, baud))?;
-    let result = inspect_port(&mut port, end, cancel);
+    let mut port = cancel.dispatch(|| SerialPort::open_machine(path, baud))?;
+    let result = inspect_port(&mut port, end, cancel, false);
     let closed = port.close();
     let json = result?;
     closed?;
     Ok(json)
 }
 
-fn inspect_port<P: Port>(port: &mut P, end: Instant, cancel: &Cancellation) -> Result<String> {
+pub(crate) fn inspect_connected(
+    port: &mut SerialPort,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<String> {
+    inspect_port(port, end, cancel, true)
+}
+
+pub(crate) fn program_connected(
+    port: &mut SerialPort,
+    lines: &[String],
+    check: bool,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<usize> {
+    if check {
+        check_on_port(port, lines, end, cancel)
+    } else {
+        transmit(port, lines, end, cancel)
+    }
+}
+
+fn inspect_port<P: Port>(
+    port: &mut P,
+    end: Instant,
+    cancel: &Cancellation,
+    normalize: bool,
+) -> Result<String> {
     let mut c = Connection {
         port,
         end,
         cancel,
         pending: Vec::new(),
     };
-    let frame = c.query_status(true)?;
+    let mut frame = c.query_status(true)?;
+    let firmware = c.identify()?;
+    let unit = if normalize {
+        let unit = c.report_scale()?;
+        frame = c.query_status(false)?;
+        Some(unit)
+    } else {
+        None
+    };
     let (state, fields) = frame[1..frame.len() - 1]
         .split_once('|')
         .ok_or("malformed GRBL status")?;
-    let firmware = c.identify()?;
     let mut result = format!(
         r#"{{"controller":{},"firmware":{},"state":{}"#,
         quote(if firmware == "1.3a.20221114" {
@@ -92,31 +126,49 @@ fn inspect_port<P: Port>(port: &mut P, end: Instant, cancel: &Cancellation) -> R
         quote(&firmware),
         quote(state)
     );
-    for field in fields.split('|') {
-        let Some((name, value)) = field.split_once(':') else {
-            continue;
-        };
-        match name {
-            "MPos" | "WPos" | "WCO" => {
-                let key = match name {
-                    "MPos" => "machine_position",
-                    "WPos" => "work_position",
-                    _ => "work_offset",
-                };
-                let xyz: Vec<f64> = value
-                    .split(',')
-                    .map(str::parse)
-                    .collect::<std::result::Result<_, _>>()
-                    .map_err(|_| "invalid GRBL coordinate")?;
-                if !(3..=6).contains(&xyz.len()) || !xyz.iter().all(|v| v.is_finite()) {
-                    return Err("invalid GRBL coordinate".into());
+    if let Some(scale) = unit {
+        result.push_str(&format!(
+            r#","units":"mm","report_units":"{}""#,
+            if scale == 1. { "mm" } else { "inch" }
+        ));
+    } else {
+        result.push_str(r#","units":"controller_report""#);
+    }
+    let coords = Positions::parse(&frame)?;
+    for (key, coords) in [
+        ("machine_position", coords.machine.as_deref()),
+        ("work_position", coords.work.as_deref()),
+        ("work_offset", coords.offset.as_deref()),
+    ] {
+        if let Some(values) = coords {
+            let mut xyz = values.to_vec();
+            if let Some(scale) = unit {
+                xyz.truncate(3); // GUI exposes linear X/Y/Z, optional rotary axes have other units.
+                for n in &mut xyz {
+                    *n *= scale;
                 }
-                result.push_str(&format!(r#",{}:{xyz:?}"#, quote(key)));
+                if !xyz.iter().all(|n| n.is_finite()) {
+                    return Err("GRBL metric coordinates overflow".into());
+                }
             }
-            "Pn" if value.bytes().all(|b| b.is_ascii_uppercase()) => {
-                result.push_str(&format!(r#","pins":{}"#, quote(value)))
-            }
-            _ => {}
+            result.push_str(&format!(r#",{}:{xyz:?}"#, quote(key)));
+        }
+    }
+    if unit.is_some()
+        && coords.work.is_none()
+        && let (Some(m), Some(o)) = (&coords.machine, &coords.offset)
+    {
+        let xyz: Vec<f64> = (0..3).map(|i| (m[i] - o[i]) * unit.unwrap_or(1.)).collect();
+        if !xyz.iter().all(|n| n.is_finite()) {
+            return Err("GRBL work position overflow".into());
+        }
+        result.push_str(&format!(r#","work_position":{xyz:?}"#));
+    }
+    for f in fields.split('|') {
+        if let Some(pins) = f.strip_prefix("Pn:")
+            && pins.bytes().all(|b| b.is_ascii_uppercase())
+        {
+            result.push_str(&format!(r#","pins":{}"#, quote(pins)));
         }
     }
     result.push('}');
@@ -135,7 +187,7 @@ pub fn check_on_grbl(
 ) -> Result<usize> {
     let end = deadline(timeout_ms)?;
     let lines = plotter_lines(program)?;
-    let mut port = cancel.dispatch(|| SerialPort::open(path, baud))?;
+    let mut port = cancel.dispatch(|| SerialPort::open_machine(path, baud))?;
     let result = check_on_port(&mut port, &lines, end, cancel);
     let close = port.close();
     let count = result?;
@@ -206,7 +258,7 @@ fn check_on_port<P: Port>(
 }
 
 // Strip comments before transmission: GRBL recognizes real-time characters even in comments.
-fn plotter_lines(program: &str) -> Result<Vec<String>> {
+pub(crate) fn plotter_lines(program: &str) -> Result<Vec<String>> {
     if program.len() > MAX_PROGRAM {
         return Err("plotter program exceeds 1 MiB".into());
     }
@@ -414,6 +466,41 @@ impl<P: Port> Connection<'_, P> {
             None => Err("invalid controller status".into()),
         }
     }
+    fn report_scale(&mut self) -> Result<f64> {
+        // GRBL $13 controls realtime coordinate reporting independently of G20/G21.
+        // Read the setting without changing the firmware's reporting configuration.
+        self.send(b"$$\n")?;
+        let mut units = None;
+        loop {
+            let line = self
+                .next(self.end)?
+                .ok_or("controller settings query timed out")?;
+            if line == "ok" {
+                break;
+            }
+            let (key, value) = line
+                .split_once('=')
+                .ok_or("malformed GRBL settings reply")?;
+            if key
+                .strip_prefix('$')
+                .and_then(|s| s.parse::<u16>().ok())
+                .is_none()
+            {
+                return Err("malformed GRBL settings key".into());
+            }
+            if key == "$13" {
+                if units.is_some() {
+                    return Err("duplicate GRBL report units".into());
+                }
+                units = Some(match value.trim() {
+                    "0" => 1.,
+                    "1" => 25.4,
+                    _ => return Err("unknown GRBL report units".into()),
+                });
+            }
+        }
+        units.ok_or_else(|| "missing GRBL $13 report units".into())
+    }
     fn check_startup_blocks(&mut self) -> Result<()> {
         // A reset can execute stored startup blocks. Do not enter Check unless
         // startup records are readable and contain only the allowed modal setup.
@@ -590,6 +677,133 @@ impl<P: Port> Connection<'_, P> {
         }
     }
 }
+/// Calculate a work-coordinate jog from fresh reports on the already selected device.
+/// A single GRBL jog block neither latches a modal state nor resends uncertain motion.
+pub(crate) fn jog_connected(
+    port: &mut SerialPort,
+    axis: char,
+    delta: f64,
+    feed: f64,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<String> {
+    jog_on_port(port, axis, delta, feed, end, cancel)
+}
+
+fn jog_on_port<P: Port>(
+    port: &mut P,
+    axis: char,
+    delta: f64,
+    feed: f64,
+    end: Instant,
+    cancel: &Cancellation,
+) -> Result<String> {
+    let index = match axis {
+        'X' => 0,
+        'Y' => 1,
+        'Z' => 2,
+        _ => return Err("invalid jog axis".into()),
+    };
+    if !(delta.is_finite() && delta != 0. && delta.abs() <= 10. && feed > 0. && feed <= 500.) {
+        return Err("invalid bounded plotter jog".into());
+    }
+    let mut c = Connection {
+        port,
+        end,
+        cancel,
+        pending: Vec::new(),
+    };
+    c.require_state("Idle", true)?;
+    c.identify()?;
+    let mm = c.report_scale()?;
+    let mut position = None;
+    // WCO is periodic. Never combine live MPos with a guessed or past-job offset.
+    for attempt in 0..32 {
+        let frame = c.query_status(false)?;
+        if state(&frame) != Some("Idle") {
+            return Err("controller left Idle before jog".into());
+        }
+        if let Some(v) = Positions::parse(&frame)?.work_axis(index) {
+            position = Some(v * mm);
+            break;
+        }
+        if attempt < 31 {
+            c.cancel
+                .sleep(QUERY_INTERVAL.min(end.saturating_duration_since(Instant::now())))?;
+        }
+    }
+    let from = position.ok_or("fresh WPos or matching MPos/WCO not reported; no jog sent")?;
+    let target = from + delta;
+    if !(target as f32).is_finite() || target as f32 == from as f32 {
+        return Err("jog delta cannot be expressed at this GRBL coordinate".into());
+    }
+    let block = format!("$J=G21G90{axis}{target:.6}F{feed:.6}\n");
+    if block.len() > 80 || feed < 0.0000005 || (target - from).abs() < 0.0000005 {
+        return Err("jog exceeds GRBL block precision or length".into());
+    }
+    c.send(block.as_bytes())
+        .and_then(|()| c.ack(false))
+        .map_err(|e| {
+            format!("jog attempted; motion result unconfirmed, inspect before retry: {e}")
+        })?;
+    loop {
+        let report = c
+            .query_status(false)
+            .map_err(|e| format!("jog acknowledged; final state unverified: {e}"))?;
+        match state(&report) {
+            Some("Idle") => break,
+            Some("Jog" | "Run") => c
+                .cancel
+                .sleep(QUERY_INTERVAL.min(end.saturating_duration_since(Instant::now())))?,
+            Some(s) => return Err(format!("jog acknowledged; controller state {s}")),
+            None => return Err("jog acknowledged; invalid final state".into()),
+        }
+    }
+    Ok(format!(
+        r#"{{"state":"Idle","axis":{},"from_mm":{from},"target_mm":{target},"feed_mm_min":{feed}}}"#,
+        quote(&axis.to_string())
+    ))
+}
+
+#[derive(Default)]
+struct Positions {
+    work: Option<Vec<f64>>,
+    machine: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
+}
+
+impl Positions {
+    fn parse(frame: &str) -> Result<Self> {
+        let mut coords = Self::default();
+        for field in frame.trim_end_matches('>').split('|').skip(1) {
+            let Some((key, value)) = field.split_once(':') else {
+                continue;
+            };
+            let slot = match key {
+                "WPos" => &mut coords.work,
+                "MPos" => &mut coords.machine,
+                "WCO" => &mut coords.offset,
+                _ => continue,
+            };
+            let v: Vec<f64> = value
+                .split(',')
+                .map(str::parse)
+                .collect::<std::result::Result<_, _>>()
+                .map_err(|_| "invalid GRBL coordinate")?;
+            if slot.is_some() || !(3..=6).contains(&v.len()) || !v.iter().all(|v| v.is_finite()) {
+                return Err("duplicate or invalid GRBL coordinate".into());
+            }
+            *slot = Some(v);
+        }
+        Ok(coords)
+    }
+    fn work_axis(&self, axis: usize) -> Option<f64> {
+        self.work
+            .as_ref()
+            .map(|v| v[axis])
+            .or_else(|| Some(self.machine.as_ref()?[axis] - self.offset.as_ref()?[axis]))
+    }
+}
 fn state(line: &str) -> Option<&str> {
     let frame = line.strip_prefix('<')?.strip_suffix('>')?;
     let (state, fields) = frame.split_once('|')?;
@@ -678,6 +892,85 @@ mod tests {
             })
         }
     }
+    #[test]
+    fn normalized_probe_reads_reporting_units_and_derives_work_xyz_from_one_report() {
+        let mut m = Mock::default();
+        m.expect("?", &["<Idle|MPos:8,8,8>\n"]);
+        m.expect("$I\n", &["[VER:1.1h.2019:]\nok\n"]);
+        m.expect("$$\n", &["$13=1\nok\n"]);
+        m.expect("?", &["<Idle|MPos:2,2,2|WCO:1,1,1>\n"]);
+        let result = inspect_port(
+            &mut m,
+            deadline(500).unwrap(),
+            &Cancellation::default(),
+            true,
+        )
+        .unwrap();
+        for field in [
+            r#""units":"mm""#,
+            r#""report_units":"inch""#,
+            r#""work_position":[25.4, 25.4, 25.4]"#,
+        ] {
+            assert!(result.contains(field), "{result}");
+        }
+    }
+
+    #[test]
+    fn jog_converts_report_inches_and_waits_for_matching_work_offset() {
+        let mut mock = Mock::default();
+        mock.expect("?", &["<Idle|MPos:20,0,0>\n"]);
+        mock.expect("$I\n", &["[VER:1.1h.2019:]\nok\n"]);
+        mock.expect("$$\n", &["$10=1\n$13=1\nok\n"]);
+        mock.expect("?", &["<Idle|MPos:21,0,0>\n"]);
+        mock.expect("?", &["<Idle|MPos:3,0,0|WCO:2,0,0>\n"]);
+        mock.expect("$J=G21G90X27.400000F100.000000\n", &["ok\n"]);
+        mock.expect("?", &["<Jog|WPos:1.01,0,0>\n"]);
+        mock.expect("?", &["<Idle|WPos:1.0787,0,0>\n"]);
+        let receipt = jog_on_port(
+            &mut mock,
+            'X',
+            2.,
+            100.,
+            deadline(3000).unwrap(),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert!(receipt.contains(r#""target_mm":27.4"#));
+        assert!(mock.commands.is_empty());
+    }
+
+    #[test]
+    fn missing_units_and_unknown_motion_ack_never_replay_a_jog() {
+        for (units, fail_ack) in [("$0=10\nok\n", false), ("$13=0\nok\n", true)] {
+            let mut mock = Mock::default();
+            mock.expect("?", &["<Idle|WPos:1,0,0>\n"]);
+            mock.expect("$I\n", &["[VER:1.1h.2019:]\nok\n"]);
+            mock.expect("$$\n", &[units]);
+            if fail_ack {
+                mock.expect("?", &["<Idle|WPos:1,0,0>\n"]);
+                mock.expect("$J=G21G90X2.000000F100.000000\n", &[]);
+            }
+            assert!(
+                jog_on_port(
+                    &mut mock,
+                    'X',
+                    1.,
+                    100.,
+                    deadline(500).unwrap(),
+                    &Cancellation::default()
+                )
+                .is_err()
+            );
+            assert!(mock.commands.is_empty());
+            assert_eq!(
+                mock.writes
+                    .iter()
+                    .filter(|line| line.starts_with("$J"))
+                    .count(),
+                usize::from(fail_ack)
+            );
+        }
+    }
     const WRITER_STATE: &str =
         "<Idle|MPos:0.000,0.000,0.000|FS:0,0|Pn:XY|WCO:0.000,0.000,0.000>\r\n";
     const WRITER_ID: &str = "[VER:1.3a.20221114:]\r\n[OPT:MPHB]\r\n[MSG:Mode=BT:Name=BtWriter(test-device):Status=Not connected]\r\nok\r\n";
@@ -686,10 +979,16 @@ mod tests {
         let mut m = Mock::default();
         m.expect("?", &[WRITER_STATE]);
         m.expect("$I\n", &[WRITER_ID]);
-        let json = inspect_port(&mut m, deadline(500).unwrap(), &Cancellation::default()).unwrap();
+        let json = inspect_port(
+            &mut m,
+            deadline(500).unwrap(),
+            &Cancellation::default(),
+            false,
+        )
+        .unwrap();
         assert_eq!(
             json,
-            r#"{"controller":"BtWriter","firmware":"1.3a.20221114","state":"Idle","machine_position":[0.0, 0.0, 0.0],"pins":"XY","work_offset":[0.0, 0.0, 0.0]}"#
+            r#"{"controller":"BtWriter","firmware":"1.3a.20221114","state":"Idle","units":"controller_report","machine_position":[0.0, 0.0, 0.0],"work_offset":[0.0, 0.0, 0.0],"pins":"XY"}"#
         );
         assert_eq!(m.writes, ["?", "$I\n"]);
     }

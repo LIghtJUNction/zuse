@@ -6,7 +6,7 @@ zuse 把小段程序变成电脑观察与操作，支持桌面、浏览器、移
 
 [English](README.md) · [语法](docs/language.md) · [数值程序](docs/scalar-programs.md) · [常驻会话](docs/sessions.md) · [协议 v1](docs/session-protocol.md) · [平台能力](docs/platforms.md)
 
-[书写与机器控制](docs/handwriting.md)介绍单线字体、基准距离、逐字偏移、鼠标与模拟触控书写、写字机 G-code 和 X/Z 车床。
+[书写与机器控制](docs/handwriting.md)介绍单线字体、基准距离、逐字偏移、鼠标与模拟触控书写、写字机 G-code 和 X/Z 车床。[Zuse Writer 桌面软件](apps/writer/README.md)使用 zgpui，在同一 Zuse 会话内供人和 AI 一起控制写字机。
 
 ## 安装与使用
 

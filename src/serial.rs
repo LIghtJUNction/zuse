@@ -17,9 +17,18 @@ pub struct SerialPort {
 
 impl SerialPort {
     pub fn open(path: &str, baud: u32) -> Result<Self> {
+        Self::open_selected(path, baud, false)
+    }
+
+    /// Machine protocols own the serial stream until the original settings are restored.
+    pub(crate) fn open_machine(path: &str, baud: u32) -> Result<Self> {
+        Self::open_selected(path, baud, true)
+    }
+
+    fn open_selected(path: &str, baud: u32, machine: bool) -> Result<Self> {
         validate_path(path)?;
         validate_baud(baud)?;
-        let port = native::Port::open(path, baud)?;
+        let port = native::Port::open(path, baud, machine)?;
         Ok(Self {
             port: Some(port),
             path: path.into(),
@@ -161,7 +170,31 @@ mod native {
         revents: c_short,
     }
 
+    #[cfg(target_env = "musl")]
+    type IoctlRequest = c_int;
+    #[cfg(not(target_env = "musl"))]
+    type IoctlRequest = std::ffi::c_ulong;
+    // Darwin and Linux SPARC encode _IO('t', 13). MIPS uses the older raw number.
+    const TIOCEXCL: IoctlRequest = if cfg!(any(
+        target_os = "macos",
+        target_arch = "sparc",
+        target_arch = "sparc64"
+    )) {
+        0x2000_740d
+    } else if cfg!(any(
+        target_arch = "mips",
+        target_arch = "mips64",
+        target_arch = "mips32r6",
+        target_arch = "mips64r6"
+    )) {
+        0x740d
+    } else {
+        0x540c
+    };
+    const TIOCNXCL: IoctlRequest = TIOCEXCL + 1;
+
     unsafe extern "C" {
+        fn ioctl(fd: c_int, request: IoctlRequest, ...) -> c_int;
         fn tcgetattr(fd: c_int, attr: *mut Termios) -> c_int;
         fn tcsetattr(fd: c_int, action: c_int, attr: *const Termios) -> c_int;
         fn cfmakeraw(attr: *mut Termios);
@@ -172,10 +205,11 @@ mod native {
     pub struct Port {
         file: File,
         original: Option<Termios>,
+        exclusive: bool,
     }
 
     impl Port {
-        pub fn open(path: &str, baud: u32) -> Result<Self> {
+        pub fn open(path: &str, baud: u32, machine: bool) -> Result<Self> {
             #[cfg(target_os = "linux")]
             let flags = 0x100 | 0x800; // O_NOCTTY | O_NONBLOCK.
             #[cfg(target_os = "macos")]
@@ -186,9 +220,22 @@ mod native {
                 .custom_flags(flags)
                 .open(path)
                 .map_err(|e| format!("open serial device: {e}"))?;
+            let mut port = Self {
+                file,
+                original: None,
+                exclusive: false,
+            };
+            if machine {
+                // flock(LOCK_EX | LOCK_NB) arbitrates simultaneous machine opens;
+                // TIOCEXCL blocks subsequent ordinary opens of this terminal, too.
+                port.file
+                    .try_lock()
+                    .map_err(|e| format!("lock machine serial port: {e}"))?;
+                port.set_exclusive(true)?;
+            }
             let mut original = std::mem::MaybeUninit::<Termios>::uninit();
             // SAFETY: valid fd and correctly sized platform termios storage.
-            if unsafe { tcgetattr(file.as_raw_fd(), original.as_mut_ptr()) } != 0 {
+            if unsafe { tcgetattr(port.file.as_raw_fd(), original.as_mut_ptr()) } != 0 {
                 return Err(format!(
                     "device is not a configurable serial/TTY port: {}",
                     io::Error::last_os_error()
@@ -227,10 +274,7 @@ mod native {
                     ));
                 }
             }
-            let port = Self {
-                file,
-                original: Some(original),
-            };
+            port.original = Some(original);
             if unsafe { tcsetattr(port.file.as_raw_fd(), 0, &configured) } != 0 {
                 return Err(format!(
                     "configure serial 8N1: {}",
@@ -344,14 +388,32 @@ mod native {
             }
             Ok(())
         }
+        fn set_exclusive(&mut self, on: bool) -> Result<()> {
+            if self.exclusive == on {
+                return Ok(());
+            }
+            let request = if on { TIOCEXCL } else { TIOCNXCL };
+            // SAFETY: live TTY descriptor; neither request references user memory.
+            let unused = std::ptr::null_mut::<std::ffi::c_void>();
+            if unsafe { ioctl(self.file.as_raw_fd(), request, unused) } != 0 {
+                return Err(format!(
+                    "set machine serial exclusivity to {on}: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+            self.exclusive = on;
+            Ok(())
+        }
         pub fn close(mut self) -> Result<()> {
-            self.restore()
+            self.restore()?;
+            self.set_exclusive(false)
         }
     }
 
     impl Drop for Port {
         fn drop(&mut self) {
             let _ = self.restore();
+            let _ = self.set_exclusive(false);
         }
     }
 
@@ -465,7 +527,7 @@ mod native {
         original: Option<(Dcb, Timeouts)>,
     }
     impl Port {
-        pub fn open(path: &str, baud: u32) -> Result<Self> {
+        pub fn open(path: &str, baud: u32, _machine: bool) -> Result<Self> {
             let path = if path.starts_with(r"\\.\") {
                 path.to_owned()
             } else {
@@ -613,7 +675,7 @@ mod native {
     use super::*;
     pub struct Port;
     impl Port {
-        pub fn open(_: &str, _: u32) -> Result<Self> {
+        pub fn open(_: &str, _: u32, _: bool) -> Result<Self> {
             Err("native serial I/O is unavailable on this target".into())
         }
         pub fn read(&mut self, _: usize, _: u32) -> Result<ReadResult> {

@@ -64,6 +64,7 @@ struct Spec {
     read_only: bool,
 }
 macro_rules! spec { ($name:literal, $read:literal, [$($arg:literal:$ty:ident:$required:literal),* $(,)?]) => { Spec{name:$name,args:&[$(($arg,$ty,$required)),*],read_only:$read} }; }
+mod plotter_control;
 mod writing;
 
 macro_rules! write_spec {
@@ -204,6 +205,13 @@ static SPECS: &[Spec] = &[
     spec!("ios.key",false,["key":T:true]),
     spec!("ios.launch",false,["bundle":T:true]),
     spec!("ios.open_url",false,["url":T:true]),
+    spec!("plotter.connect",false,["port":T:true,"baud":I:false,"timeout":I:false]),
+    spec!("plotter.status",true,["timeout":I:false]),
+    spec!("plotter.disconnect", false, []),
+    spec!("plotter.jog",false,["axis":T:true,"delta":N:true,"feed":N:false,"timeout":I:false]),
+    spec!("plotter.pen",false,["z":N:true,"feed":N:false,"timeout":I:false]),
+    spec!("plotter.send",false,["program":T:true,"timeout":I:false]),
+    spec!("plotter.check",false,["program":T:true,"timeout":I:false]),
     spec!("serial.ports", true, []),
     spec!("serial.open",false,["path":T:true,"baud":I:false]),
     spec!("serial.status", true, []),
@@ -729,10 +737,12 @@ struct Validated<'a> {
     calls: Vec<Call<'a>>,
     wait_ms: u64,
     writing: BTreeMap<usize, writing::Writing>,
+    machine_commands: BTreeMap<usize, plotter_control::Command>,
 }
 
 fn validate(source: &str, options: Options) -> Result<Validated<'_>, String> {
     let mut writing = BTreeMap::new();
+    let mut machine_commands = BTreeMap::new();
     let mut calls = Vec::new();
     let mut wait_budget = 0u64;
     let mut gesture_samples = 0usize;
@@ -780,6 +790,11 @@ fn validate(source: &str, options: Options) -> Result<Validated<'_>, String> {
             }
         }
         match call.name {
+            name if name.starts_with("plotter.") => {
+                let command = plotter_control::Command::prepare(&call)?;
+                wait_budget = wait_budget.saturating_add(u64::from(command.timeout_ms));
+                machine_commands.insert(calls.len(), command);
+            }
             name if name.starts_with("write.") => {
                 let plan = writing::Writing::prepare(&call)?;
                 drawing_points = drawing_points.saturating_add(plan.points);
@@ -1244,6 +1259,7 @@ fn validate(source: &str, options: Options) -> Result<Validated<'_>, String> {
         calls,
         wait_ms: wait_budget,
         writing,
+        machine_commands,
     })
 }
 
@@ -1341,6 +1357,7 @@ pub struct Runtime {
     android: Option<Android>,
     ios: Option<Ios>,
     serial: Option<SerialPort>,
+    plotter: Option<plotter_control::Selected>,
     usb: Option<UsbDevice>,
     processes: ProcessManager,
 }
@@ -1626,6 +1643,7 @@ impl Runtime {
             calls,
             wait_ms: scheduled_wait_ms,
             mut writing,
+            mut machine_commands,
         } = validate(&source, options)?;
         require_touchpad_capabilities(&calls)?;
         if !self.cancellation.is_cancelled() {
@@ -1670,7 +1688,12 @@ impl Runtime {
                 .check()
                 .and_then(|_| match writing.remove(&index) {
                     Some(plan) => plan.execute(&self.cancellation),
-                    None => self.step(call, &mut dynamic_wait_ms),
+                    None => match machine_commands.remove(&index) {
+                        Some(command) => {
+                            plotter_control::execute(&mut self.plotter, command, &self.cancellation)
+                        }
+                        None => self.step(call, &mut dynamic_wait_ms),
+                    },
                 });
             let elapsed = began.elapsed();
             let timing = if was_timing || self.timer.running() {
