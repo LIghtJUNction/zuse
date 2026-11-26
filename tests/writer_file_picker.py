@@ -82,10 +82,9 @@ def click_label(label):
     except AssertionError as e:raise AssertionError(f"Could not find {label!r} in Writer: {last_ocr}") from e
     click(*pt)
 def article_toolbar(apply=False):
-    # The editor's heading identifies the active view; derive its toolbar from the actual native
+    # Derive the editor toolbar from the actual native
     # window geometry and the same responsive maximum (940 logical px) as WriterView::draw.
     # A native dialog title/result or the application-applied text independently verifies every click.
-    wait(lambda:search_label("Edit article"),timeout=16)
     size=dict(line.split("=",1) for line in x("getwindowgeometry","--shell",wid).splitlines() if "=" in line)
     win_width=int(size["WIDTH"]);panel_width=min(win_width-32,940);left=(win_width-panel_width)//2
     bx=left+panel_width-122 if apply else left
@@ -99,6 +98,15 @@ def article_toolbar(apply=False):
     finally:proc.stdout.close();proc.wait()
     print(f"Article toolbar {bx},{by} {bw}x34; cropped label {observed!r}",flush=True)
     click(bx+bw//2,by+17)
+def copied_draft():
+    # Seed a different value so a stale clipboard cannot satisfy the assertion after re-opening.
+    sentinel=subprocess.Popen(["xclip","-selection","clipboard","-quiet","-loops","0"],env=env,stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    try:
+        sentinel.stdin.write(b"not-the-article");sentinel.stdin.close();time.sleep(.15)
+        key("ctrl+a");key("ctrl+c")
+        return cmd("xclip","-selection","clipboard","-o",timeout=5).decode()
+    finally:
+        if sentinel.poll() is None:sentinel.terminate();sentinel.wait(timeout=3)
 def stamp(s):print(s,flush=True)
 p=subprocess.Popen([str(writer)],cwd=d,env=env,stdout=(dest/"stdout").open("w"),stderr=(dest/"stderr").open("w"))
 try:
@@ -126,11 +134,14 @@ try:
     click_label("Workspace");click_label("Edit article")
     article_toolbar();choose_file("Open a UTF-8 text file",article)
     time.sleep(.7);proof("writer-article-open.png")
-    # Copy all draft text from the native editor, independently verifying CRLF normalization and BOM removal.
-    key("ctrl+a"); key("ctrl+c")
-    actual=cmd("xclip","-selection","clipboard","-o",timeout=5).decode()
-    assert actual=="A\nA\n",repr(actual)
-    article_toolbar(apply=True);stamp("article A\\nA imported and applied")
+    assert copied_draft()=="A\nA\n", "loaded draft did not match UTF-8 source"
+    article_toolbar(apply=True)
+    # The writing view has the font picker control, which the article editor never renders.
+    wait(lambda:search_label("Choose font"),timeout=16)
+    click_label("Edit article")
+    assert copied_draft()=="A\nA\n", "re-opening the form did not restore the applied text"
+    proof("writer-article-applied.png")
+    stamp("article: real picker, exact multiline UTF-8, Apply, workspace return and re-open verified")
 except BaseException:
     if "wid" in globals():proof("failure.png")
     cmd("import","-window","root",dest/"failure-desktop.png")

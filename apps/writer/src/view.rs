@@ -1789,6 +1789,9 @@ pub(crate) struct Frame<'a, 'b> {
     ui: &'a mut Ui,
 }
 impl Frame<'_, '_> {
+    pub(crate) fn button_width(&mut self, label: &str) -> f32 {
+        self.canvas.measure(crate::locale::text(label), 15, false) + 28.
+    }
     pub(crate) fn heading(&mut self, s: &str, x: f32, y: f32) {
         self.canvas
             .text(crate::locale::text(s), x, y, 21, true, INK);

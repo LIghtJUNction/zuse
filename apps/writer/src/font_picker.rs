@@ -382,11 +382,12 @@ impl FontPicker {
             frame.note(&self.notice, x, y + notice_top, w);
             return false;
         }
+        let import_width = frame.button_width("导入自定义字体").max(128.).min(w - 48.);
         frame.field(
             631,
             x,
             y + name_top,
-            (w - 137.).max(24.),
+            (w - import_width - 8.).max(24.),
             "保存名称（自动生成）",
             &mut self.name,
             "local-font",
@@ -394,7 +395,7 @@ impl FontPicker {
         );
         if frame.button(
             632,
-            Rect::new(x + w - 128., y + name_top + 21., 128., 34.),
+            Rect::new(x + w - import_width, y + name_top + 21., import_width, 34.),
             "导入自定义字体",
             false,
             !self.pending() && !self.name.trim().is_empty() && !self.path.trim().is_empty(),
@@ -410,10 +411,11 @@ impl FontPicker {
                 let _ = tx.send(import_local(name, path, text));
             });
         }
+        let subset_width = frame.button_width("仅导入当前文章用字").max(166.).min(w);
         if gfont
             && frame.button(
                 633,
-                Rect::new(x, y + name_top + 68., 166., 32.),
+                Rect::new(x, y + name_top + 68., subset_width, 32.),
                 "仅导入当前文章用字",
                 self.article_only,
                 !self.pending() && !form.text.trim().is_empty(),
