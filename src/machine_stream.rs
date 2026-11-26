@@ -63,19 +63,81 @@ pub fn stream_grbl(
 pub fn probe_grbl(path: &str, baud: u32, timeout_ms: u32, cancel: &Cancellation) -> Result<String> {
     let end = deadline(timeout_ms)?;
     let mut port = cancel.dispatch(|| SerialPort::open_machine(path, baud))?;
-    let result = inspect_port(&mut port, end, cancel, false);
+    let result = inspect_port(
+        &mut port,
+        end,
+        cancel,
+        StatusView::Raw,
+        &mut ProbeEvidence::default(),
+    );
     let closed = port.close();
     let json = result?;
     closed?;
     Ok(json)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatusView {
+    Raw,
+    Metric,
+    Work,
+}
+
+#[derive(Default)]
+pub(crate) struct ProbeEvidence {
+    active_firmware: Option<String>,
+}
+
+impl ProbeEvidence {
+    fn observe(&mut self, firmware: &str, frame: &str) -> Option<bool> {
+        if self
+            .active_firmware
+            .as_deref()
+            .is_some_and(|previous| previous != firmware)
+        {
+            self.active_firmware = None;
+        }
+        let mut fields = frame
+            .trim_end_matches('>')
+            .split('|')
+            .filter_map(|f| f.strip_prefix("Pn:"));
+        let pins = fields.next()?;
+        if fields.next().is_some()
+            || pins.is_empty()
+            || !pins.bytes().all(|b| b.is_ascii_uppercase())
+        {
+            return None;
+        }
+        if pins.contains('P') {
+            if self.active_firmware.is_none() {
+                self.active_firmware = Some(firmware.to_owned());
+            }
+            return Some(true);
+        }
+        // Standard Grbl defines P in its pin list. A vendor's limit pins alone do not establish
+        // that its firmware reports P; require a previous positive sample from this device.
+        (firmware.starts_with("1.1") || self.active_firmware.is_some()).then_some(false)
+    }
+}
+
 pub(crate) fn inspect_connected(
     port: &mut SerialPort,
     end: Instant,
     cancel: &Cancellation,
+    work: bool,
+    probe: &mut ProbeEvidence,
 ) -> Result<String> {
-    inspect_port(port, end, cancel, true)
+    inspect_port(
+        port,
+        end,
+        cancel,
+        if work {
+            StatusView::Work
+        } else {
+            StatusView::Metric
+        },
+        probe,
+    )
 }
 
 pub(crate) fn program_connected(
@@ -96,7 +158,8 @@ fn inspect_port<P: Port>(
     port: &mut P,
     end: Instant,
     cancel: &Cancellation,
-    normalize: bool,
+    view: StatusView,
+    probe: &mut ProbeEvidence,
 ) -> Result<String> {
     let mut c = Connection {
         port,
@@ -104,14 +167,31 @@ fn inspect_port<P: Port>(
         cancel,
         pending: Vec::new(),
     };
-    let mut frame = c.query_status(true)?;
+    let first = c.query_status(true)?;
     let firmware = c.identify()?;
-    let unit = if normalize {
-        let unit = c.report_scale()?;
-        frame = c.query_status(false)?;
-        Some(unit)
+    let (unit, frame, coords, probe_state) = if view == StatusView::Raw {
+        let coords = Positions::parse(&first)?;
+        (None, first, coords, None)
     } else {
-        None
+        probe.observe(&firmware, &first);
+        let scale = c.report_scale()?;
+        loop {
+            let frame = c.query_status(false)?;
+            let coords = Positions::parse(&frame)?;
+            let pin = probe.observe(&firmware, &frame);
+            if view != StatusView::Work || coords.work_axis(0).is_some() {
+                break (Some(scale), frame, coords, pin);
+            }
+            // Poll only for same-frame WPos or MPos + WCO. Never reuse an older offset.
+            let left = end.saturating_duration_since(Instant::now());
+            if left <= QUERY_INTERVAL {
+                cancel.sleep(left)?;
+                return Err(
+                    "controller deadline expired waiting for fresh WPos or MPos/WCO".into(),
+                );
+            }
+            cancel.sleep(QUERY_INTERVAL)?;
+        }
     };
     let (state, fields) = frame[1..frame.len() - 1]
         .split_once('|')
@@ -134,7 +214,6 @@ fn inspect_port<P: Port>(
     } else {
         result.push_str(r#","units":"controller_report""#);
     }
-    let coords = Positions::parse(&frame)?;
     for (key, coords) in [
         ("machine_position", coords.machine.as_deref()),
         ("work_position", coords.work.as_deref()),
@@ -170,6 +249,18 @@ fn inspect_port<P: Port>(
         {
             result.push_str(&format!(r#","pins":{}"#, quote(pins)));
         }
+    }
+    if view == StatusView::Work {
+        // GRBL exposes a digital probe input on supported builds. No force reading is present.
+        let value = match probe_state {
+            Some(true) => "true",
+            Some(false) => "false",
+            None => "null",
+        };
+        result.push_str(&format!(
+            r#","pressure":null,"probe_triggered":{value},"probe_seen_active":{}"#,
+            probe.active_firmware.is_some()
+        ));
     }
     result.push('}');
     Ok(result)
@@ -903,7 +994,8 @@ mod tests {
             &mut m,
             deadline(500).unwrap(),
             &Cancellation::default(),
-            true,
+            StatusView::Metric,
+            &mut ProbeEvidence::default(),
         )
         .unwrap();
         for field in [
@@ -912,6 +1004,112 @@ mod tests {
             r#""work_position":[25.4, 25.4, 25.4]"#,
         ] {
             assert!(result.contains(field), "{result}");
+        }
+    }
+
+    #[test]
+    fn calibration_uses_one_fresh_frame_for_work_z_and_input_pin() {
+        let mut m = Mock::default();
+        m.expect("?", &["<Idle|MPos:99,99,99|WCO:9,9,9|Pn:P>\n"]);
+        m.expect("$I\n", &["[VER:1.1h.2019:]\nok\n"]);
+        m.expect("$$\n", &["$13=1\nok\n"]);
+        m.expect("?", &["<Idle|MPos:51,52,53|Pn:P>\n"]);
+        m.expect("?", &["<Idle|MPos:3,4,5|WCO:1,2,4|Pn:X>\n"]);
+        let report = inspect_port(
+            &mut m,
+            deadline(1000).unwrap(),
+            &Cancellation::default(),
+            StatusView::Work,
+            &mut ProbeEvidence::default(),
+        )
+        .unwrap();
+        assert!(
+            report.contains(r#""work_position":[50.8, 50.8, 25.4]"#),
+            "{report}"
+        );
+        assert!(report.contains(r#""pressure":null,"probe_triggered":false"#));
+        assert!(m.commands.is_empty());
+    }
+
+    #[test]
+    fn calibration_reports_only_available_probe_data() {
+        for (id, pins, probe) in [
+            ("[VER:1.1h.2019:]\nok\n", "|Pn:XP", "true"),
+            ("[VER:1.1h.2019:]\nok\n", "", "null"),
+            (WRITER_ID, "|Pn:XY", "null"),
+            (WRITER_ID, "|Pn:P", "true"),
+        ] {
+            let mut m = Mock::default();
+            m.expect("?", &[WRITER_STATE]);
+            m.expect("$I\n", &[id]);
+            m.expect("$$\n", &["$13=0\nok\n"]);
+            m.expect("?", &[&format!("<Idle|WPos:0,1,2{pins}>\n")]);
+            let report = inspect_port(
+                &mut m,
+                deadline(500).unwrap(),
+                &Cancellation::default(),
+                StatusView::Work,
+                &mut ProbeEvidence::default(),
+            )
+            .unwrap();
+            assert!(
+                report.contains(&format!(r#""pressure":null,"probe_triggered":{probe}"#)),
+                "{report}"
+            );
+        }
+    }
+
+    #[test]
+    fn probe_evidence_is_scoped_to_the_controller_and_never_substitutes_for_a_fresh_pin_sample() {
+        let mut probe = ProbeEvidence::default();
+        let bt = "1.3a.20221114";
+        assert_eq!(probe.observe(bt, "<Idle|Pn:XY>"), None);
+        assert_eq!(probe.observe(bt, "<Idle|Pn:PXY>"), Some(true));
+        assert_eq!(probe.observe(bt, "<Idle>"), None);
+        assert_eq!(probe.observe(bt, "<Idle|Pn:XY>"), Some(false));
+        assert_eq!(probe.observe(bt, "<Idle|Pn:P|Pn:XY>"), None);
+        assert_eq!(ProbeEvidence::default().observe(bt, "<Idle|Pn:XY>"), None);
+        probe.observe("1.1h", "<Idle>");
+        assert_eq!(probe.observe(bt, "<Idle|Pn:XY>"), None);
+    }
+
+    #[test]
+    fn missing_work_coordinates_obey_deadline_and_cancellation() {
+        for cancel_during_wait in [false, true] {
+            let mut m = Mock::default();
+            m.expect("?", &[WRITER_STATE]);
+            m.expect("$I\n", &[WRITER_ID]);
+            m.expect("$$\n", &["$13=0\nok\n"]);
+            m.expect("?", &["<Idle|MPos:1,2,3>\n"]);
+            let cancellation = Cancellation::default();
+            let err = std::thread::scope(|scope| {
+                if cancel_during_wait {
+                    let cancel = cancellation.clone();
+                    scope.spawn(move || {
+                        std::thread::sleep(Duration::from_millis(20));
+                        cancel.cancel();
+                    });
+                }
+                let timeout = if cancel_during_wait { 1000 } else { 60 };
+                inspect_port(
+                    &mut m,
+                    deadline(timeout).unwrap(),
+                    &cancellation,
+                    StatusView::Work,
+                    &mut ProbeEvidence::default(),
+                )
+                .unwrap_err()
+            });
+            assert!(
+                err.contains(if cancel_during_wait {
+                    "cancelled"
+                } else {
+                    "deadline"
+                }),
+                "{err}"
+            );
+            // No stale offset from the handshake; only read-only queries were written.
+            assert_eq!(m.writes, ["?", "$I\n", "$$\n", "?"]);
         }
     }
 
@@ -983,7 +1181,8 @@ mod tests {
             &mut m,
             deadline(500).unwrap(),
             &Cancellation::default(),
-            false,
+            StatusView::Raw,
+            &mut ProbeEvidence::default(),
         )
         .unwrap();
         assert_eq!(

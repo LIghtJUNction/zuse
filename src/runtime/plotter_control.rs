@@ -1,5 +1,5 @@
 //! A retained machine connection belongs to the Runtime and its serialized session jobs.
-use super::{number, range, text};
+use super::{boolean, number, range, text};
 use crate::{
     json::quote,
     language::Call,
@@ -19,7 +19,7 @@ pub(super) struct Command {
 
 enum Action {
     Connect { port: String, baud: u32 },
-    Status,
+    Status { work: bool },
     Disconnect,
     Jog { axis: char, delta: f64, feed: f64 },
     Pen { z: f64, feed: f64 },
@@ -36,7 +36,10 @@ impl Command {
                 serial::validate_baud(baud)?;
                 (Action::Connect { port, baud }, 5000)
             }
-            "plotter.status" => (Action::Status, 3000),
+            "plotter.status" => {
+                let work = boolean(call, "work", false);
+                (Action::Status { work }, if work { 8000 } else { 3000 })
+            }
             "plotter.disconnect" => {
                 return Ok(Self {
                     action: Action::Disconnect,
@@ -105,6 +108,7 @@ pub(super) struct Selected {
     path: String,
     baud: u32,
     port: SerialPort,
+    probe: machine_stream::ProbeEvidence,
 }
 
 impl Selected {
@@ -140,7 +144,13 @@ pub(super) fn execute(
                             .into(),
                     );
                 }
-                let status = machine_stream::inspect_connected(&mut old.port, end, cancel)?;
+                let status = machine_stream::inspect_connected(
+                    &mut old.port,
+                    end,
+                    cancel,
+                    false,
+                    &mut old.probe,
+                )?;
                 return Ok(old.envelope(&status));
             }
             if old.path == path {
@@ -148,24 +158,36 @@ pub(super) fn execute(
             }
         }
         let mut port = cancel.dispatch(|| SerialPort::open_machine(&path, baud))?;
-        let status = machine_stream::inspect_connected(&mut port, end, cancel)?;
+        let mut probe = machine_stream::ProbeEvidence::default();
+        let status = machine_stream::inspect_connected(&mut port, end, cancel, false, &mut probe)?;
         if let Some(mut old) = selected.take() {
             old.port.close()?;
         }
-        let entry = Selected { path, baud, port };
+        let entry = Selected {
+            path,
+            baud,
+            port,
+            probe,
+        };
         let result = entry.envelope(&status);
         *selected = Some(entry);
         return Ok(result);
     }
     let Some(device) = selected.as_mut() else {
-        return if matches!(command.action, Action::Status) {
-            Ok(disconnected())
-        } else {
-            Err("use plotter.connect first".into())
+        return match command.action {
+            Action::Status {work:true} => Ok(r#"{"connected":false,"work_position":null,"pressure":null,"probe_triggered":null,"probe_seen_active":false}"#.into()),
+            Action::Status {work:false} => Ok(disconnected()),
+            _ => Err("use plotter.connect first".into()),
         };
     };
     let result = match command.action {
-        Action::Status => machine_stream::inspect_connected(&mut device.port, end, cancel)?,
+        Action::Status { work } => machine_stream::inspect_connected(
+            &mut device.port,
+            end,
+            cancel,
+            work,
+            &mut device.probe,
+        )?,
         Action::Jog { axis, delta, feed } => {
             machine_stream::jog_connected(&mut device.port, axis, delta, feed, end, cancel)?
         }
@@ -279,6 +301,30 @@ mod tests {
             .execute("plotter.status()", Options::default())
             .unwrap();
         assert!(!failed(&status) && status.contains(r#""connected":false"#));
+        let calibration = runtime
+            .execute(
+                "plotter.status(work=true,timeout=100)",
+                Options {
+                    read_only: true,
+                    max_wait_ms: 100,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(calibration.contains(
+            r#""connected":false,"work_position":null,"pressure":null,"probe_triggered":null"#
+        ));
+        assert!(
+            check(
+                "plotter.status(work=true)",
+                Options {
+                    dry_run: true,
+                    max_wait_ms: 7999,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
         let job = runtime
             .execute("plotter.jog(axis=\"x\",delta=1)", Options::default())
             .unwrap();

@@ -206,7 +206,7 @@ static SPECS: &[Spec] = &[
     spec!("ios.launch",false,["bundle":T:true]),
     spec!("ios.open_url",false,["url":T:true]),
     spec!("plotter.connect",false,["port":T:true,"baud":I:false,"timeout":I:false]),
-    spec!("plotter.status",true,["timeout":I:false]),
+    spec!("plotter.status",true,["timeout":I:false,"work":B:false]),
     spec!("plotter.disconnect", false, []),
     spec!("plotter.jog",false,["axis":T:true,"delta":N:true,"feed":N:false,"timeout":I:false]),
     spec!("plotter.pen",false,["z":N:true,"feed":N:false,"timeout":I:false]),
